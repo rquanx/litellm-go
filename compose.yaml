@@ -1,0 +1,9 @@
+services:
+  minato-runtime:
+    build: .
+    ports:
+      - "4300:4300"
+    environment:
+      MINATO_RUNTIME_PORT: "4300"
+      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?set MINATO_RUNTIME_TOKEN}
+    restart: unless-stopped
