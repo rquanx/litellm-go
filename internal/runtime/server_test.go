@@ -136,6 +136,44 @@ func TestChatRequestConvertsToResponsesUpstream(t *testing.T) {
 	}
 }
 
+func TestToolCallJSONConversion(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		input, _ := body["input"].([]any)
+		if len(input) != 1 || len(body["tools"].([]any)) != 1 {
+			t.Fatalf("tool request was not converted: %#v", body)
+		}
+		_, _ = writer.Write([]byte(`{"id":"resp-tool","object":"response","created_at":1,"output":[{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\"q\":\"hello\"}"}],"usage":{"total_tokens":3}}`))
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{HTTPClient: upstream.Client()})
+	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "m", APIBase: upstream.URL, Endpoint: "responses"}}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", result.Code, result.Body.String())
+	}
+	var response map[string]any
+	_ = json.Unmarshal(result.Body.Bytes(), &response)
+	choices := response["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	if len(message["tool_calls"].([]any)) != 1 {
+		t.Fatalf("tool call was not converted back: %#v", response)
+	}
+}
+
+func TestToolCallSSEConversion(t *testing.T) {
+	chatFrame := []byte(`data: {"id":"chat-1","created":1,"choices":[{"delta":{"tool_calls":[{"id":"call-1","function":{"name":"lookup","arguments":"{\"q\":\"hello\"}"}}]},"finish_reason":null}]}
+
+`)
+	converted := string(convertSSEFrame(chatFrame, "responses", "chat-completions", "demo"))
+	if !strings.Contains(converted, "response.output_item.added") || !strings.Contains(converted, "response.function_call_arguments.delta") {
+		t.Fatalf("tool SSE was not converted: %q", converted)
+	}
+}
+
 func TestRouteAuthorizationAndModels(t *testing.T) {
 	server := NewServer(Config{Token: "token"})
 	request := httptest.NewRequest(http.MethodPut, "/internal/v1/routes/demo", strings.NewReader(`{"alias":"demo","version":"1","candidates":[{"modelId":"a","apiBase":"http://localhost","endpoint":"responses"}]}`))

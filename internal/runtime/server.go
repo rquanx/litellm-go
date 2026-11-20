@@ -300,8 +300,23 @@ func convertSSEFrame(frame []byte, endpoint, candidateEndpoint, alias string) []
 					output.WriteString("event: response.output_text.delta\ndata: " + string(encoded) + "\n\n")
 				}
 				if choice["finish_reason"] != nil {
-					encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias}})
+					encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias, "output": []any{}}})
 					output.WriteString("event: response.completed\ndata: " + string(encoded) + "\n\n")
+				}
+				if calls, ok := delta["tool_calls"].([]any); ok {
+					for _, raw := range calls {
+						call, _ := raw.(map[string]any)
+						function, _ := call["function"].(map[string]any)
+						if call["id"] != nil || function["name"] != nil {
+							item := map[string]any{"type": "function_call", "id": call["id"], "call_id": call["id"], "name": function["name"], "arguments": ""}
+							encoded, _ := json.Marshal(map[string]any{"type": "response.output_item.added", "item": item})
+							output.WriteString("event: response.output_item.added\ndata: " + string(encoded) + "\n\n")
+						}
+						if function["arguments"] != nil {
+							encoded, _ := json.Marshal(map[string]any{"type": "response.function_call_arguments.delta", "item_id": call["id"], "delta": function["arguments"]})
+							output.WriteString("event: response.function_call_arguments.delta\ndata: " + string(encoded) + "\n\n")
+						}
+					}
 				}
 			} else if value["usage"] != nil {
 				encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias, "usage": value["usage"]}})
@@ -315,12 +330,25 @@ func convertSSEFrame(frame []byte, endpoint, candidateEndpoint, alias string) []
 					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": value["delta"]}, "finish_reason": nil}}}
 				encoded, _ := json.Marshal(chunk)
 				output.WriteString("data: " + string(encoded) + "\n\n")
+			} else if value["type"] == "response.output_item.added" {
+				item, _ := value["item"].(map[string]any)
+				if item["type"] == "function_call" {
+					chunk := map[string]any{"id": value["sequence_number"], "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": alias,
+						"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": item["call_id"], "type": "function", "function": map[string]any{"name": item["name"], "arguments": ""}}}}, "finish_reason": nil}}}
+					encoded, _ := json.Marshal(chunk)
+					output.WriteString("data: " + string(encoded) + "\n\n")
+				}
+			} else if value["type"] == "response.function_call_arguments.delta" {
+				chunk := map[string]any{"id": value["sequence_number"], "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": alias,
+					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": value["item_id"], "type": "function", "function": map[string]any{"arguments": value["delta"]}}}}, "finish_reason": nil}}}
+				encoded, _ := json.Marshal(chunk)
+				output.WriteString("data: " + string(encoded) + "\n\n")
 			} else if value["type"] == "response.completed" {
 				if response, ok := value["response"].(map[string]any); ok {
 					response["model"] = alias
 				}
 				chunk := map[string]any{"id": value["id"], "object": "chat.completion.chunk", "created": value["created"], "model": alias,
-					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}}
 				encoded, _ := json.Marshal(chunk)
 				output.WriteString("data: " + string(encoded) + "\n\n")
 				output.WriteString("data: [DONE]\n\n")
