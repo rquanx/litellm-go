@@ -82,6 +82,29 @@ func TestClientErrorDoesNotFallback(t *testing.T) {
 	}
 }
 
+func TestModelNotFoundFallsBack(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"code":"model_not_found"}}`))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{"id":"ok","object":"response","model":"backup"}`))
+	}))
+	defer backup.Close()
+	server := NewServer(Config{HTTPClient: backup.Client()})
+	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{
+		{SourceID: "primary", ModelID: "missing", APIBase: primary.URL, Endpoint: "responses"},
+		{SourceID: "backup", ModelID: "backup", APIBase: backup.URL, Endpoint: "responses"},
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"hello"}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || result.Header().Get("X-Minato-Runtime-Source") != "backup" {
+		t.Fatalf("expected model-not-found fallback, status=%d source=%q", result.Code, result.Header().Get("X-Minato-Runtime-Source"))
+	}
+}
+
 func TestChatRequestConvertsToResponsesUpstream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]any

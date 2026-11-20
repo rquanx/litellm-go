@@ -177,6 +177,16 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		}
 		started := time.Now()
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
+		if err == nil && response != nil && (status < 200 || status >= 300) {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
+			response.Body.Close()
+			response.Body = io.NopCloser(bytes.NewReader(body))
+			if readErr != nil {
+				retryable = true
+			} else {
+				retryable = retryableResponse(status, body)
+			}
+		}
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
 			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
 		if err != nil {
@@ -240,7 +250,7 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		return response.StatusCode, body, response.Header, false, nil
 	}
-	return response.StatusCode, body, response.Header, retryableStatus(response.StatusCode), nil
+	return response.StatusCode, body, response.Header, retryableResponse(response.StatusCode, body), nil
 }
 
 func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any) (int, *http.Response, bool, error) {
@@ -327,6 +337,26 @@ func (s *Server) authorized(request *http.Request) bool {
 
 func retryableStatus(status int) bool {
 	return status == 408 || status == 409 || status == 429 || status >= 500
+}
+func retryableResponse(status int, body []byte) bool {
+	if retryableStatus(status) {
+		return true
+	}
+	var payload struct {
+		Error struct {
+			Code string `json:"code"`
+			Type string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) != nil {
+		return false
+	}
+	for _, value := range []string{payload.Error.Code, payload.Error.Type} {
+		if value == "model_not_found" || value == "model_unavailable" || value == "invalid_model" {
+			return true
+		}
+	}
+	return false
 }
 func inputBool(input map[string]any, key string) bool { value, _ := input[key].(bool); return value }
 func decodeBody(request *http.Request, target any, max int64) error {
