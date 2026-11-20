@@ -48,6 +48,7 @@ The image is built as a static Go binary and runs as a non-root user. The defaul
 - `GET /v1/models`
 - `POST /v1/responses`
 - `POST /v1/chat/completions`
+- `POST /v1/embeddings`
 - `PUT /internal/v1/routes/{alias}`
 - `DELETE /internal/v1/routes/{alias}`
 
