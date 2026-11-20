@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -46,6 +47,11 @@ func TestResponsesRouteAndFallback(t *testing.T) {
 	if result.Header().Get("X-Minato-Runtime-Source") != "opencode" || result.Header().Get("X-Minato-Runtime-Attempts") != "2" {
 		t.Fatalf("unexpected runtime metadata: source=%q attempts=%q", result.Header().Get("X-Minato-Runtime-Source"), result.Header().Get("X-Minato-Runtime-Attempts"))
 	}
+	if encoded := result.Header().Get("X-Minato-Runtime-Attempt-Log"); encoded == "" {
+		t.Fatal("runtime attempt log is missing")
+	} else if decoded, err := base64.RawURLEncoding.DecodeString(encoded); err != nil || !strings.Contains(string(decoded), `"sourceId":"opencode"`) {
+		t.Fatalf("unexpected runtime attempt log: %s", decoded)
+	}
 	var response map[string]any
 	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
@@ -81,14 +87,20 @@ func TestRouteAuthorizationAndModels(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPut, "/internal/v1/routes/demo", strings.NewReader(`{"alias":"demo","version":"1","candidates":[{"modelId":"a","apiBase":"http://localhost","endpoint":"responses"}]}`))
 	result := httptest.NewRecorder()
 	server.ServeHTTP(result, request)
-	if result.Code != http.StatusUnauthorized { t.Fatalf("expected 401, got %d", result.Code) }
+	if result.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", result.Code)
+	}
 	request.Header.Set("Authorization", "Bearer token")
 	result = httptest.NewRecorder()
 	server.ServeHTTP(result, request)
-	if result.Code != http.StatusOK { t.Fatalf("expected route publication, got %d", result.Code) }
+	if result.Code != http.StatusOK {
+		t.Fatalf("expected route publication, got %d", result.Code)
+	}
 	models := httptest.NewRecorder()
 	server.ServeHTTP(models, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
-	if !strings.Contains(models.Body.String(), "demo") { t.Fatalf("route is missing from models: %s", models.Body.String()) }
+	if !strings.Contains(models.Body.String(), "demo") {
+		t.Fatalf("route is missing from models: %s", models.Body.String())
+	}
 	_ = io.Discard
 }
 
@@ -141,5 +153,7 @@ func putRoute(t *testing.T, server *Server, route Route) {
 	request.Header.Set("Authorization", "Bearer runtime-token")
 	result := httptest.NewRecorder()
 	server.ServeHTTP(result, request)
-	if result.Code != http.StatusOK { t.Fatalf("route publication failed: %d %s", result.Code, result.Body.String()) }
+	if result.Code != http.StatusOK {
+		t.Fatalf("route publication failed: %d %s", result.Code, result.Body.String())
+	}
 }

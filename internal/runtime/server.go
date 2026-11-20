@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Config struct {
@@ -131,10 +135,24 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		s.inferStream(writer, request, endpoint, route, input)
 		return
 	}
+	attempts := make([]map[string]any, 0, len(route.Candidates))
 	for index, candidate := range route.Candidates {
+		started := time.Now()
 		status, responseBody, responseHeaders, retryable, callErr := s.callJSON(request.Context(), request, endpoint, candidate, input, route.Alias)
+		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
+			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
+		if callErr != nil {
+			attempt["status"] = http.StatusBadGateway
+		}
+		if status >= 200 && status < 300 {
+			var payload map[string]any
+			if json.Unmarshal(responseBody, &payload) == nil {
+				attempt["usage"] = payload["usage"]
+			}
+		}
+		attempts = append(attempts, attempt)
 		if callErr == nil && status >= 200 && status < 300 {
-			writeRuntimeMeta(writer, candidate, index+1)
+			writeRuntimeMeta(writer, candidate, index+1, attempts)
 			writeResponse(writer, status, responseHeaders, normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias))
 			return
 		}
@@ -151,15 +169,23 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, input map[string]any) {
 	unsupported := false
+	attempts := make([]map[string]any, 0, len(route.Candidates))
 	for index, candidate := range route.Candidates {
 		if endpoint != candidate.Endpoint {
 			unsupported = true
 			continue
 		}
+		started := time.Now()
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
+		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
+			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
+		if err != nil {
+			attempt["status"] = http.StatusBadGateway
+		}
+		attempts = append(attempts, attempt)
 		if err == nil && status >= 200 && status < 300 {
 			defer response.Body.Close()
-			writeRuntimeMeta(writer, candidate, index+1)
+			writeRuntimeMeta(writer, candidate, index+1, attempts)
 			for key, values := range response.Header {
 				if strings.EqualFold(key, "Content-Type") || strings.EqualFold(key, "Cache-Control") {
 					writer.Header()[key] = values
@@ -203,18 +229,28 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 
 func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, alias string) (int, []byte, http.Header, bool, error) {
 	response, err := s.send(ctx, request, endpoint, candidate, input, false)
-	if err != nil { return 0, nil, nil, true, err }
+	if err != nil {
+		return 0, nil, nil, true, err
+	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
-	if err != nil { return response.StatusCode, nil, response.Header, true, err }
-	if response.StatusCode >= 200 && response.StatusCode < 300 { return response.StatusCode, body, response.Header, false, nil }
+	if err != nil {
+		return response.StatusCode, nil, response.Header, true, err
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return response.StatusCode, body, response.Header, false, nil
+	}
 	return response.StatusCode, body, response.Header, retryableStatus(response.StatusCode), nil
 }
 
 func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any) (int, *http.Response, bool, error) {
 	response, err := s.send(ctx, request, endpoint, candidate, input, true)
-	if err != nil { return 0, nil, true, err }
-	if response.StatusCode >= 200 && response.StatusCode < 300 { return response.StatusCode, response, false, nil }
+	if err != nil {
+		return 0, nil, true, err
+	}
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		return response.StatusCode, response, false, nil
+	}
 	return response.StatusCode, response, retryableStatus(response.StatusCode), nil
 }
 
@@ -281,17 +317,68 @@ func (s *Server) authorized(request *http.Request) bool {
 	return s.config.Token == "" || request.Header.Get("Authorization") == "Bearer "+s.config.Token
 }
 
-func retryableStatus(status int) bool { return status == 408 || status == 409 || status == 429 || status >= 500 }
+func retryableStatus(status int) bool {
+	return status == 408 || status == 409 || status == 429 || status >= 500
+}
 func inputBool(input map[string]any, key string) bool { value, _ := input[key].(bool); return value }
-func decodeBody(request *http.Request, target any, max int64) error { body, err := readBody(request, max); if err != nil { return err }; return json.Unmarshal(body, target) }
-func readBody(request *http.Request, max int64) ([]byte, error) { body, err := io.ReadAll(io.LimitReader(request.Body, max+1)); if err != nil || int64(len(body)) > max { return nil, errors.New("body_too_large") }; return body, nil }
-func writeJSON(writer http.ResponseWriter, status int, value any) { body, _ := json.Marshal(value); writer.Header().Set("Content-Type", "application/json"); writer.WriteHeader(status); _, _ = writer.Write(body) }
-func writeError(writer http.ResponseWriter, status int, code, message string) { writeJSON(writer, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}}) }
-func writeRawResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) { for key, values := range headers { if strings.EqualFold(key, "Content-Type") { writer.Header()[key] = values } }; writer.WriteHeader(status); _, _ = writer.Write(body) }
-func writeResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) { writeRawResponse(writer, status, headers, body) }
-func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts int) {
+func decodeBody(request *http.Request, target any, max int64) error {
+	body, err := readBody(request, max)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(body, target)
+}
+func readBody(request *http.Request, max int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(request.Body, max+1))
+	if err != nil || int64(len(body)) > max {
+		return nil, errors.New("body_too_large")
+	}
+	return body, nil
+}
+func writeJSON(writer http.ResponseWriter, status int, value any) {
+	body, _ := json.Marshal(value)
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_, _ = writer.Write(body)
+}
+func writeError(writer http.ResponseWriter, status int, code, message string) {
+	writeJSON(writer, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
+}
+func writeRawResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) {
+	for key, values := range headers {
+		if strings.EqualFold(key, "Content-Type") {
+			writer.Header()[key] = values
+		}
+	}
+	writer.WriteHeader(status)
+	_, _ = writer.Write(body)
+}
+func writeResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) {
+	writeRawResponse(writer, status, headers, body)
+}
+func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts int, attemptLog []map[string]any) {
 	writer.Header().Set("X-Minato-Runtime-Source", candidate.SourceID)
 	writer.Header().Set("X-Minato-Runtime-Model", candidate.ModelID)
 	writer.Header().Set("X-Minato-Runtime-Attempts", strconv.Itoa(attempts))
+	if encoded, err := json.Marshal(attemptLog); err == nil {
+		writer.Header().Set("X-Minato-Runtime-Attempt-Log", base64.RawURLEncoding.EncodeToString(encoded))
+	}
 }
-func rewriteModel(body []byte, alias string) []byte { var value map[string]any; if json.Unmarshal(body, &value) != nil { return body }; value["model"] = alias; result, _ := json.Marshal(value); return result }
+func newUUID() string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "00000000-0000-4000-8000-000000000000"
+	}
+	value[6] = value[6]&0x0f | 0x40
+	value[8] = value[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
+}
+func rewriteModel(body []byte, alias string) []byte {
+	var value map[string]any
+	if json.Unmarshal(body, &value) != nil {
+		return body
+	}
+	value["model"] = alias
+	result, _ := json.Marshal(value)
+	return result
+}
