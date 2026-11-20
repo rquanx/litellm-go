@@ -257,6 +257,9 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			}
 			return
 		}
+		if response != nil {
+			response.Body.Close()
+		}
 	}
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusNotImplemented, "stream_conversion_unsupported", "Streaming across Responses and Chat Completions is not supported")
