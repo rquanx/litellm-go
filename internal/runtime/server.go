@@ -262,7 +262,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if endpoint == "responses" && targetEndpoint == "chat-completions" {
 		payload = responsesToChat(payload)
 	} else if endpoint == "chat-completions" && targetEndpoint == "responses" {
-		return nil, errors.New("chat to Responses conversion requires a response adapter")
+		payload = chatRequestToResponses(payload)
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -302,6 +302,14 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
+	if endpoint == "chat-completions" && candidateEndpoint == "responses" {
+		var response map[string]any
+		if json.Unmarshal(body, &response) != nil {
+			return body
+		}
+		encoded, _ := json.Marshal(responsesToChatResponse(response, alias))
+		return encoded
+	}
 	if endpoint != "responses" || candidateEndpoint != "chat-completions" {
 		return rewriteModel(body, alias)
 	}

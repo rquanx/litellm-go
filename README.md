@@ -12,7 +12,7 @@ MINATO_RUNTIME_TOKEN=local-token go run ./cmd/minato-runtime
 
 Publish a route snapshot to `PUT /internal/v1/routes/{alias}` with the runtime token. The snapshot contains ordered upstream candidates and their credentials. The runtime chooses the next candidate only for retryable failures such as `429`, connection errors, timeouts, and upstream `5xx` responses. Client `400` and `422` errors return immediately.
 
-The runtime supports JSON and same-protocol SSE for `/v1/responses` and `/v1/chat/completions`. JSON Responses requests can use a Chat Completions upstream and are normalized back to a Responses envelope. Cross-protocol SSE is rejected because converting a live event stream requires protocol-specific event handling.
+The runtime supports JSON and same-protocol SSE for `/v1/responses` and `/v1/chat/completions`. JSON requests can use either protocol upstream and are normalized back to the client protocol. Cross-protocol SSE is rejected because converting a live event stream requires protocol-specific event handling.
 
 Successful responses include `X-Minato-Runtime-Source`, `X-Minato-Runtime-Model` and `X-Minato-Runtime-Attempts` headers. Minato uses these headers to associate the final selected upstream with its audit record.
 

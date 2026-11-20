@@ -82,6 +82,37 @@ func TestClientErrorDoesNotFallback(t *testing.T) {
 	}
 }
 
+func TestChatRequestConvertsToResponsesUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		if body["instructions"] != "Be concise" {
+			t.Fatalf("unexpected instructions: %#v", body["instructions"])
+		}
+		input, ok := body["input"].([]any)
+		if !ok || len(input) != 1 {
+			t.Fatalf("unexpected input: %#v", body["input"])
+		}
+		_, _ = writer.Write([]byte(`{"id":"resp-1","object":"response","created_at":1,"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{HTTPClient: upstream.Client()})
+	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "model-a", APIBase: upstream.URL, Endpoint: "responses"}}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"system","content":"Be concise"},{"role":"user","content":"hello"}]}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", result.Code, result.Body.String())
+	}
+	var response map[string]any
+	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response["object"] != "chat.completion" || response["model"] != "demo" {
+		t.Fatalf("unexpected converted response: %#v", response)
+	}
+}
+
 func TestRouteAuthorizationAndModels(t *testing.T) {
 	server := NewServer(Config{Token: "token"})
 	request := httptest.NewRequest(http.MethodPut, "/internal/v1/routes/demo", strings.NewReader(`{"alias":"demo","version":"1","candidates":[{"modelId":"a","apiBase":"http://localhost","endpoint":"responses"}]}`))
