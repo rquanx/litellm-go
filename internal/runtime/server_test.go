@@ -200,6 +200,31 @@ func TestSSERejectsCrossProtocolCandidate(t *testing.T) {
 	}
 }
 
+func TestSSEErrorEventFallsBackBeforeWriting(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"error\":{\"type\":\"rate_limit_error\"}}\n\n"))
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"id\":\"ok\"}\n\ndata: [DONE]\n\n"))
+	}))
+	defer backup.Close()
+	server := NewServer(Config{HTTPClient: backup.Client()})
+	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{
+		{SourceID: "primary", ModelID: "a", APIBase: primary.URL, Endpoint: "chat-completions"},
+		{SourceID: "backup", ModelID: "b", APIBase: backup.URL, Endpoint: "chat-completions"},
+	}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","stream":true}`))
+	request.Header.Set("Accept", "text/event-stream")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"id":"ok"`) || result.Header().Get("X-Minato-Runtime-Source") != "backup" {
+		t.Fatalf("expected SSE fallback, status=%d source=%q body=%q", result.Code, result.Header().Get("X-Minato-Runtime-Source"), result.Body.String())
+	}
+}
+
 func putRoute(t *testing.T, server *Server, route Route) {
 	t.Helper()
 	body, _ := json.Marshal(route)

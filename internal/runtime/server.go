@@ -180,6 +180,19 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	for index, candidate := range eligible {
 		started := time.Now()
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
+		var reader *bufio.Reader
+		var firstFrame []byte
+		streamFailure := false
+		if err == nil && response != nil && status >= 200 && status < 300 {
+			reader = bufio.NewReader(response.Body)
+			firstFrame, err = readSSEFrame(reader, s.config.MaxBodyBytes)
+			if err != nil || sseFrameFailure(firstFrame) {
+				streamFailure = true
+				retryable = true
+				status = http.StatusBadGateway
+				response.Body.Close()
+			}
+		}
 		if err == nil && response != nil && (status < 200 || status >= 300) {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
 			response.Body.Close()
@@ -196,7 +209,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			attempt["status"] = http.StatusBadGateway
 		}
 		attempts = append(attempts, attempt)
-		if err == nil && status >= 200 && status < 300 {
+		if err == nil && !streamFailure && status >= 200 && status < 300 {
 			defer response.Body.Close()
 			writeRuntimeMeta(writer, candidate, index+1, attempts)
 			for key, values := range response.Header {
@@ -208,8 +221,13 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			writer.Header().Set("X-Accel-Buffering", "no")
 			writer.WriteHeader(status)
 			flush, _ := writer.(http.Flusher)
-			reader := bufio.NewReader(response.Body)
 			buffer := make([]byte, 32*1024)
+			if len(firstFrame) > 0 {
+				_, _ = writer.Write(firstFrame)
+				if flush != nil {
+					flush.Flush()
+				}
+			}
 			for {
 				count, readErr := reader.Read(buffer)
 				if count > 0 {
@@ -225,6 +243,10 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 		if !retryable || index == len(eligible)-1 {
+			if streamFailure {
+				writeError(writer, http.StatusBadGateway, "upstream_stream_failure", "Upstream stream failed before data")
+				return
+			}
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if err != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", err.Error())
@@ -414,6 +436,55 @@ func newUUID() string {
 	value[6] = value[6]&0x0f | 0x40
 	value[8] = value[8]&0x3f | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16])
+}
+
+func readSSEFrame(reader *bufio.Reader, max int64) ([]byte, error) {
+	frame := make([]byte, 0, 256)
+	for int64(len(frame)) <= max {
+		line, err := reader.ReadBytes('\n')
+		frame = append(frame, line...)
+		trimmed := bytes.TrimSpace(line)
+		if len(trimmed) == 0 && len(frame) > len(line) {
+			return frame, nil
+		}
+		if err != nil {
+			if len(frame) == 0 {
+				return nil, err
+			}
+			return frame, nil
+		}
+	}
+	return nil, errors.New("sse_frame_too_large")
+}
+
+func sseFrameFailure(frame []byte) bool {
+	if len(frame) == 0 {
+		return true
+	}
+	sawData := false
+	for _, line := range bytes.Split(frame, []byte{'\n'}) {
+		line = bytes.TrimSpace(line)
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		sawData = true
+		data := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("data:"))))
+		if data == "" || data == "[DONE]" {
+			return true
+		}
+		var event map[string]any
+		if json.Unmarshal([]byte(data), &event) != nil {
+			return false
+		}
+		if _, ok := event["error"]; ok {
+			return true
+		}
+		if event["type"] == "error" || event["type"] == "response.failed" || event["type"] == "response.incomplete" {
+			return true
+		}
+		return false
+	}
+	return !sawData
 }
 func rewriteModel(body []byte, alias string) []byte {
 	var value map[string]any
