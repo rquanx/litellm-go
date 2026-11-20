@@ -58,6 +58,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.infer(writer, request, "responses")
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
 		s.infer(writer, request, "chat-completions")
+	case request.Method == http.MethodPost && request.URL.Path == "/v1/embeddings":
+		s.infer(writer, request, "embeddings")
 	case strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
@@ -106,8 +108,8 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusBadRequest, "invalid_candidate", "Every candidate needs an API base, model ID and endpoint")
 			return
 		}
-		if candidate.Endpoint != "responses" && candidate.Endpoint != "chat-completions" {
-			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Candidate endpoint must be responses or chat-completions")
+		if candidate.Endpoint != "responses" && candidate.Endpoint != "chat-completions" && candidate.Endpoint != "embeddings" {
+			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Candidate endpoint must be responses, chat-completions or embeddings")
 			return
 		}
 		if candidate.CredentialRef != "" && !credentialRefPattern.MatchString(candidate.CredentialRef) {
@@ -142,6 +144,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	if request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream") {
+		if endpoint == "embeddings" {
+			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "Embeddings does not support streaming")
+			return
+		}
 		s.inferStream(writer, request, endpoint, route, input)
 		return
 	}
@@ -414,6 +420,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	path := "/v1/responses"
 	if targetEndpoint == "chat-completions" {
 		path = "/v1/chat/completions"
+	} else if targetEndpoint == "embeddings" {
+		path = "/v1/embeddings"
 	}
 	base := strings.TrimRight(candidate.APIBase, "/")
 	if strings.HasSuffix(base, "/v1") {

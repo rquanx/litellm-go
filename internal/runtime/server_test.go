@@ -174,6 +174,24 @@ func TestToolCallSSEConversion(t *testing.T) {
 	}
 }
 
+func TestEmbeddingsPassThrough(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/embeddings" {
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"embed","usage":{"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{HTTPClient: upstream.Client()})
+	putRoute(t, server, Route{Alias: "embed", Version: "1", Candidates: []Candidate{{ModelID: "embed", APIBase: upstream.URL, Endpoint: "embeddings"}}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"embed","input":"hello"}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "embedding") {
+		t.Fatalf("expected embedding response, status=%d body=%q", result.Code, result.Body.String())
+	}
+}
+
 func TestRouteAuthorizationAndModels(t *testing.T) {
 	server := NewServer(Config{Token: "token"})
 	request := httptest.NewRequest(http.MethodPut, "/internal/v1/routes/demo", strings.NewReader(`{"alias":"demo","version":"1","candidates":[{"modelId":"a","apiBase":"http://localhost","endpoint":"responses"}]}`))
