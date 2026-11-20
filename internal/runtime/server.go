@@ -92,13 +92,17 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	var route Route
-	if err := decodeBody(request, &route, s.config.MaxBodyBytes); err != nil || route.Alias != alias || route.Version == "" || len(route.Candidates) == 0 {
+	if err := decodeBody(request, &route, s.config.MaxBodyBytes); err != nil || route.Alias != alias || route.Version == "" || len(route.Candidates) == 0 || len(route.Candidates) > 16 {
 		writeError(writer, http.StatusBadRequest, "invalid_route", "A route alias, version and candidates are required")
 		return
 	}
 	for _, candidate := range route.Candidates {
 		if candidate.APIBase == "" || candidate.ModelID == "" || candidate.Endpoint == "" {
 			writeError(writer, http.StatusBadRequest, "invalid_candidate", "Every candidate needs an API base, model ID and endpoint")
+			return
+		}
+		if candidate.Endpoint != "responses" && candidate.Endpoint != "chat-completions" {
+			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Candidate endpoint must be responses or chat-completions")
 			return
 		}
 		if candidate.CredentialRef != "" && !credentialRefPattern.MatchString(candidate.CredentialRef) {
