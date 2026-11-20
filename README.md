@@ -14,6 +14,8 @@ Publish a route snapshot to `PUT /internal/v1/routes/{alias}` with the runtime t
 
 The runtime supports JSON and same-protocol SSE for `/v1/responses` and `/v1/chat/completions`. JSON Responses requests can use a Chat Completions upstream and are normalized back to a Responses envelope. Cross-protocol SSE is rejected because converting a live event stream requires protocol-specific event handling.
 
+Successful responses include `X-Minato-Runtime-Source`, `X-Minato-Runtime-Model` and `X-Minato-Runtime-Attempts` headers. Minato uses these headers to associate the final selected upstream with its audit record.
+
 ## Run with Docker
 
 ```bash

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -125,6 +126,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	for index, candidate := range route.Candidates {
 		status, responseBody, responseHeaders, retryable, callErr := s.callJSON(request.Context(), request, endpoint, candidate, input, route.Alias)
 		if callErr == nil && status >= 200 && status < 300 {
+			writeRuntimeMeta(writer, candidate, index+1)
 			writeResponse(writer, status, responseHeaders, normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias))
 			return
 		}
@@ -149,6 +151,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
 		if err == nil && status >= 200 && status < 300 {
 			defer response.Body.Close()
+			writeRuntimeMeta(writer, candidate, index+1)
 			for key, values := range response.Header {
 				if strings.EqualFold(key, "Content-Type") || strings.EqualFold(key, "Cache-Control") {
 					writer.Header()[key] = values
@@ -274,4 +277,9 @@ func writeJSON(writer http.ResponseWriter, status int, value any) { body, _ := j
 func writeError(writer http.ResponseWriter, status int, code, message string) { writeJSON(writer, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}}) }
 func writeRawResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) { for key, values := range headers { if strings.EqualFold(key, "Content-Type") { writer.Header()[key] = values } }; writer.WriteHeader(status); _, _ = writer.Write(body) }
 func writeResponse(writer http.ResponseWriter, status int, headers http.Header, body []byte) { writeRawResponse(writer, status, headers, body) }
+func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts int) {
+	writer.Header().Set("X-Minato-Runtime-Source", candidate.SourceID)
+	writer.Header().Set("X-Minato-Runtime-Model", candidate.ModelID)
+	writer.Header().Set("X-Minato-Runtime-Attempts", strconv.Itoa(attempts))
+}
 func rewriteModel(body []byte, alias string) []byte { var value map[string]any; if json.Unmarshal(body, &value) != nil { return body }; value["model"] = alias; result, _ := json.Marshal(value); return result }

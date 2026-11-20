@@ -43,6 +43,9 @@ func TestResponsesRouteAndFallback(t *testing.T) {
 	if result.Code != http.StatusOK {
 		t.Fatalf("expected fallback response, got %d: %s", result.Code, result.Body.String())
 	}
+	if result.Header().Get("X-Minato-Runtime-Source") != "opencode" || result.Header().Get("X-Minato-Runtime-Attempts") != "2" {
+		t.Fatalf("unexpected runtime metadata: source=%q attempts=%q", result.Header().Get("X-Minato-Runtime-Source"), result.Header().Get("X-Minato-Runtime-Attempts"))
+	}
 	var response map[string]any
 	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
