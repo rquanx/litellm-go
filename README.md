@@ -40,6 +40,8 @@ MINATO_RUNTIME_TOKEN=local-token docker compose up --build
 
 The image is built as a static Go binary and runs as a non-root user. The default listener is `0.0.0.0:4300`.
 
+`MINATO_RUNTIME_MAX_CONCURRENT` controls the maximum number of in-flight upstream requests and defaults to `128`.
+
 ## API surface
 
 - `GET /healthz`

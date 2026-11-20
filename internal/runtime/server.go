@@ -20,15 +20,17 @@ import (
 )
 
 type Config struct {
-	Token        string
-	HTTPClient   *http.Client
-	MaxBodyBytes int64
+	Token         string
+	HTTPClient    *http.Client
+	MaxBodyBytes  int64
+	MaxConcurrent int
 }
 
 type Server struct {
 	config Config
 	mu     sync.RWMutex
 	routes map[string]Route
+	sem    chan struct{}
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -40,7 +42,10 @@ func NewServer(config Config) *Server {
 	if config.MaxBodyBytes == 0 {
 		config.MaxBodyBytes = 8 << 20
 	}
-	return &Server{config: config, routes: map[string]Route{}}
+	if config.MaxConcurrent == 0 {
+		config.MaxConcurrent = 128
+	}
+	return &Server{config: config, routes: map[string]Route{}, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -386,6 +391,12 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func (s *Server) send(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, stream bool) (*http.Response, error) {
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	release := func() { <-s.sem }
 	targetEndpoint := candidate.Endpoint
 	payload := clone(input)
 	payload["model"] = candidate.ModelID
@@ -397,6 +408,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
+		release()
 		return nil, err
 	}
 	path := "/v1/responses"
@@ -409,6 +421,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(encoded))
 	if err != nil {
+		release()
 		return nil, err
 	}
 	upstream.Header.Set("Content-Type", "application/json")
@@ -427,9 +440,23 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	}
 	response, err := s.config.HTTPClient.Do(upstream)
 	if err != nil {
+		release()
 		return nil, err
 	}
+	response.Body = &releaseBody{ReadCloser: response.Body, release: release}
 	return response, nil
+}
+
+type releaseBody struct {
+	io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func (body *releaseBody) Close() error {
+	err := body.ReadCloser.Close()
+	body.once.Do(body.release)
+	return err
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
