@@ -189,14 +189,14 @@ func TestSSEForwardsChunksAndFlushes(t *testing.T) {
 	}
 }
 
-func TestSSERejectsCrossProtocolCandidate(t *testing.T) {
+func TestSSEUpstreamFailureReturnsError(t *testing.T) {
 	server := NewServer(Config{})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "model-a", APIBase: "http://127.0.0.1:1", Endpoint: "chat-completions"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","stream":true,"input":"hello"}`))
 	result := httptest.NewRecorder()
 	server.ServeHTTP(result, request)
-	if result.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d: %s", result.Code, result.Body.String())
+	if result.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d: %s", result.Code, result.Body.String())
 	}
 }
 
@@ -222,6 +222,25 @@ func TestSSEErrorEventFallsBackBeforeWriting(t *testing.T) {
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"id":"ok"`) || result.Header().Get("X-Minato-Runtime-Source") != "backup" {
 		t.Fatalf("expected SSE fallback, status=%d source=%q body=%q", result.Code, result.Header().Get("X-Minato-Runtime-Source"), result.Body.String())
+	}
+}
+
+func TestResponsesSSEConvertsChatUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte("data: {\"id\":\"chat-1\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"id\":\"chat-1\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":2}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{HTTPClient: upstream.Client()})
+	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "m", APIBase: upstream.URL, Endpoint: "chat-completions"}}})
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","stream":true,"input":"hello"}`))
+	request.Header.Set("Accept", "text/event-stream")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "response.completed") || !strings.Contains(result.Body.String(), "done") {
+		t.Fatalf("expected converted Responses stream, status=%d body=%q", result.Code, result.Body.String())
 	}
 }
 

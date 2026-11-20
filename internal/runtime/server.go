@@ -174,12 +174,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 }
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, input map[string]any) {
-	eligible := make([]Candidate, 0, len(route.Candidates))
-	for _, candidate := range route.Candidates {
-		if endpoint == candidate.Endpoint {
-			eligible = append(eligible, candidate)
-		}
-	}
+	eligible := route.Candidates
 	attempts := make([]map[string]any, 0, len(route.Candidates))
 	for index, candidate := range eligible {
 		started := time.Now()
@@ -225,20 +220,13 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			writer.Header().Set("X-Accel-Buffering", "no")
 			writer.WriteHeader(status)
 			flush, _ := writer.(http.Flusher)
-			buffer := make([]byte, 32*1024)
 			if len(firstFrame) > 0 {
-				_, _ = writer.Write(firstFrame)
-				if flush != nil {
-					flush.Flush()
-				}
+				writeStreamFrame(writer, flush, firstFrame, endpoint, candidate.Endpoint, route.Alias)
 			}
 			for {
-				count, readErr := reader.Read(buffer)
-				if count > 0 {
-					_, _ = writer.Write(buffer[:count])
-					if flush != nil {
-						flush.Flush()
-					}
+				frame, readErr := readSSEFrame(reader, s.config.MaxBodyBytes)
+				if len(frame) > 0 {
+					writeStreamFrame(writer, flush, frame, endpoint, candidate.Endpoint, route.Alias)
 				}
 				if readErr != nil {
 					break
@@ -265,9 +253,81 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			response.Body.Close()
 		}
 	}
-	if len(eligible) == 0 {
-		writeError(writer, http.StatusNotImplemented, "stream_conversion_unsupported", "Streaming across Responses and Chat Completions is not supported")
+}
+
+func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []byte, endpoint, candidateEndpoint, alias string) {
+	converted := convertSSEFrame(frame, endpoint, candidateEndpoint, alias)
+	if len(converted) == 0 {
+		return
 	}
+	_, _ = writer.Write(converted)
+	if flush != nil {
+		flush.Flush()
+	}
+}
+
+func convertSSEFrame(frame []byte, endpoint, candidateEndpoint, alias string) []byte {
+	if endpoint == candidateEndpoint {
+		return frame
+	}
+	var output bytes.Buffer
+	for _, line := range bytes.Split(frame, []byte{'\n'}) {
+		line = bytes.TrimSuffix(line, []byte{'\r'})
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("data:"))))
+		if data == "" {
+			continue
+		}
+		if data == "[DONE]" {
+			if endpoint == "responses" {
+				continue
+			}
+			output.WriteString("data: [DONE]\n\n")
+			continue
+		}
+		var value map[string]any
+		if json.Unmarshal([]byte(data), &value) != nil {
+			continue
+		}
+		if endpoint == "responses" && candidateEndpoint == "chat-completions" {
+			if choices, ok := value["choices"].([]any); ok && len(choices) > 0 {
+				choice, _ := choices[0].(map[string]any)
+				delta, _ := choice["delta"].(map[string]any)
+				if content, ok := delta["content"].(string); ok && content != "" {
+					encoded, _ := json.Marshal(map[string]any{"type": "response.output_text.delta", "delta": content, "response": map[string]any{"model": alias}})
+					output.WriteString("event: response.output_text.delta\ndata: " + string(encoded) + "\n\n")
+				}
+				if choice["finish_reason"] != nil {
+					encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias}})
+					output.WriteString("event: response.completed\ndata: " + string(encoded) + "\n\n")
+				}
+			} else if value["usage"] != nil {
+				encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias, "usage": value["usage"]}})
+				output.WriteString("event: response.completed\ndata: " + string(encoded) + "\n\n")
+			}
+			continue
+		}
+		if endpoint == "chat-completions" && candidateEndpoint == "responses" {
+			if value["type"] == "response.output_text.delta" {
+				chunk := map[string]any{"id": value["id"], "object": "chat.completion.chunk", "created": value["created"], "model": alias,
+					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": value["delta"]}, "finish_reason": nil}}}
+				encoded, _ := json.Marshal(chunk)
+				output.WriteString("data: " + string(encoded) + "\n\n")
+			} else if value["type"] == "response.completed" {
+				if response, ok := value["response"].(map[string]any); ok {
+					response["model"] = alias
+				}
+				chunk := map[string]any{"id": value["id"], "object": "chat.completion.chunk", "created": value["created"], "model": alias,
+					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}}
+				encoded, _ := json.Marshal(chunk)
+				output.WriteString("data: " + string(encoded) + "\n\n")
+				output.WriteString("data: [DONE]\n\n")
+			}
+		}
+	}
+	return output.Bytes()
 }
 
 func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, alias string) (int, []byte, http.Header, bool, error) {
