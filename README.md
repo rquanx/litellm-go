@@ -28,7 +28,7 @@ Use `credentialRef` for deployed routes so Runtime resolves credentials from its
 }
 ```
 
-The runtime supports JSON and same-protocol SSE for `/v1/responses` and `/v1/chat/completions`. JSON requests can use either protocol upstream and are normalized back to the client protocol. Cross-protocol SSE is rejected because converting a live event stream requires protocol-specific event handling.
+The runtime supports JSON and SSE for `/v1/responses` and `/v1/chat/completions`. Requests can use either protocol upstream and are normalized back to the client protocol, including streaming text deltas and completion events.
 
 Successful responses include `X-Minato-Runtime-Source`, `X-Minato-Runtime-Model` and `X-Minato-Runtime-Attempts` headers. Minato uses these headers to associate the final selected upstream with its audit record.
 
