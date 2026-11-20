@@ -11,6 +11,7 @@ type Candidate struct {
 	ModelID          string            `json:"modelId"`
 	APIBase          string            `json:"apiBase"`
 	APIKey           string            `json:"apiKey"`
+	CredentialRef    string            `json:"credentialRef"`
 	Endpoint         string            `json:"endpoint"`
 	Headers          map[string]string `json:"headers,omitempty"`
 }

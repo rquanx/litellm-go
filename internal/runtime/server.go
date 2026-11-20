@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +26,8 @@ type Server struct {
 	mu     sync.RWMutex
 	routes map[string]Route
 }
+
+var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 func NewServer(config Config) *Server {
 	if config.HTTPClient == nil {
@@ -91,6 +95,10 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 	for _, candidate := range route.Candidates {
 		if candidate.APIBase == "" || candidate.ModelID == "" || candidate.Endpoint == "" {
 			writeError(writer, http.StatusBadRequest, "invalid_candidate", "Every candidate needs an API base, model ID and endpoint")
+			return
+		}
+		if candidate.CredentialRef != "" && !credentialRefPattern.MatchString(candidate.CredentialRef) {
+			writeError(writer, http.StatusBadRequest, "invalid_credential_ref", "Credential reference must be an environment variable name")
 			return
 		}
 	}
@@ -237,8 +245,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		return nil, err
 	}
 	upstream.Header.Set("Content-Type", "application/json")
-	if candidate.APIKey != "" {
-		upstream.Header.Set("Authorization", "Bearer "+candidate.APIKey)
+	apiKey := candidate.APIKey
+	if apiKey == "" && candidate.CredentialRef != "" {
+		apiKey = os.Getenv(candidate.CredentialRef)
+	}
+	if apiKey != "" {
+		upstream.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for key, value := range candidate.Headers {
 		upstream.Header.Set(key, value)
