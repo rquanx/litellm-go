@@ -128,6 +128,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route, ok := s.routes[alias]
 	s.mu.RUnlock()
 	if !ok {
+		writer.Header().Set("X-Minato-Runtime-Route-Missing", "1")
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
 		return
 	}
@@ -157,6 +158,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 		if !retryable || index == len(route.Candidates)-1 {
+			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if callErr != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", callErr.Error())
 			} else {
@@ -168,13 +170,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 }
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, input map[string]any) {
-	unsupported := false
-	attempts := make([]map[string]any, 0, len(route.Candidates))
-	for index, candidate := range route.Candidates {
-		if endpoint != candidate.Endpoint {
-			unsupported = true
-			continue
+	eligible := make([]Candidate, 0, len(route.Candidates))
+	for _, candidate := range route.Candidates {
+		if endpoint == candidate.Endpoint {
+			eligible = append(eligible, candidate)
 		}
+	}
+	attempts := make([]map[string]any, 0, len(route.Candidates))
+	for index, candidate := range eligible {
 		started := time.Now()
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
 		if err == nil && response != nil && (status < 200 || status >= 300) {
@@ -221,7 +224,8 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			}
 			return
 		}
-		if !retryable || index == len(route.Candidates)-1 {
+		if !retryable || index == len(eligible)-1 {
+			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if err != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", err.Error())
 			} else {
@@ -232,7 +236,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 	}
-	if unsupported {
+	if len(eligible) == 0 {
 		writeError(writer, http.StatusNotImplemented, "stream_conversion_unsupported", "Streaming across Responses and Chat Completions is not supported")
 	}
 }
