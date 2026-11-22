@@ -121,6 +121,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.openAIResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && request.Method == http.MethodGet &&
+		request.URL.Path == "/v1/responses" && strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+		s.responsesSocket(writer, request, modelScope)
+		return
+	}
 	if request.Method == http.MethodPost {
 		if deploymentOperation != "" {
 			s.infer(writer, request, deploymentOperation, deployment, modelScope)
