@@ -22,6 +22,8 @@ type callbackSettings struct {
 	Endpoint         string            `yaml:"generic_logger_endpoint"`
 	Headers          map[string]string `yaml:"generic_logger_headers"`
 	DisableMessages  *bool             `yaml:"turn_off_message_logging"`
+	PublicModelGroups []string         `yaml:"public_model_groups"`
+	PublicModelLinks  map[string]any   `yaml:"public_model_groups_links"`
 }
 
 type GenericCallback struct {

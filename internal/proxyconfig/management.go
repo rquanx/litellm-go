@@ -86,6 +86,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	registry.registerMCPRoutes(mux)
 	registry.registerMCPToolsetRoutes(mux)
 	registerPublicCatalogs(mux)
+	registry.registerPublicModelHub(mux)
 	server.ReplaceMCPToolsets(registry.mcpToolsets)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)

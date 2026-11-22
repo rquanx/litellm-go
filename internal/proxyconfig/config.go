@@ -131,6 +131,8 @@ type Config struct {
 	credentials map[string]providerCredential
 	Callback *GenericCallback
 	LogMessages bool
+	publicModelGroups []string
+	publicModelLinks map[string]any
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -191,6 +193,8 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
+	config.publicModelLinks = file.Callbacks.PublicModelLinks
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
 	if file.General.HealthCheckInterval < 0 || file.General.HealthCheckInterval > 86400 || file.General.HealthCheckConcurrency < 0 ||
 		file.General.HealthCheckConcurrency > 1024 || file.General.HealthCheckStaleness < 0 || file.General.HealthCheckStaleness > 86400 {

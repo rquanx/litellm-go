@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "internal/proxyconfig/openai-compatible.json"
@@ -77,6 +78,32 @@ def agent_fields_catalog(source, providers):
     return [with_defaults("AgentCreateInfo", agent) for agent in agents]
 
 
+def model_hub_metadata(source, prices):
+    tree = ast.parse(source("litellm/llms/openai/chat/gpt_transformation.py"))
+    method = next(
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+        and node.name == "get_supported_openai_params"
+    )
+    base_params = next(
+        ast.literal_eval(node.value) for node in method.body
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "base_params" for target in node.targets
+        )
+    )
+    fields = (
+        "mode", "max_input_tokens", "max_output_tokens", "input_cost_per_pixel",
+        "supports_vision", "supports_function_calling",
+        "supports_web_search", "supports_reasoning", "supports_url_context",
+    )
+    return {
+        "openai_chat_params": base_params,
+        "models": {
+            name: {field: entry[field] for field in fields if entry.get(field) is not None}
+            for name, entry in prices.items() if name != "sample_spec"
+        },
+    }
+
+
 def public_catalogs(checkout, revision, prices):
     def source(path):
         return subprocess.check_output(["git", "-C", checkout, "show", f"{revision}:{path}"])
@@ -89,6 +116,7 @@ def public_catalogs(checkout, revision, prices):
     })
     fields = json.loads(source("litellm/proxy/public_endpoints/provider_create_fields.json"))
     blog_posts = json.loads(source("litellm/blog_posts.json")).get("posts", [])[:5]
+    version = tomllib.loads(source("pyproject.toml").decode())["project"]["version"]
     return {
         "public-model-cost-map.json.gz": compressed_json(prices),
         "public-providers.json.gz": compressed_json(providers),
@@ -96,6 +124,13 @@ def public_catalogs(checkout, revision, prices):
         "public-endpoints.json.gz": compressed_json(endpoint_catalog(source)),
         "public-agent-fields.json.gz": compressed_json(agent_fields_catalog(source, fields)),
         "public-blog-posts.json.gz": compressed_json({"posts": blog_posts}),
+        "public-model-hub-info.json.gz": compressed_json({
+            "docs_title": "LiteLLM API",
+            "custom_docs_description": None,
+            "litellm_version": version,
+            "useful_links": {},
+        }),
+        "model-hub-metadata.json.gz": compressed_json(model_hub_metadata(source, prices)),
     }
 
 
