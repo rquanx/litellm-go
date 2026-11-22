@@ -190,7 +190,7 @@ func rerankTarget(candidate Candidate) string {
 		if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") {
 			return base + "/rerank"
 		}
-	case "hosted_vllm", "infinity":
+	case "hosted_vllm", "infinity", "huggingface":
 		if provider == "hosted_vllm" {
 			if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {
 				return root + "/rerank"

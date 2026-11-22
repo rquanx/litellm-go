@@ -17,6 +17,15 @@ func TestProviderRerank(t *testing.T) {
 			t.Error(err)
 		}
 		switch r.URL.Path {
+		case "/hf/rerank":
+			texts, _ := request["texts"].([]any)
+			if r.Header.Get("Authorization") != "Bearer fixture-hf" || len(texts) != 1 ||
+				texts[0] != "document" || request["query"] != "fixture" || request["return_text"] != true ||
+				request["raw_scores"] != false || request["truncation_direction"] != "Right" {
+				t.Errorf("unexpected Hugging Face request: %+v", request)
+			}
+			w.Write([]byte(`[{"index":0,"score":0.9}]`))
+			return
 		case "/providers/cohere/v2/rerank":
 			if request["model"] != "azure-ranker" || r.Header.Get("Authorization") != "Bearer fixture-azure-ai" {
 				t.Errorf("unexpected Azure AI request: %+v", request)
@@ -114,6 +123,8 @@ func TestProviderRerank(t *testing.T) {
 	t.Setenv("NVIDIA_NIM_API_KEY", "fixture-nvidia")
 	t.Setenv("AZURE_AI_API_BASE", upstream.URL+"/providers/cohere/v2")
 	t.Setenv("AZURE_AI_API_KEY", "fixture-azure-ai")
+	t.Setenv("HF_API_BASE", upstream.URL+"/hf")
+	t.Setenv("HUGGINGFACE_API_KEY", "fixture-hf")
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: cohere
@@ -150,17 +161,28 @@ model_list:
   - model_name: azure-ai
     litellm_params: {model: azure_ai/azure-ranker}
     model_info: {mode: rerank}
+  - model_name: hf
+    litellm_params: {model: huggingface/org/hf-ranker}
+    model_info: {mode: rerank}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking", "azure-ai"} {
-		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking", "azure-ai", "hf"} {
+		body := `{"model":"` + model + `","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`
+		if model == "hf" {
+			body = strings.TrimSuffix(body, "}") + `,"return_documents":true}`
+		}
+		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(body))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
 		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"relevance_score":0.9`) {
 			t.Fatalf("unexpected rerank result: %d %s", result.Code, result.Body.String())
+		}
+		if model == "hf" && (!strings.Contains(result.Body.String(), `"document":{"text":"document"}`) ||
+			!strings.Contains(result.Body.String(), `"search_units":1`)) {
+			t.Fatalf("unexpected Hugging Face document or usage: %s", result.Body.String())
 		}
 		var expected string
 		switch model {

@@ -464,9 +464,9 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
-	infinityRerank := provider == "infinity" && entry.rerankConfigured()
+	nativeRerank := (provider == "infinity" || provider == "huggingface") && entry.rerankConfigured()
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !infinityRerank) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -521,6 +521,14 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = "https://api.together.xyz"
 		case "azure_ai":
 			base = os.Getenv("AZURE_AI_API_BASE")
+		case "huggingface":
+			base = os.Getenv("HF_API_BASE")
+			if base == "" {
+				base = os.Getenv("HUGGINGFACE_API_BASE")
+			}
+			if base == "" {
+				base = "https://api-inference.huggingface.co"
+			}
 		case "nvidia_nim":
 			base = os.Getenv("NVIDIA_NIM_API_BASE")
 			if base == "" {
@@ -589,6 +597,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			key = os.Getenv("TOGETHERAI_API_KEY")
 		case "azure_ai":
 			key = os.Getenv("AZURE_AI_API_KEY")
+		case "huggingface":
+			key = os.Getenv("HUGGINGFACE_API_KEY")
 		case "nvidia_nim":
 			key = os.Getenv("NVIDIA_NIM_API_KEY")
 		}
@@ -655,7 +665,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if provider == "voyage" && entry.Info.Mode == "embedding" {
 		endpoint = "embeddings"
 	}
-	if supportsOpenAITransport(provider) || provider == "azure" || infinityRerank {
+	if supportsOpenAITransport(provider) || provider == "azure" || nativeRerank {
 		if inferred := openAIModelEndpoint(entry.Info.Mode, model); inferred != "" {
 			endpoint = inferred
 		}
