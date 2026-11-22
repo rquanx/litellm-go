@@ -23,6 +23,7 @@ type Candidate struct {
 	Weight           *float64          `json:"weight,omitempty"`
 	RPM              *int              `json:"rpm,omitempty"`
 	TPM              *int              `json:"tpm,omitempty"`
+	Bedrock          *BedrockConfig    `json:"bedrock,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 }
 

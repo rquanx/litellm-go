@@ -18,6 +18,8 @@ type configFile struct {
 	Models  []deployment `yaml:"model_list"`
 	General struct {
 		MasterKey string `yaml:"master_key"`
+		DatabaseURL string `yaml:"database_url"`
+		StoreModels bool `yaml:"store_model_in_db"`
 	} `yaml:"general_settings"`
 	Router struct {
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
@@ -38,6 +40,10 @@ type deployment struct {
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		RPM *int `yaml:"rpm" json:"rpm,omitempty"`
 		TPM *int `yaml:"tpm" json:"tpm,omitempty"`
+		AWSRegion string `yaml:"aws_region_name" json:"aws_region_name,omitempty"`
+		AWSAccessKey string `yaml:"aws_access_key_id" json:"aws_access_key_id,omitempty"`
+		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
+		AWSSessionToken string `yaml:"aws_session_token" json:"aws_session_token,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
@@ -51,6 +57,7 @@ type Config struct {
 	Timeout   time.Duration
 	NumRetries int
 	RoutingStrategy string
+	DatabaseURL string
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -82,6 +89,15 @@ func Load(reader io.Reader) (Config, error) {
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {
 		return Config{}, fmt.Errorf("general_settings.master_key: %w", err)
+	}
+	if file.General.StoreModels || file.General.DatabaseURL != "" {
+		config.DatabaseURL, err = resolveEnv(file.General.DatabaseURL)
+		if err != nil {
+			return Config{}, fmt.Errorf("general_settings.database_url: %w", err)
+		}
+		if config.DatabaseURL == "" {
+			return Config{}, errors.New("general_settings.database_url is required for database state")
+		}
 	}
 	for index := range config.models {
 		model := &config.models[index]
@@ -156,11 +172,15 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string,
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
-	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" && provider != "gemini" && provider != "azure") {
+	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
+		provider != "gemini" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider)) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
 		model, _ = strings.CutPrefix(model, "chat_completions/")
+	}
+	if provider == "bedrock" {
+		model, _ = strings.CutPrefix(model, "converse/")
 	}
 	if model == "" {
 		return runtime.Candidate{}, errors.New("model ID is required")
@@ -186,6 +206,23 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
 	}
+	var bedrock *runtime.BedrockConfig
+	if provider == "bedrock" {
+		bedrock, err = entry.bedrockConfig()
+		if err != nil {
+			return runtime.Candidate{}, err
+		}
+		if base == "" {
+			base = "https://bedrock-runtime." + bedrock.Region + ".amazonaws.com"
+		}
+	}
+	if base == "" && rerankProvider(provider) {
+		if provider == "jina_ai" {
+			base = "https://api.jina.ai"
+		} else {
+			base = "https://api.cohere.ai"
+		}
+	}
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -197,6 +234,19 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && hasSettings {
 		key = os.Getenv(settings.APIKeyEnv)
+	}
+	if key == "" && provider == "bedrock" {
+		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+		if key == "" && (bedrock.AccessKey == "" || bedrock.SecretKey == "") {
+			return runtime.Candidate{}, errors.New("Bedrock requires static AWS credentials or a bearer token")
+		}
+	}
+	if key == "" && rerankProvider(provider) {
+		if provider == "jina_ai" {
+			key = os.Getenv("JINA_AI_API_KEY")
+		} else {
+			key = os.Getenv("COHERE_API_KEY")
+		}
 	}
 	headers := make(map[string]string, len(settings.Headers))
 	for name, value := range settings.Headers {
@@ -216,19 +266,66 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if provider == "gemini" {
 		endpoint = "gemini-generate"
 	}
+	if provider == "bedrock" {
+		endpoint = "bedrock-converse"
+	}
+	if rerankProvider(provider) {
+		endpoint = "rerank"
+	}
 	if len(entry.Info.Endpoints) > 1 {
 		return runtime.Candidate{}, errors.New("each deployment accepts one supported_endpoints entry")
 	}
+	if rerankProvider(provider) && endpoint != "rerank" {
+		return runtime.Candidate{}, errors.New("this provider requires a rerank endpoint")
+	}
 	if len(entry.Info.Endpoints) == 1 {
-		endpoint = runtime.EndpointFromPath(entry.Info.Endpoints[0])
-		if endpoint == "" || provider == "gemini" || (endpoint == "anthropic-messages") != (provider == "anthropic") {
+		configured := runtime.EndpointFromPath(entry.Info.Endpoints[0])
+		if provider == "bedrock" && (configured == "chat-completions" || configured == "responses") {
+			configured = endpoint
+		}
+		if configured == "" || provider == "gemini" || (configured == "anthropic-messages") != (provider == "anthropic") ||
+			(configured == "bedrock-converse") != (provider == "bedrock") {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
 		}
+		endpoint = configured
 	}
 	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
-		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM}, nil
+		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock}, nil
+}
+
+func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
+	config := &runtime.BedrockConfig{}
+	for _, field := range []struct {
+		value, variable string
+		target *string
+	}{
+		{entry.Params.AWSRegion, "AWS_REGION", &config.Region},
+		{entry.Params.AWSAccessKey, "AWS_ACCESS_KEY_ID", &config.AccessKey},
+		{entry.Params.AWSSecretKey, "AWS_SECRET_ACCESS_KEY", &config.SecretKey},
+		{entry.Params.AWSSessionToken, "AWS_SESSION_TOKEN", &config.SessionToken},
+	} {
+		value, err := resolveEnv(field.value)
+		if err != nil {
+			return nil, err
+		}
+		if value == "" {
+			value = os.Getenv(field.variable)
+		}
+		*field.target = value
+	}
+	if config.Region == "" {
+		config.Region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if config.Region == "" {
+		return nil, errors.New("Bedrock requires aws_region_name or AWS_REGION")
+	}
+	return config, nil
+}
+
+func rerankProvider(name string) bool {
+	return name == "cohere" || name == "cohere_chat" || name == "jina_ai"
 }
 
 func resolveEnv(value string) (string, error) {

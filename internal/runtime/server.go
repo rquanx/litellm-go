@@ -276,6 +276,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 					usage, _ := payload["usage"].(map[string]any)
 					attempt["usage"] = anthropicUsage(usage)
 				}
+				if candidate.Endpoint == "bedrock-converse" {
+					attempt["usage"] = bedrockUsage(payload["usage"])
+				}
 			}
 		}
 		attempts = append(attempts, attempt)
@@ -423,7 +426,7 @@ func streamConverter(endpoint, upstream, alias string, input map[string]any, lim
 		}
 		return bridge.convert
 	}
-	if upstream == "anthropic-messages" && isTextEndpoint(endpoint) {
+	if (upstream == "anthropic-messages" || upstream == "bedrock-converse") && isTextEndpoint(endpoint) {
 		options, _ := input["stream_options"].(map[string]any)
 		bridge := newAnthropicChatStream(alias, endpoint == "responses" || inputBool(options, "include_usage"))
 		if endpoint == "responses" {
@@ -509,8 +512,23 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 		}
 		payload = chatToGemini(payload)
 	}
+	if targetEndpoint == "bedrock-converse" {
+		if endpoint == "responses" {
+			payload = responsesToChat(payload)
+		}
+		payload = chatToBedrock(payload)
+	}
 	if targetEndpoint == "chat-completions" {
 		applyProviderChatSettings(payload, candidate)
+	}
+	if targetEndpoint == "rerank" && candidate.Provider == "jina_ai" {
+		for key := range payload {
+			switch key {
+			case "model", "query", "documents", "top_n", "return_documents":
+			default:
+				delete(payload, key)
+			}
+		}
 	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
@@ -554,6 +572,10 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = geminiURL(candidate.APIBase, candidate.ModelID, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
 		target = azureTarget(candidate.APIBase, candidate.ModelID, candidate.Endpoint, candidate.APIVersion)
+	} else if candidate.Endpoint == "rerank" {
+		target = rerankTarget(candidate.APIBase, candidate.Provider)
+	} else if candidate.Endpoint == "bedrock-converse" {
+		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
 	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(encoded))
 	if err != nil {
@@ -579,7 +601,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		applyGeminiCredential(upstream, apiKey)
 	} else if candidate.Provider == "azure" && apiKey != "" {
 		upstream.Header.Set("api-key", apiKey)
-	} else if apiKey != "" {
+	} else if apiKey != "" && candidate.Endpoint != "bedrock-converse" {
 		upstream.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for key, value := range candidate.Headers {
@@ -588,12 +610,22 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if session := request.Header.Get("x-opencode-session"); session != "" {
 		upstream.Header.Set("x-opencode-session", session)
 	}
+	if candidate.Endpoint == "bedrock-converse" {
+		if err := authorizeBedrock(ctx, upstream, candidate, encoded, apiKey); err != nil {
+			release()
+			return nil, err
+		}
+	}
 	response, err := s.config.HTTPClient.Do(upstream)
 	if err != nil {
 		release()
 		return nil, err
 	}
 	response.Body = &releaseBody{ReadCloser: response.Body, release: release}
+	if candidate.Endpoint == "bedrock-converse" && stream && response.StatusCode >= 200 && response.StatusCode < 300 {
+		response.Body = newBedrockSSEBody(response.Body)
+		response.Header.Set("Content-Type", "text/event-stream")
+	}
 	return response, nil
 }
 
@@ -610,6 +642,18 @@ func (body *releaseBody) Close() error {
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
+	if candidateEndpoint == "bedrock-converse" {
+		var native map[string]any
+		if json.Unmarshal(body, &native) != nil || native == nil {
+			return body
+		}
+		chat := bedrockToChat(native, alias)
+		if endpoint == "responses" {
+			chat = chatToResponses(chat, alias)
+		}
+		encoded, _ := json.Marshal(chat)
+		return encoded
+	}
 	if isGeminiEndpoint(candidateEndpoint) && isTextEndpoint(endpoint) {
 		var native map[string]any
 		if json.Unmarshal(body, &native) != nil || native == nil {

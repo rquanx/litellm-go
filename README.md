@@ -46,6 +46,8 @@ Standalone mode supports dynamic deployments through `/model/info`, `/model/new`
 
 The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. Use `--key-state PATH` to persist hashed virtual keys, scopes and expiry. Use distinct paths for the model and key state files.
 
+For PostgreSQL storage, set `general_settings.database_url` and omit the local state flags. The Go proxy uses its own `minato_proxy_state` table, and encrypts model state using `MINATO_RUNTIME_STATE_KEY` or the proxy master key. On a copy of a LiteLLM database, `--import-litellm-models` copies compatible model deployments into empty Go state. Run `--import-litellm-keys` separately to import model-scoped keys without changing the token presented by clients. Preserve `LITELLM_SALT_KEY` during model import if the source deployment used a separate salt.
+
 ```yaml
 model_list:
   - model_name: summarize
@@ -79,10 +81,12 @@ The image is built as a static Go binary and runs as a non-root user. The defaul
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
 - `POST /v1/completions` and `POST /v1/moderations`
+- `POST /v1/rerank` for Cohere and Jina
 - `POST /v1/images/generations` and `POST /v1/images/edits`
 - `POST /v1/audio/speech`, `POST /v1/audio/transcriptions` and `POST /v1/audio/translations`
 - `POST /v1/messages` and `POST /v1/messages/count_tokens` for Anthropic
 - `POST /v1beta/models/{model}:generateContent` and `POST /v1beta/models/{model}:streamGenerateContent` for Gemini
+- Bedrock Converse via Chat Completions and Responses with static AWS credentials, session tokens, or a Bedrock bearer token
 - Standalone `/v1/files` and `/v1/batches` for OpenAI and Azure deployments. Set `target_model_names` to one alias when uploading to a proxy with multiple eligible deployments. The Go proxy preserves deployment affinity for batch input and output files using its own resource ID format.
 - `PUT /internal/v1/routes/{alias}`
 - `DELETE /internal/v1/routes/{alias}`

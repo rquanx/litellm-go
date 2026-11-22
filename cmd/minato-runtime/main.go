@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"log"
 	"net"
@@ -17,6 +18,8 @@ func main() {
 	configPath := flag.String("config", os.Getenv("MINATO_RUNTIME_PROXY_CONFIG"), "LiteLLM-compatible YAML configuration")
 	statePath := flag.String("model-state", os.Getenv("MINATO_RUNTIME_MODEL_STATE"), "Optional path for persisted dynamic models")
 	keyStatePath := flag.String("key-state", os.Getenv("MINATO_RUNTIME_KEY_STATE"), "Optional path for persisted virtual keys")
+	importModels := flag.Bool("import-litellm-models", false, "Copy LiteLLM models into empty Go proxy PostgreSQL state and exit")
+	importKeys := flag.Bool("import-litellm-keys", false, "Copy supported LiteLLM key digests into empty Go proxy state and exit")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -43,15 +46,54 @@ func main() {
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}
+		proxy.MasterKey = config.Token
 		config.AuthorizeInference = true
 		if proxy.Timeout > 0 {
 			config.HTTPClient.Timeout = proxy.Timeout
 		}
 	}
+	var stateDB *sql.DB
+	if proxy.DatabaseURL != "" {
+		if *statePath != "" || *keyStatePath != "" || config.Token == "" {
+			log.Fatal("PostgreSQL state requires a master key and separate storage from local state flags")
+		}
+		var err error
+		stateDB, err = proxyconfig.OpenPostgresState(proxy.DatabaseURL)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer stateDB.Close()
+	}
+	if *importModels || *importKeys {
+		if stateDB == nil {
+			log.Fatal("LiteLLM import requires general_settings.database_url")
+		}
+		if *importModels && *importKeys {
+			log.Fatal("Run the model and virtual key imports separately")
+		}
+		if *importKeys {
+			count, err := proxyconfig.ImportLiteLLMKeys(stateDB)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM virtual keys", count)
+			return
+		}
+		count, err := proxyconfig.ImportLiteLLMModels(stateDB, proxy)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("Imported %d LiteLLM deployments", count)
+		return
+	}
 	var keys *proxyconfig.KeyRegistry
 	if *configPath != "" && config.Token != "" {
 		var err error
-		keys, err = proxyconfig.LoadKeys(config.Token, *keyStatePath)
+		if stateDB != nil {
+			keys, err = proxyconfig.LoadPostgresKeys(config.Token, stateDB)
+		} else {
+			keys, err = proxyconfig.LoadKeys(config.Token, *keyStatePath)
+		}
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -64,7 +106,11 @@ func main() {
 	var handler http.Handler = server
 	if *configPath != "" {
 		var err error
-		handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
+		if stateDB != nil {
+			handler, err = proxyconfig.WithPostgresModelManagement(server, proxy, config.Token, stateDB)
+		} else {
+			handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
+		}
 		if err != nil {
 			log.Fatal(err)
 		}

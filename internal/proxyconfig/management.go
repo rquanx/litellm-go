@@ -3,6 +3,7 @@ package proxyconfig
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,27 +21,28 @@ type modelRegistry struct {
 	server *runtime.Server
 	base   Config
 	token  string
-	path   string
+	store  stateStore
 	mu     sync.Mutex
 	models []deployment
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
-	registry := &modelRegistry{server: server, base: config, token: token, path: statePath}
+	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"))
+}
+
+func WithPostgresModelManagement(server *runtime.Server, config Config, token string, db *sql.DB) (http.Handler, error) {
+	return withModelManagement(server, config, token, postgresModels(db, token))
+}
+
+func withModelManagement(server *runtime.Server, config Config, token string, store stateStore) (http.Handler, error) {
+	registry := &modelRegistry{server: server, base: config, token: token, store: store}
 	registry.base.models = slices.Clone(config.models)
-	if statePath != "" {
+	if store != nil {
 		if token == "" {
 			return nil, errors.New("model state requires a proxy master key")
 		}
-		file, err := os.Open(statePath)
-		if err == nil {
-			readErr := decodeModelJSON(file, &registry.models)
-			file.Close()
-			if readErr != nil {
-				return nil, errors.New("invalid model state")
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+		if err := store.load(&registry.models); err != nil {
+			return nil, errors.New("could not load dynamic model state")
 		}
 	}
 	routes, err := registry.compile(registry.models)
@@ -161,6 +163,18 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.TPM == nil {
 			model.Params.TPM = existing.Params.TPM
 		}
+		if model.Params.AWSRegion == "" {
+			model.Params.AWSRegion = existing.Params.AWSRegion
+		}
+		if model.Params.AWSAccessKey == "" {
+			model.Params.AWSAccessKey = existing.Params.AWSAccessKey
+		}
+		if model.Params.AWSSecretKey == "" {
+			model.Params.AWSSecretKey = existing.Params.AWSSecretKey
+		}
+		if model.Params.AWSSessionToken == "" {
+			model.Params.AWSSessionToken = existing.Params.AWSSessionToken
+		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}
@@ -203,17 +217,23 @@ func (registry *modelRegistry) apply(w http.ResponseWriter, next []deployment) b
 		modelError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
-	if registry.path != "" && saveModels(registry.path, next) != nil {
-		modelError(w, http.StatusInternalServerError, "Could not save model state")
-		return false
+	if registry.store != nil {
+		if err := registry.store.save(next); err != nil {
+			stateWriteError(w, err)
+			return false
+		}
 	}
 	registry.models = next
 	registry.server.ReplaceConfiguredRoutes(routes)
 	return true
 }
 
-func saveModels(path string, models []deployment) error {
-	return saveJSONState(path, models)
+func stateWriteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errConcurrentState) {
+		modelError(w, http.StatusConflict, "Proxy state was changed by another process")
+		return
+	}
+	modelError(w, http.StatusInternalServerError, "Could not save proxy state")
 }
 
 func saveJSONState(path string, payload any) error {

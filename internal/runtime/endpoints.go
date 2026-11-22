@@ -17,9 +17,11 @@ var endpoints = map[string]endpointSpec{
 	"transcription":      {"/v1/audio/transcriptions", "transcription", true},
 	"translation":        {"/v1/audio/translations", "translation", false},
 	"moderations":        {"/v1/moderations", "moderations", false},
+	"rerank":             {"/v1/rerank", "rerank", false},
 	"anthropic-messages": {"/v1/messages", "anthropic", true},
 	"gemini-generate":    {"", "gemini", false},
 	"gemini-stream":      {"", "gemini", true},
+	"bedrock-converse":   {"", "bedrock", true},
 }
 
 // EndpointFromPath resolves the public path used in LiteLLM model_info.
@@ -42,7 +44,7 @@ func CompatibleEndpoints(a, b string) bool {
 }
 
 func isConversationEndpoint(endpoint string) bool {
-	return isTextEndpoint(endpoint) || endpoint == "anthropic-messages" || isGeminiEndpoint(endpoint)
+	return isTextEndpoint(endpoint) || endpoint == "anthropic-messages" || isGeminiEndpoint(endpoint) || endpoint == "bedrock-converse"
 }
 
 func servesEndpoint(request, provider string) bool {

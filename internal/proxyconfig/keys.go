@@ -4,11 +4,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"maps"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 )
@@ -21,28 +21,28 @@ type virtualKey struct {
 
 type KeyRegistry struct {
 	master string
-	path   string
+	store  stateStore
 	mu     sync.RWMutex
 	keys   map[string]virtualKey
 }
 
 func LoadKeys(master, path string) (*KeyRegistry, error) {
+	return loadKeys(master, chooseStateStore(path, nil, "keys"))
+}
+
+func LoadPostgresKeys(master string, db *sql.DB) (*KeyRegistry, error) {
+	return loadKeys(master, chooseStateStore("", db, "keys"))
+}
+
+func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 	if master == "" {
 		return nil, errors.New("virtual keys require a proxy master key")
 	}
-	registry := &KeyRegistry{master: master, path: path, keys: make(map[string]virtualKey)}
-	if path == "" {
+	registry := &KeyRegistry{master: master, store: store, keys: make(map[string]virtualKey)}
+	if store == nil {
 		return registry, nil
 	}
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return registry, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	if err := decodeModelJSON(file, &registry.keys); err != nil || registry.keys == nil {
+	if err := store.load(&registry.keys); err != nil || registry.keys == nil {
 		return nil, errors.New("invalid virtual key state")
 	}
 	return registry, nil
@@ -154,9 +154,11 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (registry *KeyRegistry) apply(w http.ResponseWriter, next map[string]virtualKey) bool {
-	if registry.path != "" && saveJSONState(registry.path, next) != nil {
-		modelError(w, http.StatusInternalServerError, "Could not save virtual key state")
-		return false
+	if registry.store != nil {
+		if err := registry.store.save(next); err != nil {
+			stateWriteError(w, err)
+			return false
+		}
 	}
 	registry.keys = next
 	return true
