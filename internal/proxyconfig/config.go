@@ -24,6 +24,7 @@ type configFile struct {
 		MasterKey string `yaml:"master_key"`
 		DatabaseURL string `yaml:"database_url"`
 		StoreModels bool `yaml:"store_model_in_db"`
+		DisableSpendLogs bool `yaml:"disable_spend_logs"`
 	} `yaml:"general_settings"`
 	Router struct {
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
@@ -76,6 +77,7 @@ type Config struct {
 	LatencyBuffer float64
 	LatencySamples int
 	DatabaseURL string
+	DisableSpendLogs bool
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -115,7 +117,8 @@ func Load(reader io.Reader) (Config, error) {
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
-		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases}
+		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
+		DisableSpendLogs: file.General.DisableSpendLogs}
 	var err error
 	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
 	if err != nil {
@@ -436,7 +439,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 		endpoint = configured
 	}
-	price, err := tokenPrice(entry.Params.Model, entry.Params.InputPrice, entry.Params.OutputPrice)
+	price, usagePrice, err := tokenPrice(entry.Params.Model, entry.Params.InputPrice, entry.Params.OutputPrice)
 	if err != nil {
 		return runtime.Candidate{}, err
 	}
@@ -444,7 +447,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
-		TokenPrice: price, Vertex: vertex}, nil
+		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

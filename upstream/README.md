@@ -20,6 +20,7 @@ The upstream MIT license notice is included with this port. LiteLLM's `enterpris
 | `litellm/constants.py`, `litellm/llms/openai_like/providers.json`, `model_prices_and_context_window.json` | Generated OpenAI-compatible provider names and metadata for base URLs, environment variables, header templates and Chat parameter mappings. The pinned token price snapshot is used for cost-based ranking in standalone proxy mode. | Additional provider defaults and specialized adapters, context window metadata and richer pricing rules |
 | `litellm/proxy/proxy_server.py`, `litellm/utils.py` | Scoped token-count utility with embedded OpenAI tokenizers and native Anthropic and Gemini counting | Exact tool and multimodal accounting, custom Hugging Face tokenizers and additional native providers |
 | `litellm/integrations/generic_api/` | Opt-in generic API callback for inference success or failure, with queued JSON batches and optional message capture | Full StandardLoggingPayload, additional callbacks and transports, stream reconstruction, spend attribution and delivery retries |
+| `litellm/proxy/spend_tracking/` | PostgreSQL inference metadata, token and basic cost records, master-key spend log filtering and pagination, and daily totals | Rich pricing, delegated reporting, retry and per-attempt attribution, queue durability, budgets and migration of historical spend |
 | Other Python provider and feature modules under `litellm/` | Inventory and port by module | Stateful APIs, remaining API families, callbacks and provider modules |
 
 ## Verify protocol behavior

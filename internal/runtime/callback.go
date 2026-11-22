@@ -17,12 +17,15 @@ type InferenceEvent struct {
 	Status     string          `json:"status"`
 	Model      string          `json:"model"`
 	ModelGroup string          `json:"model_group"`
+	ModelID    string          `json:"model_id"`
 	Provider   string          `json:"custom_llm_provider"`
 	StartTime  float64         `json:"startTime"`
 	EndTime    float64         `json:"endTime"`
 	Total      int             `json:"total_tokens"`
 	Prompt     int             `json:"prompt_tokens"`
 	Completion int             `json:"completion_tokens"`
+	Spend      *float64        `json:"response_cost"`
+	KeyDigest  string          `json:"-"`
 	Messages   json.RawMessage `json:"messages"`
 	Response   json.RawMessage `json:"response"`
 }
@@ -42,6 +45,7 @@ type callbackResponse struct {
 	event InferenceEvent
 	status int
 	capture bool
+	price [2]*float64
 }
 
 func (recorder *callbackResponse) WriteHeader(status int) {
@@ -111,6 +115,18 @@ func (recorder *callbackResponse) finish() {
 	recorder.event.Status = "success"
 	if recorder.status >= 400 {
 		recorder.event.Status = "failure"
+	}
+	if (recorder.event.Prompt != 0 || recorder.event.Completion != 0) &&
+		(recorder.event.Prompt == 0 || recorder.price[0] != nil) &&
+		(recorder.event.Completion == 0 || recorder.price[1] != nil) {
+		cost := 0.0
+		if recorder.price[0] != nil {
+			cost += float64(recorder.event.Prompt) * *recorder.price[0]
+		}
+		if recorder.price[1] != nil {
+			cost += float64(recorder.event.Completion) * *recorder.price[1]
+		}
+		recorder.event.Spend = &cost
 	}
 }
 

@@ -19,7 +19,7 @@ var modelTokenPrices = func() map[string][2]*float64 {
 	return prices
 }()
 
-func tokenPrice(model string, input, output *float64) (float64, error) {
+func tokenPrice(model string, input, output *float64) (float64, [2]*float64, error) {
 	prices, ok := modelTokenPrices[model]
 	if !ok && strings.HasPrefix(model, "openai/") {
 		prices = modelTokenPrices[strings.TrimPrefix(model, "openai/")]
@@ -30,17 +30,18 @@ func tokenPrice(model string, input, output *float64) (float64, error) {
 		if override != nil {
 			price = override
 		}
+		prices[index] = price
 		if price == nil {
 			total += 5
 			continue
 		}
 		if *price < 0 || math.IsNaN(*price) || math.IsInf(*price, 0) {
-			return 0, errors.New("token prices must be finite and non-negative")
+			return 0, prices, errors.New("token prices must be finite and non-negative")
 		}
 		total += *price
 	}
 	if math.IsInf(total, 0) {
-		return 0, errors.New("combined token price is too large")
+		return 0, prices, errors.New("combined token price is too large")
 	}
-	return total, nil
+	return total, prices, nil
 }

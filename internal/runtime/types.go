@@ -24,6 +24,7 @@ type Candidate struct {
 	TextOnly         bool              `json:"textOnly,omitempty"`
 	RoutingGroup     string            `json:"routingGroup,omitempty"`
 	TokenPrice       float64           `json:"-"`
+	UsagePrice       [2]*float64       `json:"-"`
 	Vertex           *VertexConfig     `json:"-"`
 	Weight           *float64          `json:"weight,omitempty"`
 	RPM              *int              `json:"rpm,omitempty"`

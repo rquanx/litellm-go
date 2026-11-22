@@ -58,6 +58,8 @@ For PostgreSQL storage, set `general_settings.database_url` and omit the local s
 
 Use `--import-litellm-access` in place of the key-only import when keys belong to teams, internal users or organizations. The command reads a consistent PostgreSQL snapshot and commits only when the imported restrictions can be represented. Supported team-member model scopes are preserved from LiteLLM budget records. Active monetary budgets and unsupported roles or policy bindings cause the entire access import to fail.
 
+In standalone PostgreSQL mode, `/spend/logs/v2` shows inference metadata and token counts. `/global/spend/logs` shows daily totals. The cost estimate uses configured or pinned input and output token prices, and missing prices produce a null cost. Spend records contain metadata and omit prompt and response content. Set `general_settings.disable_spend_logs: true` to disable this storage.
+
 ```yaml
 model_list:
   - model_name: summarize

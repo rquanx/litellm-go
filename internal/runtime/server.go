@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -323,6 +324,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 	if s.config.Callback != nil {
 		recorder := &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream)}
+		if key := inferenceCredential(request); key != "" && !s.authorized(request) {
+			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+		}
 		if s.config.LogMessages {
 			recorder.capture = true
 			for _, name := range []string{"messages", "input", "prompt", "contents"} {
@@ -1007,6 +1011,10 @@ func writeResponse(writer http.ResponseWriter, status int, headers http.Header, 
 	writeRawResponse(writer, status, headers, body)
 }
 func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts int, attemptLog []map[string]any) {
+	if recorder, ok := writer.(*callbackResponse); ok {
+		recorder.price = candidate.UsagePrice
+		recorder.event.ModelID = candidate.DeploymentID
+	}
 	writer.Header().Set("X-Minato-Runtime-Source", candidate.SourceID)
 	writer.Header().Set("X-Minato-Runtime-Model", candidate.ModelID)
 	writer.Header().Set("X-Minato-Runtime-Attempts", strconv.Itoa(attempts))

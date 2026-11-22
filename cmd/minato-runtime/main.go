@@ -118,6 +118,24 @@ func main() {
 		config.Callback = proxy.Callback.Start(context.Background())
 		config.LogMessages = proxy.LogMessages
 	}
+	var spend *proxyconfig.SpendLog
+	if stateDB != nil && !proxy.DisableSpendLogs {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var err error
+		spend, err = proxyconfig.OpenSpendLog(ctx, stateDB, keys)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		record := spend.Start(context.Background())
+		callback := config.Callback
+		config.Callback = func(event runtime.InferenceEvent) {
+			record(event)
+			if callback != nil {
+				callback(event)
+			}
+		}
+	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {
@@ -133,6 +151,9 @@ func main() {
 	}
 	if keys != nil {
 		handler = keys.Handler(handler)
+	}
+	if spend != nil {
+		handler = spend.Handler(handler)
 	}
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	log.Printf("minato-runtime listening on %s", address)
