@@ -43,6 +43,8 @@ func main() {
 		config.Routes = proxy.Routes
 		config.NumRetries = proxy.NumRetries
 		config.RoutingStrategy = proxy.RoutingStrategy
+		config.LatencyBuffer = proxy.LatencyBuffer
+		config.LatencySamples = proxy.LatencySamples
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}

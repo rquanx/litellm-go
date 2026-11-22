@@ -30,6 +30,8 @@ type Config struct {
 	NumRetries         int
 	AuthorizeKey       func(string) ([]string, bool)
 	RoutingStrategy    string
+	LatencyBuffer      float64
+	LatencySamples     int
 }
 
 type Server struct {
@@ -40,6 +42,7 @@ type Server struct {
 	sem    chan struct{}
 	trafficMu sync.Mutex
 	deploymentTraffic map[string]int
+	deploymentLatency map[latencyKey]*latencyWindow
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -217,6 +220,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	input := payload.fields
+	stream := endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream")
 	if alias == "" {
 		alias, _ = input["model"].(string)
 	}
@@ -235,14 +239,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
 		return
 	}
-	eligible := s.eligibleCandidates(route.Candidates, modelScope, endpoint)
+	eligible := s.eligibleCandidates(route.Candidates, modelScope, endpoint, stream)
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
 	}
 	route.Candidates = eligible
-	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint)
-	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint)
+	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint, stream)
+	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint, stream)
 	if previous, ok := input["previous_response_id"].(string); ok && s.config.AuthorizeInference && endpoint == "responses" {
 		provider, deployment, original, wrapped := unwrapResponseID(previous)
 		if wrapped {
@@ -262,7 +266,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			input["previous_response_id"] = original
 		}
 	}
-	if endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream") {
+	if stream {
 		if !endpoints[endpoint].streaming {
 			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
 			return
@@ -299,6 +303,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 		attempts = append(attempts, attempt)
 		if callErr == nil && status >= 200 && status < 300 {
+			s.recordLatency(candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
@@ -364,6 +369,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		}
 		attempts = append(attempts, attempt)
 		if err == nil && !streamFailure && status >= 200 && status < 300 {
+			s.recordLatency(candidate, true, time.Since(started))
 			defer response.Body.Close()
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			for key, values := range response.Header {
@@ -421,7 +427,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	}
 }
 
-func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endpoint string) []Candidate {
+func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endpoint string, stream bool) []Candidate {
 	if candidates == nil {
 		return nil
 	}
@@ -431,7 +437,7 @@ func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endp
 			eligible = append(eligible, candidate)
 		}
 	}
-	s.orderDeployments(eligible)
+	s.orderDeployments(eligible, stream)
 	return eligible
 }
 

@@ -27,6 +27,10 @@ type configFile struct {
 		ContextFallbacks []map[string][]string `yaml:"context_window_fallbacks"`
 		PolicyFallbacks []map[string][]string `yaml:"content_policy_fallbacks"`
 		Strategy string                 `yaml:"routing_strategy"`
+		StrategyArgs struct {
+			Buffer float64 `yaml:"lowest_latency_buffer"`
+			Samples int `yaml:"max_latency_list_size"`
+		} `yaml:"routing_strategy_args"`
 		Timeout   int                  `yaml:"timeout"`
 		Retries   int                  `yaml:"num_retries"`
 	} `yaml:"router_settings"`
@@ -61,6 +65,8 @@ type Config struct {
 	Timeout   time.Duration
 	NumRetries int
 	RoutingStrategy string
+	LatencyBuffer float64
+	LatencySamples int
 	DatabaseURL string
 	models    []deployment
 	fallbacks []map[string][]string
@@ -86,12 +92,19 @@ func Load(reader io.Reader) (Config, error) {
 	if strategy == "" {
 		strategy = "simple-shuffle"
 	}
-	if strategy != "simple-shuffle" && strategy != "least-busy" && strategy != "cost-based-routing" {
+	switch strategy {
+	case "simple-shuffle", "least-busy", "cost-based-routing", "latency-based-routing":
+	default:
 		return Config{}, errors.New("unsupported routing_strategy")
+	}
+	args := file.Router.StrategyArgs
+	if args.Buffer < 0 || math.IsNaN(args.Buffer) || math.IsInf(args.Buffer, 0) || args.Samples < 0 || args.Samples > 1000 {
+		return Config{}, errors.New("invalid latency routing settings")
 	}
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
-		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks}
+		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
+		LatencyBuffer: args.Buffer, LatencySamples: args.Samples}
 	var err error
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {

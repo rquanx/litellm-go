@@ -6,7 +6,7 @@ import (
 	"slices"
 )
 
-func (s *Server) orderDeployments(candidates []Candidate) {
+func (s *Server) orderDeployments(candidates []Candidate, stream bool) {
 	if s.config.RoutingStrategy == "" {
 		return
 	}
@@ -21,9 +21,12 @@ func (s *Server) orderDeployments(candidates []Candidate) {
 				slices.SortStableFunc(group, func(a, b Candidate) int { return cmp.Compare(a.TokenPrice, b.TokenPrice) })
 			} else {
 				selected := 0
-				if s.config.RoutingStrategy == "least-busy" {
+				switch s.config.RoutingStrategy {
+				case "latency-based-routing":
+					selected = s.lowestLatency(group, stream)
+				case "least-busy":
 					selected = s.leastBusy(group)
-				} else {
+				default:
 					selected = chooseWeighted(group)
 				}
 				first := group[selected]
