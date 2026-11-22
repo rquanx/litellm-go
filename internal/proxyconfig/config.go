@@ -19,6 +19,7 @@ import (
 
 type configFile struct {
 	Models  []deployment `yaml:"model_list"`
+	Callbacks callbackSettings `yaml:"litellm_settings"`
 	General struct {
 		MasterKey string `yaml:"master_key"`
 		DatabaseURL string `yaml:"database_url"`
@@ -81,6 +82,8 @@ type Config struct {
 	contextFallbacks []map[string][]string
 	policyFallbacks []map[string][]string
 	modelGroupAliases map[string]modelGroupAlias
+	Callback *GenericCallback
+	LogMessages bool
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -114,6 +117,10 @@ func Load(reader io.Reader) (Config, error) {
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases}
 	var err error
+	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
+	if err != nil {
+		return Config{}, err
+	}
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {
 		return Config{}, fmt.Errorf("general_settings.master_key: %w", err)

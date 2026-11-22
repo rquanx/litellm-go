@@ -33,6 +33,8 @@ type Config struct {
 	RoutingStrategy    string
 	LatencyBuffer      float64
 	LatencySamples     int
+	Callback           func(InferenceEvent)
+	LogMessages        bool
 }
 
 type Server struct {
@@ -318,6 +320,25 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	stream := endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream")
 	if alias == "" {
 		alias, _ = input["model"].(string)
+	}
+	if s.config.Callback != nil {
+		recorder := &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream)}
+		if s.config.LogMessages {
+			recorder.capture = true
+			for _, name := range []string{"messages", "input", "prompt", "contents"} {
+				if value := input[name]; value != nil {
+					recorder.event.Messages = boundedCallbackJSON(value)
+					break
+				}
+			}
+		}
+		defer func() {
+			if recorder.status != 0 {
+				recorder.finish()
+				s.config.Callback(recorder.event)
+			}
+		}()
+		writer = recorder
 	}
 	if !modelAllowed(modelScope, alias) {
 		writeError(writer, http.StatusForbidden, "model_not_allowed", "The key does not allow this model")

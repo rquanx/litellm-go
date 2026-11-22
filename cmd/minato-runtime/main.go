@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"log"
@@ -112,6 +113,10 @@ func main() {
 	}
 	if *keyStatePath != "" && keys == nil {
 		log.Fatal("virtual key state requires standalone config and a master key")
+	}
+	if proxy.Callback != nil {
+		config.Callback = proxy.Callback.Start(context.Background())
+		config.LogMessages = proxy.LogMessages
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
