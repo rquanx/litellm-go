@@ -477,6 +477,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if endpoint == "rerank" && candidate.Vertex != nil {
 				body = vertexRerankResponse(body)
 			}
+			if endpoint == "rerank" && candidate.Bedrock != nil {
+				body = bedrockRerankResponse(body)
+			}
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				body = wrapResponseBody(body, candidate)
 			}
@@ -798,6 +801,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	if targetEndpoint == "rerank" && candidate.Vertex != nil {
 		payload = vertexRerankRequest(payload)
 	}
+	if targetEndpoint == "rerank" && candidate.Bedrock != nil {
+		payload = bedrockRerankRequest(payload, candidate.Bedrock.Region)
+	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
 }
@@ -846,6 +852,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = azureTarget(candidate.APIBase, candidate.ModelID, pathEndpoint, candidate.APIVersion)
 	} else if candidate.Endpoint == "rerank" && candidate.Vertex != nil {
 		target = vertexRerankTarget(candidate)
+	} else if candidate.Endpoint == "rerank" && candidate.Bedrock != nil {
+		target = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/rerank") + "/rerank"
 	} else if candidate.Endpoint == "rerank" {
 		target = rerankTarget(candidate.APIBase, candidate.Provider)
 	} else if candidate.Endpoint == "bedrock-converse" {

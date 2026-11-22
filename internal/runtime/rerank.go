@@ -7,6 +7,63 @@ import (
 	"strings"
 )
 
+func bedrockRerankRequest(payload map[string]any, region string) map[string]any {
+	documents, _ := payload["documents"].([]any)
+	sources := make([]map[string]any, 0, len(documents))
+	for _, document := range documents {
+		inline := map[string]any{"type": "JSON", "jsonDocument": document}
+		if text, ok := document.(string); ok {
+			inline = map[string]any{"type": "TEXT", "textDocument": map[string]any{"text": text}}
+		}
+		sources = append(sources, map[string]any{"type": "INLINE", "inlineDocumentSource": inline})
+	}
+	model, _ := payload["model"].(string)
+	if !strings.HasPrefix(model, "arn:") {
+		model = "arn:aws:bedrock:" + region + "::foundation-model/" + model
+	}
+	limit := any(len(documents))
+	if top, ok := payload["top_n"].(float64); ok && top > 0 {
+		limit = top
+	}
+	return map[string]any{
+		"queries": []map[string]any{{"type": "TEXT", "textQuery": map[string]any{"text": payload["query"]}}},
+		"sources": sources,
+		"rerankingConfiguration": map[string]any{"type": "BEDROCK_RERANKING_MODEL", "bedrockRerankingConfiguration": map[string]any{
+			"modelConfiguration": map[string]string{"modelArn": model}, "numberOfResults": limit,
+		}},
+	}
+}
+
+func bedrockRerankResponse(body []byte) []byte {
+	var response struct {
+		ID string `json:"id"`
+		Results []struct {
+			Index int `json:"index"`
+			Score float64 `json:"relevanceScore"`
+		} `json:"results"`
+		Usage map[string]any `json:"usage"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Results == nil {
+		return body
+	}
+	if response.ID == "" {
+		response.ID = newUUID()
+	}
+	billed := response.Usage
+	if billed == nil {
+		billed = map[string]any{"search_units": 1}
+	}
+	results := make([]map[string]any, 0, len(response.Results))
+	for _, result := range response.Results {
+		results = append(results, map[string]any{"index": result.Index, "relevance_score": result.Score})
+	}
+	encoded, err := json.Marshal(map[string]any{"id": response.ID, "results": results, "meta": map[string]any{"billed_units": billed}})
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
 func vertexRerankTarget(candidate Candidate) string {
 	base := strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1")
 	return base + "/v1/projects/" + url.PathEscape(candidate.Vertex.Project) + "/locations/global/rankingConfigs/default_ranking_config:rank"

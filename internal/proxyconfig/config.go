@@ -437,7 +437,11 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			return runtime.Candidate{}, err
 		}
 		if base == "" {
-			base = "https://bedrock-runtime." + bedrock.Region + ".amazonaws.com"
+			service := "bedrock-runtime"
+			if entry.bedrockRerank() {
+				service = "bedrock-agent-runtime"
+			}
+			base = "https://" + service + "." + bedrock.Region + ".amazonaws.com"
 		}
 	}
 	if base == "" && rerankProvider(provider) {
@@ -515,6 +519,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		endpoint = "bedrock-converse"
 		if strings.Contains(model, "amazon.titan-embed-text") {
 			endpoint = "bedrock-embeddings"
+		}
+		if entry.bedrockRerank() {
+			endpoint = "rerank"
 		}
 	}
 	if rerankProvider(provider) {
@@ -607,6 +614,11 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 
 func rerankProvider(name string) bool {
 	return name == "cohere" || name == "cohere_chat" || name == "jina_ai" || name == "voyage"
+}
+
+func (entry deployment) bedrockRerank() bool {
+	return entry.Info.Mode == "rerank" || slices.Contains(entry.Info.Endpoints, "/v1/rerank") ||
+		strings.Contains(entry.Params.Model, ".rerank-")
 }
 
 func resolveEnv(value string) (string, error) {

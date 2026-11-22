@@ -10,11 +10,19 @@ import (
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
-func TestCohereAndJinaRerank(t *testing.T) {
+func TestProviderRerank(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
+		}
+		if r.URL.Path == "/rerank" {
+			if request["rerankingConfiguration"] == nil || request["sources"] == nil ||
+				r.Header.Get("Authorization") != "Bearer fixture-bedrock" {
+				t.Error("invalid Bedrock rerank request")
+			}
+			w.Write([]byte(`{"results":[{"index":0,"relevanceScore":0.9}]}`))
+			return
 		}
 		if request["model"] == "semantic-ranker-fixture" {
 			if r.URL.Path != "/v1/projects/demo-project/locations/global/rankingConfigs/default_ranking_config:rank" ||
@@ -53,12 +61,14 @@ model_list:
     litellm_params: {model: voyage/voyage-fixture, api_base: os.environ/TEST_RERANK_BASE}
   - model_name: vertex
     litellm_params: {model: vertex_ai/semantic-ranker-fixture, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-vertex, vertex_project: demo-project}
+  - model_name: bedrock
+    litellm_params: {model: bedrock/cohere.rerank-v3-5:0, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-bedrock, aws_region_name: us-east-1}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
