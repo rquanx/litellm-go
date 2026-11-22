@@ -17,6 +17,7 @@ type team struct {
 	Models   []string       `json:"models"`
 	Blocked  bool           `json:"blocked"`
 	Metadata map[string]any `json:"metadata"`
+	Members []teamMembership `json:"members_with_roles,omitempty"`
 }
 
 type teamChanges struct {
@@ -44,6 +45,11 @@ func (registry *KeyRegistry) registerTeamRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /team/info", registry.teamInfo)
 	mux.HandleFunc("GET /team/list", registry.listTeams)
 	mux.HandleFunc("POST /team/delete", registry.deleteTeams)
+	for _, operation := range []string{"add", "update", "delete"} {
+		mux.HandleFunc("POST /team/member_"+operation, func(w http.ResponseWriter, r *http.Request) {
+			registry.writeTeamMembership(w, r, operation)
+		})
+	}
 }
 
 func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, update bool) {
@@ -179,7 +185,7 @@ func (registry *KeyRegistry) teamInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelJSON(w, http.StatusOK, map[string]any{
-		"team_id": id, "team_info": current, "keys": keys, "team_memberships": []any{},
+		"team_id": id, "team_info": current, "keys": keys, "team_memberships": append([]teamMembership{}, current.Members...),
 	})
 }
 
@@ -187,16 +193,13 @@ func (registry *KeyRegistry) listTeams(w http.ResponseWriter, r *http.Request) {
 	if !registry.requireMaster(w, r) {
 		return
 	}
-	if r.URL.Query().Get("user_id") != "" {
-		modelError(w, http.StatusBadRequest, "User filter is unsupported")
-		return
-	}
+	userID := r.URL.Query().Get("user_id")
 	orgID := r.URL.Query().Get("organization_id")
 	registry.mu.RLock()
 	teams := make([]team, 0, len(registry.state.Teams))
 	for _, id := range slices.Sorted(maps.Keys(registry.state.Teams)) {
 		current := registry.state.Teams[id]
-		if orgID == "" || orgID == current.OrgID {
+		if (orgID == "" || orgID == current.OrgID) && (userID == "" || memberIndex(current, userID) >= 0) {
 			teams = append(teams, current)
 		}
 	}

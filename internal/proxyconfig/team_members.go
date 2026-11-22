@@ -1,0 +1,157 @@
+package proxyconfig
+
+import (
+	"bytes"
+	"encoding/json"
+	"maps"
+	"net/http"
+	"slices"
+	"strings"
+)
+
+type teamMembership struct {
+	TeamID string   `json:"team_id"`
+	UserID string   `json:"user_id"`
+	Email  string   `json:"user_email,omitempty"`
+	Role   string   `json:"role"`
+	Models []string `json:"allowed_models"`
+}
+
+func memberIndex(owner team, userID string) int {
+	return slices.IndexFunc(owner.Members, func(m teamMembership) bool { return m.UserID == userID })
+}
+
+func (registry *KeyRegistry) writeTeamMembership(w http.ResponseWriter, r *http.Request, operation string) {
+	if !registry.requireMaster(w, r) {
+		return
+	}
+	var input struct {
+		TeamID string `json:"team_id"`
+		UserID string `json:"user_id"`
+		Email string `json:"user_email"`
+		Role string `json:"role"`
+		Member json.RawMessage `json:"member"`
+		Models *[]string `json:"allowed_models"`
+	}
+	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil || input.TeamID == "" ||
+		(input.Models != nil && !validOwnerModels(*input.Models)) {
+		modelError(w, http.StatusBadRequest, "Invalid or unsupported membership configuration")
+		return
+	}
+	var changes []teamMembership
+	if operation == "add" {
+		raw := bytes.TrimSpace(input.Member)
+		if bytes.HasPrefix(raw, []byte("{")) {
+			raw = append(append([]byte{'['}, raw...), ']')
+		}
+		if err := decodeModelJSON(bytes.NewReader(raw), &changes); err != nil || len(changes) == 0 {
+			modelError(w, http.StatusBadRequest, "Supply members to add")
+			return
+		}
+	} else {
+		changes = []teamMembership{{UserID: input.UserID, Email: input.Email, Role: input.Role}}
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	current, exists := registry.state.Teams[input.TeamID]
+	if !exists {
+		modelError(w, http.StatusNotFound, "Team not found")
+		return
+	}
+	current.Members = slices.Clone(current.Members)
+	next := registry.state
+	next.Teams = maps.Clone(next.Teams)
+	next.Users = maps.Clone(next.Users)
+	if next.Users == nil {
+		next.Users = make(map[string]internalUser)
+	}
+	if operation == "delete" {
+		next.Keys = maps.Clone(next.Keys)
+	}
+	updatedUsers := make([]internalUser, 0, len(changes))
+	updatedMembers := make([]teamMembership, 0, len(changes))
+	for _, change := range changes {
+		user, ok := membershipUser(next.Users, change.UserID, change.Email, operation == "add")
+		if !ok || (change.Role != "" && change.Role != "admin" && change.Role != "user") {
+			modelError(w, http.StatusBadRequest, "Invalid membership user or role")
+			return
+		}
+		index := memberIndex(current, user.ID)
+		if operation == "add" && (index >= 0 || change.Role == "") {
+			modelError(w, http.StatusBadRequest, "Member already exists or has no role")
+			return
+		}
+		if operation != "add" && index < 0 {
+			modelError(w, http.StatusNotFound, "Team member not found")
+			return
+		}
+		if operation == "delete" {
+			current.Members = slices.Delete(current.Members, index, index+1)
+			for digest, key := range next.Keys {
+				if key.TeamID == current.ID && key.UserID == user.ID {
+					delete(next.Keys, digest)
+				}
+			}
+			continue
+		}
+		member := teamMembership{TeamID: current.ID, UserID: user.ID, Email: user.Email, Models: []string{}}
+		if index >= 0 {
+			member = current.Members[index]
+		}
+		if change.Role != "" {
+			member.Role = change.Role
+		}
+		if input.Models != nil {
+			member.Models = *input.Models
+		}
+		if operation == "add" {
+			current.Members = append(current.Members, member)
+			next.Users[user.ID] = user
+		} else {
+			current.Members[index] = member
+		}
+		updatedUsers = append(updatedUsers, user)
+		updatedMembers = append(updatedMembers, member)
+	}
+	next.Teams[current.ID] = current
+	if !registry.apply(w, next) {
+		return
+	}
+	switch operation {
+	case "add":
+		modelJSON(w, http.StatusOK, struct {
+			team
+			Users []internalUser `json:"updated_users"`
+			Memberships []teamMembership `json:"updated_team_memberships"`
+		}{team: current, Users: updatedUsers, Memberships: updatedMembers})
+	case "update":
+		modelJSON(w, http.StatusOK, updatedMembers[0])
+	default:
+		modelJSON(w, http.StatusOK, current)
+	}
+}
+
+func membershipUser(users map[string]internalUser, id, email string, create bool) (internalUser, bool) {
+	if id != "" {
+		if user, ok := users[id]; ok && (email == "" || strings.EqualFold(email, user.Email)) {
+			return user, true
+		}
+	}
+	if email != "" {
+		for _, user := range users {
+			if strings.EqualFold(email, user.Email) {
+				return user, id == "" || user.ID == id
+			}
+		}
+	}
+	if !create || (id == "" && email == "") {
+		return internalUser{}, false
+	}
+	if _, exists := users[id]; exists {
+		return internalUser{}, false
+	}
+	if id == "" {
+		id = newEntityID()
+	}
+	return internalUser{ID: id, Email: email, Role: "internal_user", Models: []string{}, Metadata: map[string]any{}}, true
+}

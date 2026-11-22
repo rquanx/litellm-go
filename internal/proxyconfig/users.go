@@ -131,9 +131,15 @@ func (registry *KeyRegistry) userInfo(w http.ResponseWriter, r *http.Request) {
 	registry.mu.RLock()
 	user, exists := registry.state.Users[id]
 	keys := make([]keyRecord, 0)
+	teams := make([]team, 0)
 	for digest, key := range registry.state.Keys {
 		if key.UserID == id {
 			keys = append(keys, keyRecord{Token: digest, virtualKey: key})
+		}
+	}
+	for _, owner := range registry.state.Teams {
+		if memberIndex(owner, id) >= 0 {
+			teams = append(teams, owner)
 		}
 	}
 	registry.mu.RUnlock()
@@ -141,7 +147,7 @@ func (registry *KeyRegistry) userInfo(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusNotFound, "User not found")
 		return
 	}
-	modelJSON(w, http.StatusOK, map[string]any{"user_id": id, "user_info": user, "keys": keys, "teams": []team{}})
+	modelJSON(w, http.StatusOK, map[string]any{"user_id": id, "user_info": user, "keys": keys, "teams": teams})
 }
 
 func (registry *KeyRegistry) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +222,7 @@ func (registry *KeyRegistry) deleteUsers(w http.ResponseWriter, r *http.Request)
 	next := registry.state
 	next.Users = maps.Clone(next.Users)
 	next.Keys = maps.Clone(next.Keys)
+	next.Teams = maps.Clone(next.Teams)
 	count := 0
 	for _, id := range input.IDs {
 		if _, exists := next.Users[id]; exists {
@@ -227,6 +234,12 @@ func (registry *KeyRegistry) deleteUsers(w http.ResponseWriter, r *http.Request)
 		if slices.Contains(input.IDs, key.UserID) {
 			delete(next.Keys, digest)
 		}
+	}
+	for id, owner := range next.Teams {
+		owner.Members = slices.DeleteFunc(slices.Clone(owner.Members), func(member teamMembership) bool {
+			return slices.Contains(input.IDs, member.UserID)
+		})
+		next.Teams[id] = owner
 	}
 	if registry.apply(w, next) {
 		modelJSON(w, http.StatusOK, map[string]int{"count": count})

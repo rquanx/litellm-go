@@ -105,6 +105,9 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 			return nil, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
+		if index := memberIndex(owner, key.UserID); index >= 0 {
+			scope = intersectScopes(scope, unrestrictedScope(owner.Members[index].Models))
+		}
 		orgID = owner.OrgID
 	}
 	if orgID != "" {

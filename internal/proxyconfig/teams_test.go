@@ -141,4 +141,17 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	send("POST", "/user/delete", master, `{"user_ids":["user"]}`, 200)
 	send("POST", "/user/new", master, `{"user_id":"user","auto_create_key":false}`, 200)
 	send("GET", "/v1/models", user.Key, "", 401)
+	send("POST", "/team/new", master, `{"team_id":"fixture","models":["first","second"]}`, 200)
+	send("POST", "/team/member_add", master, `{"team_id":"fixture","member":{"user_id":"user","role":"user"},"allowed_models":["second"]}`, 200)
+	bound := send("POST", "/key/generate", master, `{"team_id":"fixture","user_id":"user","models":["all-team-models"]}`, 200)
+	if err := json.Unmarshal([]byte(bound), &user); err != nil || user.Key == "" {
+		t.Fatal("could not issue a team member key")
+	}
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"first","messages":[]}`, 403)
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"second","messages":[]}`, 200)
+	send("POST", "/team/member_update", master, `{"team_id":"fixture","user_id":"user","role":"admin","allowed_models":["first"]}`, 200)
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"second","messages":[]}`, 403)
+	send("POST", "/team/member_delete", master, `{"team_id":"fixture","user_id":"user"}`, 200)
+	handler = newHandler()
+	send("GET", "/v1/models", user.Key, "", 401)
 }
