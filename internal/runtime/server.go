@@ -827,7 +827,7 @@ func (s *Server) eligibleCandidates(ctx context.Context, candidates []Candidate,
 	}
 	eligible := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || !googleImageDeployment(candidate)) {
+		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || (!googleImageDeployment(candidate) && !nativeAudioDeployment(candidate))) {
 			if candidate.DeploymentID != "" {
 				index := slices.IndexFunc(eligible, func(existing Candidate) bool {
 					return existing.DeploymentID == candidate.DeploymentID && existing.RoutingGroup == candidate.RoutingGroup
@@ -898,6 +898,12 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 		return s.googleEmbeddings(ctx, request, candidate, payload)
 	}
 	status, data, headers, retryable, err := s.callProviderJSON(ctx, request, endpoint, candidate, payload)
+	if err == nil && status/100 == 2 && nativeAudioDeployment(candidate) && candidate.Endpoint == "transcription" {
+		data, err = providerTranscription(data, candidate.Provider)
+		if err != nil {
+			return http.StatusBadGateway, nil, headers, true, errors.New("Invalid provider transcription response")
+		}
+	}
 	if err == nil && status/100 == 2 && googleImageDeployment(candidate) {
 		data, err = googleImageResponse(data)
 		if err != nil {
@@ -910,7 +916,7 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 func (s *Server) callProviderJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
 	response, err := s.send(ctx, request, endpoint, candidate, payload, false)
 	if err != nil {
-		var invalid invalidGoogleImageRequest
+		var invalid invalidMediaRequest
 		if errors.As(err, &invalid) {
 			body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": invalid.Error(), "type": "invalid_request"}})
 			return http.StatusBadRequest, body, http.Header{"Content-Type": {"application/json"}}, false, nil
@@ -952,7 +958,7 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 			payload, err = googleImagePayload(input.fields, candidate)
 		}
 		if err != nil {
-			return nil, "", invalidGoogleImageRequest{err}
+			return nil, "", invalidMediaRequest{err}
 		}
 		body, err := json.Marshal(payload)
 		return body, "application/json", err
@@ -1086,7 +1092,15 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 		payload.fields = fields
 	}
-	encoded, contentType, err := encodePayload(payload, endpoint, candidate, stream)
+	var encoded []byte
+	var contentType, audioTarget string
+	var err error
+	if nativeAudioDeployment(candidate) {
+		audioTarget, encoded, contentType, err = audioProviderRequest(payload, candidate)
+		if err != nil { err = invalidMediaRequest{err} }
+	} else {
+		encoded, contentType, err = encodePayload(payload, endpoint, candidate, stream)
+	}
 	if err != nil {
 		release()
 		return nil, err
@@ -1107,7 +1121,9 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if candidate.RelativeAPIBase {
 		target = strings.TrimRight(candidate.APIBase, "/") + strings.TrimPrefix(path, "/v1")
 	}
-	if googleImageDeployment(candidate) {
+	if audioTarget != "" {
+		target = audioTarget
+	} else if googleImageDeployment(candidate) {
 		target = googleImageTarget(candidate)
 	} else if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
 		target = geminiTarget(candidate, endpoint)
@@ -1159,7 +1175,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if apiKey == "" && candidate.CredentialRef != "" {
 		apiKey = os.Getenv(candidate.CredentialRef)
 	}
-	if candidate.Endpoint == "anthropic-messages" {
+	if candidate.Provider == "elevenlabs" {
+		upstream.Header.Set("xi-api-key", apiKey)
+	} else if candidate.Provider == "deepgram" {
+		upstream.Header.Set("Authorization", "Token "+apiKey)
+	} else if candidate.Endpoint == "anthropic-messages" {
 		upstream.Header.Set("anthropic-version", "2023-06-01")
 		for _, header := range []string{"anthropic-version", "anthropic-beta"} {
 			if values := request.Header.Values(header); len(values) != 0 {

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-type invalidGoogleImageRequest struct{ error }
+type invalidMediaRequest struct{ error }
 
 func googleImageDeployment(candidate Candidate) bool {
 	return (candidate.Endpoint == "image-generation" || candidate.Endpoint == "image-edit") && (candidate.Provider == "gemini" || candidate.Provider == "vertex_ai")

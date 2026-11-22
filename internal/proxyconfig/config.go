@@ -540,6 +540,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
+	nativeAudio := provider == "elevenlabs" || provider == "deepgram"
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	_, explicitOCR := strings.CutPrefix(model, "ocr/")
 	configuredOCR := entry.Info.Mode == "ocr" || explicitOCR || strings.HasPrefix(model, "mistral-ocr") ||
@@ -550,7 +551,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !mistralOCR) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -592,6 +593,15 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && provider == "anthropic" {
 		base = "https://api.anthropic.com"
+	}
+	if base == "" && nativeAudio {
+		if provider == "deepgram" {
+			base = os.Getenv("DEEPGRAM_API_BASE")
+			if base == "" { base = "https://api.deepgram.com" }
+		} else {
+			base = os.Getenv("ELEVENLABS_API_BASE")
+			if base == "" { base = "https://api.elevenlabs.io" }
+		}
 	}
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
@@ -665,6 +675,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	key, err := resolveEnv(entry.Params.APIKey)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_key: %w", err)
+	}
+	if key == "" && nativeAudio {
+		key = os.Getenv(strings.ToUpper(provider)+"_API_KEY")
 	}
 	if key == "" && hasSettings {
 		key = os.Getenv(settings.APIKeyEnv)
@@ -751,6 +764,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
+	if nativeAudio {
+		endpoint = "transcription"
+		if provider == "elevenlabs" && entry.Info.Mode != "audio_transcription" && !strings.HasPrefix(model, "scribe") {
+			endpoint = "speech"
+		}
+	}
 	if mistralOCR {
 		endpoint = "ocr"
 	}
@@ -809,6 +828,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 		if configured == "embeddings" && (provider == "cohere" || provider == "cohere_chat") {
 			configured = "cohere-embeddings"
+		}
+		if nativeAudio && configured != "transcription" && !(provider == "elevenlabs" && configured == "speech") {
+			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
 		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
