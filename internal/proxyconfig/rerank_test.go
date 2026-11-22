@@ -17,6 +17,12 @@ func TestProviderRerank(t *testing.T) {
 			t.Error(err)
 		}
 		switch r.URL.Path {
+		case "/providers/cohere/v2/rerank":
+			if request["model"] != "azure-ranker" || r.Header.Get("Authorization") != "Bearer fixture-azure-ai" {
+				t.Errorf("unexpected Azure AI request: %+v", request)
+			}
+			w.Write([]byte(`{"id":"azure-job","results":[{"index":0,"relevance_score":0.9}],"meta":{"billed_units":{"search_units":1}}}`))
+			return
 		case "/v1/retrieval/nvidia/ranker-3_2/reranking", "/v1/ranking":
 			query, _ := request["query"].(map[string]any)
 			passages, _ := request["passages"].([]any)
@@ -106,6 +112,8 @@ func TestProviderRerank(t *testing.T) {
 	t.Setenv("TOGETHERAI_API_KEY", "fixture-together")
 	t.Setenv("NVIDIA_NIM_API_BASE", upstream.URL+"/v1")
 	t.Setenv("NVIDIA_NIM_API_KEY", "fixture-nvidia")
+	t.Setenv("AZURE_AI_API_BASE", upstream.URL+"/providers/cohere/v2")
+	t.Setenv("AZURE_AI_API_KEY", "fixture-azure-ai")
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: cohere
@@ -139,12 +147,15 @@ model_list:
   - model_name: nvidia-ranking
     litellm_params: {model: nvidia_nim/ranking/nvidia/ranker-3_2}
     model_info: {mode: rerank}
+  - model_name: azure-ai
+    litellm_params: {model: azure_ai/azure-ranker}
+    model_info: {mode: rerank}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking", "azure-ai"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
@@ -165,6 +176,8 @@ model_list:
 			expected = `{"id":"together-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"document":{"text":"fixture"},"index":0,"relevance_score":0.9}]}`
 		case "nvidia", "nvidia-ranking":
 			expected = `{"id":"nvidia-job","meta":{"billed_units":{"total_tokens":5}},"results":[{"document":{"text":"document"},"index":0,"relevance_score":0.9}]}`
+		case "azure-ai":
+			expected = `{"id":"azure-job","results":[{"index":0,"relevance_score":0.9}],"meta":{"billed_units":{"search_units":1}}}`
 		}
 		if expected != "" && strings.TrimSpace(result.Body.String()) != expected {
 			t.Fatalf("unexpected %s response: %s", model, result.Body.String())

@@ -183,6 +183,13 @@ func rerankTarget(candidate Candidate) string {
 		return base + "/inference/" + strings.Join(model, "/")
 	case "nvidia_nim":
 		return nvidiaRerankTarget(base, candidate.ModelID)
+	case "azure_ai":
+		if strings.HasSuffix(base, "/v1/rerank") || strings.HasSuffix(base, "/v2/rerank") {
+			return base
+		}
+		if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v2") {
+			return base + "/rerank"
+		}
 	case "hosted_vllm", "infinity":
 		if provider == "hosted_vllm" {
 			if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {

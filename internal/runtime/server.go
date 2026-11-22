@@ -887,7 +887,7 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 			payload = deepInfraRerankRequest(payload)
 		case "nvidia_nim":
 			payload = nvidiaRerankRequest(payload)
-		case "infinity":
+		case "infinity", "azure_ai":
 			payload = hostedRerankRequest(payload, candidate.Provider)
 			if input.fields["max_chunks_per_doc"] != nil {
 				payload["max_chunks_per_doc"] = input.fields["max_chunks_per_doc"]

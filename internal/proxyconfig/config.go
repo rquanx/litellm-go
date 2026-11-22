@@ -519,6 +519,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = os.Getenv("DEEPINFRA_API_BASE")
 		case "together_ai":
 			base = "https://api.together.xyz"
+		case "azure_ai":
+			base = os.Getenv("AZURE_AI_API_BASE")
 		case "nvidia_nim":
 			base = os.Getenv("NVIDIA_NIM_API_BASE")
 			if base == "" {
@@ -585,6 +587,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			key = os.Getenv("DEEPINFRA_API_KEY")
 		case "together_ai":
 			key = os.Getenv("TOGETHERAI_API_KEY")
+		case "azure_ai":
+			key = os.Getenv("AZURE_AI_API_KEY")
 		case "nvidia_nim":
 			key = os.Getenv("NVIDIA_NIM_API_KEY")
 		}
