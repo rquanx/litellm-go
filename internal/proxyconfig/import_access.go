@@ -27,7 +27,16 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 		return 0, errors.New("could not open a snapshot of LiteLLM access state")
 	}
 	defer tx.Rollback()
-	importer := accessImporter{accessState: &state, budgets: make(map[string][]byte)}
+	importer := accessImporter{accessState: &state, budgets: make(map[string][]byte), objectPermissions: make(map[string][]byte)}
+	var hasPermissions bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('"LiteLLM_ObjectPermissionTable"') IS NOT NULL`).Scan(&hasPermissions); err != nil {
+		return 0, errors.New("could not locate LiteLLM object permissions")
+	}
+	if hasPermissions {
+		if err := readAccessRows(ctx, tx, "LiteLLM_ObjectPermissionTable", importer.importObjectPermission); err != nil {
+			return 0, err
+		}
+	}
 	readers := []struct {
 		relation string
 		apply    func([]byte) error
@@ -35,10 +44,29 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 		{"LiteLLM_BudgetTable", importer.importBudget},
 		{"LiteLLM_OrganizationTable", importer.importOrganization},
 		{"LiteLLM_UserTable", state.importUser},
-		{"LiteLLM_TeamTable", state.importTeam},
+		{"LiteLLM_TeamTable", func(payload []byte) error {
+			payload, err := importer.expandSearchPermission(payload)
+			if err != nil {
+				return err
+			}
+			return state.importTeam(payload)
+		}},
 		{"LiteLLM_TeamMembership", importer.importTeamMembership},
 		{"LiteLLM_OrganizationMembership", importer.importOrganizationMembership},
 		{"LiteLLM_VerificationToken", func(payload []byte) error {
+			var status struct {
+				Blocked bool `json:"blocked"`
+			}
+			if err := json.Unmarshal(payload, &status); err != nil {
+				return err
+			}
+			if status.Blocked {
+				return nil
+			}
+			payload, err := importer.expandSearchPermission(payload)
+			if err != nil {
+				return err
+			}
 			id, key, blocked, err := decodeLiteLLMKeyForState(payload, &state)
 			if err == nil && !blocked {
 				state.Keys[id] = key
@@ -63,6 +91,56 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 type accessImporter struct {
 	*accessState
 	budgets map[string][]byte
+	objectPermissions map[string][]byte
+}
+
+func (importer accessImporter) importObjectPermission(payload []byte) error {
+	var record struct {
+		ID string `json:"object_permission_id"`
+	}
+	if json.Unmarshal(payload, &record) != nil || record.ID == "" {
+		return errors.New("invalid object permission ID")
+	}
+	importer.objectPermissions[record.ID] = slices.Clone(payload)
+	return nil
+}
+
+func (importer accessImporter) expandSearchPermission(payload []byte) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+		return nil, errors.New("invalid access record")
+	}
+	raw := fields["object_permission_id"]
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+		return payload, nil
+	}
+	var id string
+	if json.Unmarshal(raw, &id) != nil || importer.objectPermissions[id] == nil {
+		return nil, errors.New("missing or invalid object permission")
+	}
+	var restrictions map[string]json.RawMessage
+	if err := json.Unmarshal(importer.objectPermissions[id], &restrictions); err != nil {
+		return nil, errors.New("invalid object permission")
+	}
+	permission := searchPermission{}
+	for name, value := range restrictions {
+		switch name {
+		case "object_permission_id":
+		case "search_tools":
+			if err := json.Unmarshal(value, &permission.SearchTools); err != nil {
+				return nil, errors.New("invalid search tool scope")
+			}
+		default:
+			switch string(value) {
+			case "null", "[]", "{}", `""`:
+			default:
+				return nil, fmt.Errorf("unsupported object permission field %s", name)
+			}
+		}
+	}
+	delete(fields, "object_permission_id")
+	fields["object_permission"], _ = json.Marshal(permission)
+	return json.Marshal(fields)
 }
 
 func (importer accessImporter) importBudget(payload []byte) error {
