@@ -62,6 +62,8 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("POST /model/update", registry.update)
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)
 	registry.registerCredentialRoutes(mux)
+	mux.HandleFunc("GET /router/settings", registry.routerSettings)
+	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.Handle("/", server)
 	return mux, nil
 }
