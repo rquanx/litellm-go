@@ -107,3 +107,85 @@ func (store *redisRoutingState) Cooldown(ctx context.Context, deployment string,
 	prefix := store.prefix(deployment)
 	return cooldownRouting.Run(ctx, store.Client, []string{prefix + "failures", prefix + "cooldown"}, allowedFailures, max(1, delay.Milliseconds())).Err()
 }
+
+func (store *redisRoutingState) latencyKey(deployment string, stream bool) string {
+	return store.prefix(deployment) + "latency:" + strconv.FormatBool(stream)
+}
+
+func (store *redisRoutingState) RecordLatency(ctx context.Context, deployment string, stream bool, elapsed time.Duration, samples int) error {
+	key := store.latencyKey(deployment, stream)
+	_, err := store.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.LPush(ctx, key, elapsed.Nanoseconds())
+		pipe.LTrim(ctx, key, 0, int64(samples-1))
+		pipe.Expire(ctx, key, time.Hour)
+		return nil
+	})
+	return err
+}
+
+func (store *redisRoutingState) Latencies(ctx context.Context, deployments []string, stream bool) ([]time.Duration, error) {
+	pipeline := store.Pipeline()
+	reads := make([]*redis.StringSliceCmd, len(deployments))
+	fallbacks := make([]*redis.StringSliceCmd, len(deployments))
+	for i, id := range deployments {
+		reads[i] = pipeline.LRange(ctx, store.latencyKey(id, stream), 0, 999)
+		if stream {
+			fallbacks[i] = pipeline.LRange(ctx, store.latencyKey(id, false), 0, 999)
+		}
+	}
+	if _, err := pipeline.Exec(ctx); err != nil {
+		return nil, err
+	}
+	result := make([]time.Duration, len(deployments))
+	for i, read := range reads {
+		values := read.Val()
+		if len(values) == 0 && stream {
+			values = fallbacks[i].Val()
+		}
+		for _, value := range values {
+			number, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			result[i] += time.Duration(number)
+		}
+		if len(values) > 0 {
+			result[i] /= time.Duration(len(values))
+		}
+	}
+	return result, nil
+}
+
+const routingBusyLease = 10 * time.Minute
+
+func (store *redisRoutingState) Track(ctx context.Context, deployment, lease string, active bool) error {
+	key := store.prefix(deployment) + "busy"
+	if !active {
+		return store.ZRem(ctx, key, lease).Err()
+	}
+	now := time.Now()
+	_, err := store.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.ZRemRangeByScore(ctx, key, "-inf", strconv.FormatInt(now.UnixMilli(), 10))
+		pipe.ZAdd(ctx, key, redis.Z{Score: float64(now.Add(routingBusyLease).UnixMilli()), Member: lease})
+		pipe.Expire(ctx, key, routingBusyLease)
+		return nil
+	})
+	return err
+}
+
+func (store *redisRoutingState) Busy(ctx context.Context, deployments []string) ([]int, error) {
+	pipeline := store.Pipeline()
+	minimum := "(" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+	reads := make([]*redis.IntCmd, len(deployments))
+	for i, id := range deployments {
+		reads[i] = pipeline.ZCount(ctx, store.prefix(id)+"busy", minimum, "+inf")
+	}
+	if _, err := pipeline.Exec(ctx); err != nil {
+		return nil, err
+	}
+	result := make([]int, len(reads))
+	for i, read := range reads {
+		result[i] = int(read.Val())
+	}
+	return result, nil
+}

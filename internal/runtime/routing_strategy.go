@@ -24,11 +24,11 @@ func (s *Server) orderDeployments(ctx context.Context, candidates []Candidate, s
 				selected := 0
 				switch s.config.RoutingStrategy {
 				case "latency-based-routing":
-					selected = s.lowestLatency(group, stream)
+					selected = s.lowestLatency(ctx, group, stream)
 				case "usage-based-routing", "usage-based-routing-v2":
 					selected = s.lowestUsage(ctx, group)
 				case "least-busy":
-					selected = s.leastBusy(group)
+					selected = s.leastBusy(ctx, group)
 				default:
 					selected = chooseWeighted(group)
 				}
@@ -73,7 +73,15 @@ func routingWeight(first, candidate Candidate) float64 {
 	}
 }
 
-func (s *Server) leastBusy(group []Candidate) int {
+func (s *Server) leastBusy(ctx context.Context, group []Candidate) int {
+	if store := s.config.RoutingState; store != nil {
+		bounded, cancel := context.WithTimeout(ctx, routingStateTimeout)
+		counts, err := store.Busy(bounded, routingDeploymentIDs(group))
+		cancel()
+		if err == nil && len(counts) == len(group) {
+			return minimumRoutingIndex(counts)
+		}
+	}
 	s.trafficMu.Lock()
 	defer s.trafficMu.Unlock()
 	best := rand.IntN(len(group))
@@ -85,10 +93,23 @@ func (s *Server) leastBusy(group []Candidate) int {
 	return best
 }
 
-func (s *Server) trackDeployment(candidate Candidate) func() {
+func (s *Server) trackDeployment(ctx context.Context, candidate Candidate) func() {
 	id := candidate.DeploymentID
 	if id == "" || s.config.RoutingStrategy != "least-busy" {
 		return func() {}
+	}
+	if store := s.config.RoutingState; store != nil {
+		lease := newUUID()
+		bounded, cancel := context.WithTimeout(ctx, routingStateTimeout)
+		err := store.Track(bounded, id, lease, true)
+		cancel()
+		if err == nil {
+			return func() {
+				bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), routingStateTimeout)
+				defer cancel()
+				_ = store.Track(bounded, id, lease, false)
+			}
+		}
 	}
 	s.trafficMu.Lock()
 	if s.deploymentTraffic == nil {
@@ -105,4 +126,22 @@ func (s *Server) trackDeployment(candidate Candidate) func() {
 		}
 		s.trafficMu.Unlock()
 	}
+}
+
+func routingDeploymentIDs(candidates []Candidate) []string {
+	result := make([]string, len(candidates))
+	for i, candidate := range candidates {
+		result[i] = candidate.DeploymentID
+	}
+	return result
+}
+
+func minimumRoutingIndex(values []int) int {
+	selected := rand.IntN(len(values))
+	for i, value := range values {
+		if value < values[selected] {
+			selected = i
+		}
+	}
+	return selected
 }

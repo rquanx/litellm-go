@@ -55,7 +55,7 @@ func TestRedisRoutingCoordinatesTwoProxies(t *testing.T) {
 			},
 		}), store
 	}
-	first, _ := build()
+	first, writer := build()
 	second, observer := build()
 	call := func(server *runtime.Server, model string, status int) {
 		t.Helper()
@@ -78,6 +78,27 @@ func TestRedisRoutingCoordinatesTwoProxies(t *testing.T) {
 	}
 	call(first, "down", 503)
 	call(second, "down", 429)
+	if err := writer.RecordLatency(ctx, "limited", false, 15*time.Millisecond, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.RecordLatency(ctx, "limited", false, 25*time.Millisecond, 2); err != nil {
+		t.Fatal(err)
+	}
+	if latency, err := observer.Latencies(ctx, []string{"limited", "unknown"}, true); err != nil || len(latency) != 2 || latency[0] != 20*time.Millisecond || latency[1] != 0 {
+		t.Fatalf("unexpected shared latency: %v: %v", latency, err)
+	}
+	if err := writer.Track(ctx, "limited", "fixture-lease", true); err != nil {
+		t.Fatal(err)
+	}
+	if busy, err := observer.Busy(ctx, []string{"limited", "unknown"}); err != nil || len(busy) != 2 || busy[0] != 1 || busy[1] != 0 {
+		t.Fatalf("unexpected shared traffic: %v: %v", busy, err)
+	}
+	if err := writer.Track(ctx, "limited", "fixture-lease", false); err != nil {
+		t.Fatal(err)
+	}
+	if busy, err := observer.Busy(ctx, []string{"limited"}); err != nil || len(busy) != 1 || busy[0] != 0 {
+		t.Fatalf("lease remained active: %v: %v", busy, err)
+	}
 	if calls.Load() != 2 {
 		t.Fatalf("unexpected upstream calls: %d", calls.Load())
 	}

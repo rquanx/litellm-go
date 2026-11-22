@@ -19,7 +19,7 @@ func TestRoutingStrategyKeepsFallbackGroupsOrdered(t *testing.T) {
 		t.Fatal("weighted routing changed fallback group precedence")
 	}
 	server = NewServer(Config{RoutingStrategy: "least-busy"})
-	release := server.trackDeployment(candidates[0])
+	release := server.trackDeployment(context.Background(), candidates[0])
 	server.orderDeployments(context.Background(), candidates, false)
 	if candidates[0].DeploymentID != "first" || candidates[2].DeploymentID != "third" {
 		t.Fatal("least-busy did not choose the idle deployment in the primary group")
@@ -43,12 +43,12 @@ func TestLatencyRoutingUsesSeparateRollingStreamSamples(t *testing.T) {
 	server := NewServer(Config{RoutingStrategy: "latency-based-routing", LatencySamples: 2})
 	fast := Candidate{DeploymentID: "fast", RoutingGroup: "primary"}
 	slow := Candidate{DeploymentID: "slow", RoutingGroup: "primary"}
-	server.recordLatency(fast, false, 100*time.Millisecond)
-	server.recordLatency(fast, false, 10*time.Millisecond)
-	server.recordLatency(fast, false, 10*time.Millisecond)
-	server.recordLatency(slow, false, 20*time.Millisecond)
-	server.recordLatency(fast, true, 30*time.Millisecond)
-	server.recordLatency(slow, true, 5*time.Millisecond)
+	server.recordLatency(context.Background(), fast, false, 100*time.Millisecond)
+	server.recordLatency(context.Background(), fast, false, 10*time.Millisecond)
+	server.recordLatency(context.Background(), fast, false, 10*time.Millisecond)
+	server.recordLatency(context.Background(), slow, false, 20*time.Millisecond)
+	server.recordLatency(context.Background(), fast, true, 30*time.Millisecond)
+	server.recordLatency(context.Background(), slow, true, 5*time.Millisecond)
 	group := []Candidate{slow, fast}
 	server.orderDeployments(context.Background(), group, false)
 	if group[0].DeploymentID != fast.DeploymentID {

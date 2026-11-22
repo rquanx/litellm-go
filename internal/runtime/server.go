@@ -597,7 +597,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 		attempts = append(attempts, attempt)
 		if callErr == nil && status >= 200 && status < 300 {
-			s.recordLatency(candidate, false, time.Since(started))
+			s.recordLatency(request.Context(), candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
 			if endpoint == "ocr" && usesMistralOCR(candidate.Provider) {
@@ -727,7 +727,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		}
 		attempts = append(attempts, attempt)
 		if err == nil && !streamFailure && status >= 200 && status < 300 {
-			s.recordLatency(candidate, true, time.Since(started))
+			s.recordLatency(request.Context(), candidate, true, time.Since(started))
 			defer response.Body.Close()
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			for key, values := range response.Header {
@@ -1065,7 +1065,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	finished := s.trackDeployment(candidate)
+	finished := s.trackDeployment(ctx, candidate)
 	release := func() {
 		finished()
 		<-s.sem

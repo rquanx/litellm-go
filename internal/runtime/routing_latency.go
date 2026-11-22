@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"math/rand/v2"
 	"time"
 )
@@ -16,13 +17,21 @@ type latencyWindow struct {
 	sum     time.Duration
 }
 
-func (s *Server) recordLatency(candidate Candidate, stream bool, elapsed time.Duration) {
+func (s *Server) recordLatency(ctx context.Context, candidate Candidate, stream bool, elapsed time.Duration) {
 	if s.config.RoutingStrategy != "latency-based-routing" || candidate.DeploymentID == "" {
 		return
 	}
 	size := s.config.LatencySamples
 	if size <= 0 {
 		size = 10
+	}
+	if store := s.config.RoutingState; store != nil {
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), routingStateTimeout)
+		err := store.RecordLatency(bounded, candidate.DeploymentID, stream, elapsed, size)
+		cancel()
+		if err == nil {
+			return
+		}
 	}
 	s.trafficMu.Lock()
 	defer s.trafficMu.Unlock()
@@ -56,17 +65,33 @@ func (s *Server) averageLatency(deployment string, stream bool) time.Duration {
 	return window.sum / time.Duration(len(window.samples))
 }
 
-func (s *Server) lowestLatency(group []Candidate, stream bool) int {
-	s.trafficMu.Lock()
-	defer s.trafficMu.Unlock()
-	lowest := s.averageLatency(group[0].DeploymentID, stream)
-	for _, candidate := range group[1:] {
-		lowest = min(lowest, s.averageLatency(candidate.DeploymentID, stream))
+func (s *Server) lowestLatency(ctx context.Context, group []Candidate, stream bool) int {
+	if store := s.config.RoutingState; store != nil {
+		bounded, cancel := context.WithTimeout(ctx, routingStateTimeout)
+		values, err := store.Latencies(bounded, routingDeploymentIDs(group), stream)
+		cancel()
+		if err == nil && len(values) == len(group) {
+			return selectLatency(values, s.config.LatencyBuffer)
+		}
 	}
-	threshold := float64(lowest) * (1 + s.config.LatencyBuffer)
+	values := make([]time.Duration, len(group))
+	s.trafficMu.Lock()
+	for i, candidate := range group {
+		values[i] = s.averageLatency(candidate.DeploymentID, stream)
+	}
+	s.trafficMu.Unlock()
+	return selectLatency(values, s.config.LatencyBuffer)
+}
+
+func selectLatency(values []time.Duration, buffer float64) int {
+	lowest := values[0]
+	for _, value := range values[1:] {
+		lowest = min(lowest, value)
+	}
+	threshold := float64(lowest) * (1 + buffer)
 	selected, tied := 0, 0
-	for index, candidate := range group {
-		if float64(s.averageLatency(candidate.DeploymentID, stream)) <= threshold {
+	for index, latency := range values {
+		if float64(latency) <= threshold {
 			tied++
 			if rand.IntN(tied) == 0 {
 				selected = index

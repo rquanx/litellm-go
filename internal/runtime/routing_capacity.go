@@ -28,21 +28,11 @@ type capacityReservation struct {
 
 func (s *Server) lowestUsage(ctx context.Context, candidates []Candidate) int {
 	if store := s.config.RoutingState; store != nil {
-		deployments := make([]string, len(candidates))
-		for i, candidate := range candidates {
-			deployments[i] = candidate.DeploymentID
-		}
 		bounded, cancel := context.WithTimeout(ctx, routingStateTimeout)
-		values, err := store.Usage(bounded, deployments, time.Now().Unix()/60)
+		values, err := store.Usage(bounded, routingDeploymentIDs(candidates), time.Now().Unix()/60)
 		cancel()
 		if err == nil && len(values) == len(candidates) {
-			selected := rand.IntN(len(values))
-			for i, count := range values {
-				if count < values[selected] {
-					selected = i
-				}
-			}
-			return selected
+			return minimumRoutingIndex(values)
 		}
 	}
 	s.trafficMu.Lock()
