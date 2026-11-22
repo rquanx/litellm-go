@@ -41,6 +41,31 @@ func TestVLLMPassThroughMapsScopedAliases(t *testing.T) {
 	}
 }
 
+func TestBedrockPassThroughSignsTheResolvedProviderRequest(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/model/application-inference-profile%2Ffixture/converse" ||
+			!strings.Contains(r.Header.Get("Authorization"), "Credential=fixture-aws/") ||
+			r.Header.Get("X-Amz-Security-Token") != "fixture-session" {
+			t.Errorf("incorrect Bedrock target or signature on %s", r.URL.EscapedPath())
+		}
+		w.Write([]byte(`{"fixture":true}`))
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "fixture-master", AuthorizeInference: true,
+		Routes: []Route{{Alias: "fixture", Candidates: []Candidate{{DeploymentID: "id", Provider: "bedrock",
+			APIBase: origin.URL, ModelID: "application-inference-profile/fixture", Bedrock: &BedrockConfig{
+				Region: "us-east-1", AccessKey: "fixture-aws", SecretKey: "fixture-secret", SessionToken: "fixture-session",
+			}}}}},
+	})
+	request := httptest.NewRequest(http.MethodPost, "/bedrock/model/fixture/converse", strings.NewReader("{}"))
+	request.Header.Set("Authorization", "Bearer fixture-master")
+	output := httptest.NewRecorder()
+	server.ServeHTTP(output, request)
+	if output.Code != 200 {
+		t.Fatalf("Bedrock pass-through returned %d: %s", output.Code, output.Body.String())
+	}
+}
+
 func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

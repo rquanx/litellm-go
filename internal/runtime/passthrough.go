@@ -24,6 +24,7 @@ type PassThroughRoute struct {
 	Methods []string
 	Public, IncludeSubpath, ForwardHeaders, MergeQuery bool
 	Cost *float64
+	authorize func(*http.Request, []byte) error
 }
 
 func IsBuiltInProxyPath(path string) bool {
@@ -141,6 +142,10 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		return
 	}
 	upstream.Header = passThroughHeaders(r, route)
+	if route.authorize != nil && route.authorize(upstream, body) != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authenticate pass-through request")
+		return
+	}
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -162,7 +167,8 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 			w.Header()[name] = values
 		}
 	}
-	stream := strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream")
+	contentType := response.Header.Get("Content-Type")
+	stream := strings.HasPrefix(contentType, "text/event-stream") || strings.HasPrefix(contentType, "application/vnd.amazon.eventstream")
 	w.WriteHeader(response.StatusCode)
 	if stream {
 		_, _ = io.Copy(passThroughStream{w}, response.Body)
