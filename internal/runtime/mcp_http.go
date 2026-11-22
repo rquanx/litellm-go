@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -17,6 +19,8 @@ type MCPServer struct {
 	Headers                          http.Header
 	AllowAllKeys                     bool
 	AllowedTools                     []string
+	Command                          string
+	Args, Env                        []string
 }
 
 type mcpSession struct {
@@ -25,12 +29,22 @@ type mcpSession struct {
 	server MCPServer
 	id, protocol string
 	limit int64
+	process *exec.Cmd
+	input *json.Encoder
+	output *bufio.Scanner
+	cancel context.CancelFunc
+	closePipes func() bool
 }
 
 func (s *Server) openMCP(ctx context.Context, server MCPServer) (*mcpSession, error) {
 	client := *s.config.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	session := &mcpSession{ctx: ctx, client: client, server: server, limit: s.config.MaxBodyBytes, protocol: "2025-03-26"}
+	if server.Command != "" {
+		if err := session.startProcess(); err != nil {
+			return nil, err
+		}
+	}
 	raw, err := session.rpc("initialize", map[string]any{"protocolVersion": session.protocol, "capabilities": map[string]any{},
 		"clientInfo": map[string]string{"name": "minato-runtime", "version": "1"}})
 	if err != nil {
@@ -43,7 +57,15 @@ func (s *Server) openMCP(ctx context.Context, server MCPServer) (*mcpSession, er
 		return nil, errors.New("invalid MCP initialize response")
 	}
 	session.protocol = hello.Version
-	response, err := session.send(ctx, http.MethodPost, map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
+	initialized := map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}
+	if session.input != nil {
+		if session.input.Encode(initialized) == nil {
+			return session, nil
+		}
+		session.close()
+		return nil, errors.New("MCP process rejected initialization")
+	}
+	response, err := session.send(ctx, http.MethodPost, initialized)
 	if err == nil {
 		response.Body.Close()
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
@@ -83,6 +105,12 @@ func (session *mcpSession) send(ctx context.Context, method string, payload any)
 }
 
 func (session *mcpSession) close() {
+	if session.process != nil {
+		session.cancel()
+		_ = session.process.Wait()
+		session.closePipes()
+		return
+	}
 	if session.id == "" {
 		return
 	}
@@ -95,9 +123,21 @@ func (session *mcpSession) close() {
 
 func (session *mcpSession) rpc(method string, params any) (json.RawMessage, error) {
 	id := newUUID()
-	response, err := session.send(session.ctx, http.MethodPost, map[string]any{
+	payload := map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
-	})
+	}
+	if session.input != nil {
+		if err := session.input.Encode(payload); err != nil {
+			return nil, err
+		}
+		for session.output.Scan() {
+			if result, found, err := parseMCPReply(session.output.Bytes(), id); found {
+				return result, err
+			}
+		}
+		return nil, errors.New("MCP process closed before its response")
+	}
+	response, err := session.send(session.ctx, http.MethodPost, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -108,25 +148,11 @@ func (session *mcpSession) rpc(method string, params any) (json.RawMessage, erro
 	if method == "initialize" {
 		session.id = response.Header.Get("Mcp-Session-Id")
 	}
-	parse := func(data []byte) (json.RawMessage, bool, error) {
-		var message struct {
-			ID string `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(data, &message) != nil || message.ID != id {
-			return nil, false, nil
-		}
-		if message.Error != nil || message.Result == nil {
-			return nil, true, errors.New("MCP upstream returned an RPC error")
-		}
-		return message.Result, true, nil
-	}
 	reader := io.LimitReader(response.Body, session.limit+1)
 	if !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
 		body, err := io.ReadAll(reader)
 		if err == nil && int64(len(body)) <= session.limit {
-			if result, found, err := parse(body); found {
+			if result, found, err := parseMCPReply(body, id); found {
 				return result, err
 			}
 		}
@@ -138,7 +164,7 @@ func (session *mcpSession) rpc(method string, params any) (json.RawMessage, erro
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
-			if result, found, err := parse(data.Bytes()); found {
+			if result, found, err := parseMCPReply(data.Bytes(), id); found {
 				return result, err
 			}
 			data.Reset()
@@ -148,6 +174,63 @@ func (session *mcpSession) rpc(method string, params any) (json.RawMessage, erro
 		}
 	}
 	return nil, errors.New("MCP stream closed before its response")
+}
+
+func parseMCPReply(data []byte, id string) (json.RawMessage, bool, error) {
+	var message struct {
+		ID string `json:"id"`
+		Result json.RawMessage `json:"result"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(data, &message) != nil || message.ID != id {
+		return nil, false, nil
+	}
+	if message.Error != nil || message.Result == nil {
+		return nil, true, errors.New("MCP upstream returned an RPC error")
+	}
+	return message.Result, true, nil
+}
+
+func (session *mcpSession) startProcess() error {
+	timeout := session.client.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(session.ctx, timeout)
+	process := exec.CommandContext(ctx, session.server.Command, session.server.Args...)
+	process.Env = make([]string, 0, 8+len(session.server.Env))
+	for _, name := range []string{"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "TMP", "TEMP", "LANG"} {
+		if value, exists := os.LookupEnv(name); exists {
+			process.Env = append(process.Env, name+"="+value)
+		}
+	}
+	process.Env = append(process.Env, session.server.Env...)
+	in, err := process.StdinPipe()
+	if err != nil {
+		cancel()
+		return err
+	}
+	out, err := process.StdoutPipe()
+	if err != nil {
+		in.Close()
+		cancel()
+		return err
+	}
+	if err := process.Start(); err != nil {
+		in.Close()
+		out.Close()
+		cancel()
+		return err
+	}
+	session.process, session.cancel = process, cancel
+	session.closePipes = context.AfterFunc(ctx, func() {
+		in.Close()
+		out.Close()
+	})
+	session.input = json.NewEncoder(in)
+	session.output = bufio.NewScanner(out)
+	session.output.Buffer(make([]byte, 4096), int(session.limit))
+	return nil
 }
 
 func (s *Server) mcpTools(ctx context.Context, server MCPServer) ([]map[string]any, error) {

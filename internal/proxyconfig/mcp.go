@@ -20,6 +20,9 @@ type mcpServerConfig struct {
 	AllowAllKeys bool `yaml:"allow_all_keys"`
 	AllowedTools []string `yaml:"allowed_tools"`
 	Headers map[string]string `yaml:"headers"`
+	Command string `yaml:"command"`
+	Args []string `yaml:"args"`
+	Env map[string]string `yaml:"env"`
 }
 
 func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer, error) {
@@ -27,17 +30,24 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 	identifiers := make(map[string]string)
 	for _, name := range slices.Sorted(maps.Keys(entries)) {
 		entry := entries[name]
-		if strings.TrimSpace(name) == "" || (entry.Transport != "" && entry.Transport != "http" && entry.Transport != "streamable_http") {
+		if strings.TrimSpace(name) == "" || !slices.Contains([]string{"", "http", "streamable_http", "stdio"}, entry.Transport) {
 			return nil, fmt.Errorf("unsupported MCP server configuration for %q", name)
 		}
 		base, err := resolveEnv(entry.URL)
 		if err != nil {
 			return nil, err
 		}
-		address, err := url.Parse(base)
-		if err != nil || address.Hostname() == "" || address.User != nil ||
-			address.Fragment != "" || (address.Scheme != "http" && address.Scheme != "https") {
-			return nil, fmt.Errorf("invalid URL for MCP server %q", name)
+		if entry.Transport == "stdio" {
+			if strings.TrimSpace(entry.Command) == "" || base != "" {
+				return nil, fmt.Errorf("stdio MCP server %q requires a command", name)
+			}
+		} else {
+			address, err := url.Parse(base)
+			if entry.Command != "" || err != nil || address.Hostname() == "" || address.User != nil ||
+				address.Fragment != "" || (address.Scheme != "http" && address.Scheme != "https") {
+				return nil, fmt.Errorf("invalid URL for MCP server %q", name)
+			}
+			base = address.String()
 		}
 		id := entry.ServerID
 		if id == "" {
@@ -60,7 +70,16 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 			}
 			headers.Set(key, resolved)
 		}
-		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: address.String(),
+		var env []string
+		for _, key := range slices.Sorted(maps.Keys(entry.Env)) {
+			value, err := resolveEnv(entry.Env[key])
+			if err != nil {
+				return nil, err
+			}
+			env = append(env, key+"="+value)
+		}
+		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base,
+			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools, Headers: headers})
 	}
 	return result, nil
