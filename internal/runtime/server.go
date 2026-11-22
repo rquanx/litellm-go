@@ -99,7 +99,12 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	var modelScope []string
 	realtime := isRealtimeSocketPath(request.URL.Path)
-	if s.config.AuthorizeInference && (realtime || deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+	rtHTTP := realtimeHTTPOperation(request.URL.Path)
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "calls" {
+		s.realtimeCall(writer, request)
+		return
+	}
+	if s.config.AuthorizeInference && (realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
@@ -108,6 +113,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 			return
 		}
+	}
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "client_secrets" {
+		s.realtimeClientSecret(writer, request, modelScope)
+		return
 	}
 	if s.config.AuthorizeInference && realtime && request.Method == http.MethodGet &&
 		strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
