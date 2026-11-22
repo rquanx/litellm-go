@@ -3,9 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,4 +90,66 @@ func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 		t.Fatalf("completion did not retain the route alias and deployment: %s", first)
 	}
 	exchange(`{"type":"response.create","previous_response_id":"` + id + `","input":"follow-up"}`)
+}
+
+func TestManagedResponsesWebSocketReplaysConversation(t *testing.T) {
+	var count atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Messages []struct {
+				Role string `json:"role"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		turn := count.Add(1)
+		if turn == 2 && (len(request.Messages) != 3 || request.Messages[1].Role != "assistant") {
+			t.Errorf("the second turn did not include prior context: %+v", request.Messages)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "data: {\"id\":\"chat-%d\",\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n", turn)
+		fmt.Fprintf(w, "data: {\"id\":\"chat-%d\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n", turn)
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	candidate := Candidate{Provider: "openai", APIBase: upstream.URL, ModelID: "chat", Endpoint: "chat-completions"}
+	proxy := httptest.NewServer(NewServer(Config{Token: "master", AuthorizeInference: true,
+		Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}}))
+	defer proxy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, proxy.URL+"/v1/responses?model=demo",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer master"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	send := func(input string) string {
+		t.Helper()
+		if err := conn.Write(ctx, websocket.MessageText, []byte(input)); err != nil {
+			t.Fatal(err)
+		}
+		for {
+			_, raw, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var event struct {
+				Type     string
+				Response struct{ ID string }
+			}
+			if err := json.Unmarshal(raw, &event); err != nil || event.Type == "error" {
+				t.Fatalf("unexpected WebSocket event: %s, %v", raw, err)
+			}
+			if event.Type == "response.completed" {
+				return event.Response.ID
+			}
+		}
+	}
+	first := send(`{"type":"response.create","input":"first"}`)
+	if first == "" {
+		t.Fatal("missing first response ID")
+	}
+	send(`{"type":"response.create","response":{"previous_response_id":"` + first + `","input":"follow-up"}}`)
 }

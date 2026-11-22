@@ -30,8 +30,12 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 		return
 	}
 	candidates := s.eligibleCandidates(route.Candidates, scope, "responses", true)
-	if !hasNativeResponsesSocket(candidates) {
-		writeError(w, http.StatusBadRequest, "unsupported_endpoint", "No eligible native Responses WebSocket deployment")
+	if len(candidates) == 0 {
+		writeError(w, http.StatusBadRequest, "unsupported_endpoint", "No eligible Responses deployment")
+		return
+	}
+	if !nativeResponsesSocket(candidates[0]) {
+		s.managedResponsesSocket(w, request, alias)
 		return
 	}
 	ctx, cancel := context.WithCancel(request.Context())
@@ -71,7 +75,7 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 	done := make(chan struct{}, 2)
 	go func() {
 		defer func() { done <- struct{}{} }()
-		socketClientToProvider(ctx, client, upstream, alias, candidate)
+		s.socketClientToProvider(ctx, request, client, upstream, alias, candidate)
 	}()
 	go func() {
 		defer func() { done <- struct{}{} }()
@@ -84,15 +88,6 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 
 func nativeResponsesSocket(candidate Candidate) bool {
 	return candidate.Endpoint == "responses" && (candidate.Provider == "openai" || candidate.Provider == "azure")
-}
-
-func hasNativeResponsesSocket(candidates []Candidate) bool {
-	for _, candidate := range candidates {
-		if nativeResponsesSocket(candidate) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Server) dialResponsesSocket(ctx context.Context, candidate Candidate) (*websocket.Conn, error) {
@@ -126,17 +121,26 @@ func (s *Server) dialResponsesSocket(ctx context.Context, candidate Candidate) (
 	return conn, err
 }
 
-func socketClientToProvider(ctx context.Context, client, upstream *websocket.Conn, alias string, candidate Candidate) {
+func (s *Server) socketClientToProvider(ctx context.Context, request *http.Request, client, upstream *websocket.Conn, alias string, candidate Candidate) {
 	for {
 		kind, data, err := client.Read(ctx)
 		if err != nil {
 			return
 		}
+		if !s.authorized(request) {
+			var scope []string
+			var allowed bool
+			if s.config.AuthorizeKey != nil {
+				scope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
+			}
+			if !allowed || !modelAllowed(scope, alias) || !candidateAllowed(scope, candidate) {
+				_ = writeSocketError(ctx, client, http.StatusForbidden, "The key cannot use this WebSocket session")
+				return
+			}
+		}
 		event, err := prepareSocketEvent(kind, data, alias, candidate)
 		if err != nil {
-			payload, _ := json.Marshal(map[string]any{"type": "error", "status": 400,
-				"error": map[string]string{"code": "invalid_request", "message": err.Error()}})
-			if client.Write(ctx, websocket.MessageText, payload) != nil {
+			if writeSocketError(ctx, client, http.StatusBadRequest, err.Error()) != nil {
 				return
 			}
 			continue
@@ -148,13 +152,11 @@ func socketClientToProvider(ctx context.Context, client, upstream *websocket.Con
 }
 
 func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, candidate Candidate) ([]byte, error) {
-	var event map[string]any
-	if kind != websocket.MessageText || json.Unmarshal(data, &event) != nil || event["type"] != "response.create" {
-		return nil, errors.New("expected a response.create JSON event")
+	event, err := parseSocketEvent(kind, data, alias)
+	if err != nil {
+		return nil, err
 	}
-	if model, supplied := event["model"]; supplied && model != alias {
-		return nil, errors.New("event model differs from the WebSocket session model")
-	}
+	event["type"] = "response.create"
 	event["model"] = candidate.ModelID
 	deployment := candidate.DeploymentID
 	if previous, _ := event["previous_response_id"].(string); previous != "" {
@@ -169,6 +171,21 @@ func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, c
 		return nil, err
 	}
 	return json.Marshal(event)
+}
+
+func parseSocketEvent(kind websocket.MessageType, data []byte, alias string) (map[string]any, error) {
+	var event map[string]any
+	if kind != websocket.MessageText || json.Unmarshal(data, &event) != nil || event["type"] != "response.create" {
+		return nil, errors.New("expected a response.create JSON event")
+	}
+	if nested, ok := event["response"].(map[string]any); ok && nested != nil {
+		event = nested
+	}
+	if model, supplied := event["model"]; supplied && model != alias {
+		return nil, errors.New("event model differs from the WebSocket session model")
+	}
+	delete(event, "type")
+	return event, nil
 }
 
 func socketProviderToClient(ctx context.Context, upstream, client *websocket.Conn, alias string, candidate Candidate) {
