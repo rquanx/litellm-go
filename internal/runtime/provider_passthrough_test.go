@@ -66,6 +66,37 @@ func TestBedrockPassThroughSignsTheResolvedProviderRequest(t *testing.T) {
 	}
 }
 
+func TestVertexPassThroughUsesAuthorizedDeploymentProjectAndRegion(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-fixture:streamGenerateContent" ||
+			r.URL.Query().Get("alt") != "sse" || r.Header.Get("Authorization") != "Bearer fixture-vertex-token" {
+			t.Errorf("incorrect Vertex target or credential on %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"fixture":true}`))
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "fixture-master", AuthorizeInference: true,
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"alias"}, token == "fixture-key" },
+		Routes: []Route{{Alias: "alias", Candidates: []Candidate{{DeploymentID: "id", Provider: "vertex_ai",
+			APIBase: origin.URL, ModelID: "gemini-fixture", APIKey: "fixture-vertex-token", UseInPassThrough: true,
+			Vertex: &VertexConfig{Project: "test-project", Location: "us-central1"},
+		}}}},
+	})
+	for _, tc := range []struct {
+		model string
+		status int
+	}{{"alias", 200}, {"denied", 403}} {
+		path := "/vertex-ai/v1/projects/caller/locations/global/publishers/google/models/" + tc.model + ":streamGenerateContent"
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+		request.Header.Set("Authorization", "Bearer fixture-key")
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, request)
+		if output.Code != tc.status {
+			t.Fatalf("Vertex pass-through returned %d, want %d: %s", output.Code, tc.status, output.Body.String())
+		}
+	}
+}
+
 func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

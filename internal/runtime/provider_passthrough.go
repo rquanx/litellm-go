@@ -36,6 +36,9 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 	if provider == "bedrock" {
 		return s.serveBedrockPassThrough(w, r, suffix)
 	}
+	if provider == "vertex_ai" || provider == "vertex-ai" {
+		return s.serveVertexPassThrough(w, r, suffix)
+	}
 	if provider == "openai_passthrough" {
 		provider = "openai"
 	}
