@@ -50,7 +50,7 @@ func unwrapResponseID(id string) (provider, deployment, original string, ok bool
 	return provider, deployment, original, providerOK && deploymentOK && originalOK && deployment != "" && original != ""
 }
 
-func wrapResponseBody(body []byte, candidate Candidate) []byte {
+func wrapResponseBody(body []byte, candidate Candidate, encodeContainer func(string) string) []byte {
 	var payload map[string]any
 	if json.Unmarshal(body, &payload) != nil {
 		return body
@@ -58,6 +58,7 @@ func wrapResponseBody(body []byte, candidate Candidate) []byte {
 	if id, ok := payload["id"].(string); ok && id != "" {
 		payload["id"] = wrapResponseID(id, candidate)
 	}
+	encodeResponseContainerIDs(payload, encodeContainer)
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return body
@@ -65,7 +66,7 @@ func wrapResponseBody(body []byte, candidate Candidate) []byte {
 	return encoded
 }
 
-func wrapResponseEvent(frame []byte, candidate Candidate) []byte {
+func wrapResponseEvent(frame []byte, candidate Candidate, encodeContainer func(string) string) []byte {
 	lines := bytes.Split(frame, []byte{'\n'})
 	for index, line := range lines {
 		data, ok := bytes.CutPrefix(line, []byte("data:"))
@@ -77,8 +78,16 @@ func wrapResponseEvent(frame []byte, candidate Candidate) []byte {
 			continue
 		}
 		response, _ := event["response"].(map[string]any)
+		item, _ := event["item"].(map[string]any)
+		changed := encodeOutputContainerIDs(item, encodeContainer)
+		if encodeResponseContainerIDs(response, encodeContainer) {
+			changed = true
+		}
 		if id, ok := response["id"].(string); ok && id != "" {
 			response["id"] = wrapResponseID(id, candidate)
+			changed = true
+		}
+		if changed {
 			encoded, _ := json.Marshal(event)
 			lines[index] = append([]byte("data: "), encoded...)
 		}
@@ -170,7 +179,12 @@ func (s *Server) responseResource(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 && suffix != "input_items" && len(bytes.TrimSpace(body)) != 0 {
-		body = wrapResponseBody(body, candidate)
+		body = wrapResponseBody(body, candidate, func(id string) string {
+			if !validResourceSegment(id) || strings.HasPrefix(id, "minato_") {
+				return id
+			}
+			return encodeResourceID("containers", candidate.DeploymentID, id)
+		})
 	}
 	writeRawResponse(writer, response.StatusCode, response.Header, body)
 }

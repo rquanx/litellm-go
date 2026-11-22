@@ -75,7 +75,7 @@ func parseContainerOperation(r *http.Request) (op containerOperation, err error)
 	parts := strings.Split(strings.TrimPrefix(path, containerPath+"/"), "/")
 	op.id, err = url.PathUnescape(parts[0])
 	if err == nil {
-		op.id, err = nativeResourceID(op.id, op.family, &op.deployment)
+		op.id, err = decodeContainerReference(op.id, &op.deployment)
 	}
 	if err != nil {
 		return op, err
@@ -179,7 +179,13 @@ func (s *Server) containerResource(w http.ResponseWriter, r *http.Request, scope
 	var cursors []string
 	for _, field := range []string{"after", "before"} {
 		for _, cursor := range query[field] {
-			id, err := nativeResourceID(cursor, op.family, &op.deployment)
+			var id string
+			var err error
+			if op.family == "containers" {
+				id, err = decodeContainerReference(cursor, &op.deployment)
+			} else {
+				id, err = nativeResourceID(cursor, op.family, &op.deployment)
+			}
 			if err != nil {
 				writeError(w, http.StatusBadRequest, "invalid_cursor", "Invalid container cursor")
 				return

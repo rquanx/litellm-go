@@ -276,7 +276,15 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter", "variant"} {
 		for _, value := range request.URL.Query()[key] {
 			if key == "after" || key == "before" {
-				if strings.HasPrefix(value, "minato_") {
+				if family == "containers" {
+					deployment := candidate.DeploymentID
+					var err error
+					value, err = decodeContainerReference(value, &deployment)
+					if err != nil {
+						writeError(writer, http.StatusBadRequest, "invalid_cursor", "Invalid container cursor")
+						return
+					}
+				} else if strings.HasPrefix(value, "minato_") {
 					id, ok := decodeResourceID(value, resourceResultKind(family))
 					if !ok || id.Deployment != candidate.DeploymentID {
 						writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor belongs to a different deployment")

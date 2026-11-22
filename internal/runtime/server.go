@@ -478,8 +478,17 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
+		containers, err := rewriteResponseContainers(input, &deployment)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
 		if deployment != "" && !route.pinResponseDeployment(provider, deployment) {
 			writeError(writer, http.StatusBadRequest, "response_not_found", "Response resources do not belong to this route")
+			return
+		}
+		if status, message := s.authorizeResponseContainers(request, &route, deployment, containers); status != 0 {
+			writeError(writer, status, "container_error", message)
 			return
 		}
 	}
@@ -564,7 +573,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 				body = bedrockRerankResponse(body)
 			}
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
-				body = wrapResponseBody(body, candidate)
+				body = wrapResponseBody(body, candidate, s.responseContainerEncoder(request, candidate))
 			}
 			writeResponse(writer, status, responseHeaders, body)
 			return
@@ -658,7 +667,8 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			flush, _ := writer.(http.Flusher)
 			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, payload.fields, s.config.MaxBodyBytes)
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
-				convert = func(frame []byte) []byte { return wrapResponseEvent(frame, candidate) }
+				encode := s.responseContainerEncoder(request, candidate)
+				convert = func(frame []byte) []byte { return wrapResponseEvent(frame, candidate, encode) }
 			}
 			if reservation != nil {
 				baseConvert := convert

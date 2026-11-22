@@ -75,7 +75,7 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 	runSocketRelay(ctx, func(ctx context.Context) {
 		s.socketClientToProvider(ctx, request, client, upstream, alias, candidate)
 	}, func(ctx context.Context) {
-		socketProviderToClient(ctx, upstream, client, alias, candidate)
+		socketProviderToClient(ctx, upstream, client, alias, candidate, s.responseContainerEncoder(request.WithContext(ctx), candidate))
 	})
 }
 
@@ -149,9 +149,15 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 			_ = writeSocketError(ctx, client, http.StatusForbidden, "The key cannot use this WebSocket session")
 			return
 		}
-		event, err := prepareSocketEvent(kind, data, alias, candidate)
+		event, ids, err := prepareSocketEvent(kind, data, alias, candidate)
 		if err != nil {
 			if writeSocketError(ctx, client, http.StatusBadRequest, err.Error()) != nil {
+				return
+			}
+			continue
+		}
+		if status, message := s.checkResponseContainerOwners(request.WithContext(ctx), candidate.DeploymentID, ids); status != 0 {
+			if writeSocketError(ctx, client, status, message) != nil {
 				return
 			}
 			continue
@@ -162,10 +168,10 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 	}
 }
 
-func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, candidate Candidate) ([]byte, error) {
+func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, candidate Candidate) ([]byte, []string, error) {
 	event, err := parseSocketEvent(kind, data, alias)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	event["type"] = "response.create"
 	event["model"] = candidate.ModelID
@@ -173,15 +179,23 @@ func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, c
 	if previous, _ := event["previous_response_id"].(string); previous != "" {
 		if provider, id, original, wrapped := unwrapResponseID(previous); wrapped {
 			if provider != candidate.Provider || id != deployment {
-				return nil, errors.New("previous response belongs to a different deployment")
+				return nil, nil, errors.New("previous response belongs to a different deployment")
 			}
 			event["previous_response_id"] = original
 		}
 	}
 	if err := rewriteResponseVectorStores(event, &deployment); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return json.Marshal(event)
+	ids, err := rewriteResponseContainers(event, &deployment)
+	if err != nil {
+		return nil, nil, err
+	}
+	if deployment != candidate.DeploymentID {
+		return nil, nil, errors.New("container belongs to a different deployment")
+	}
+	encoded, err := json.Marshal(event)
+	return encoded, ids, err
 }
 
 func parseSocketEvent(kind websocket.MessageType, data []byte, alias string) (map[string]any, error) {
@@ -199,7 +213,7 @@ func parseSocketEvent(kind websocket.MessageType, data []byte, alias string) (ma
 	return event, nil
 }
 
-func socketProviderToClient(ctx context.Context, upstream, client *websocket.Conn, alias string, candidate Candidate) {
+func socketProviderToClient(ctx context.Context, upstream, client *websocket.Conn, alias string, candidate Candidate, encodeContainer func(string) string) {
 	for {
 		kind, data, err := upstream.Read(ctx)
 		if err != nil {
@@ -208,12 +222,21 @@ func socketProviderToClient(ctx context.Context, upstream, client *websocket.Con
 		if kind == websocket.MessageText {
 			var event map[string]json.RawMessage
 			if json.Unmarshal(data, &event) == nil {
+				changed := false
 				if raw := event["response"]; len(raw) != 0 && string(raw) != "null" {
 					response := rewriteModel(raw, alias)
 					if candidate.DeploymentID != "" {
-						response = wrapResponseBody(response, candidate)
+						response = wrapResponseBody(response, candidate, encodeContainer)
 					}
 					event["response"] = response
+					changed = true
+				}
+				var item map[string]any
+				if raw := event["item"]; raw != nil && json.Unmarshal(raw, &item) == nil && encodeOutputContainerIDs(item, encodeContainer) {
+					event["item"], _ = json.Marshal(item)
+					changed = true
+				}
+				if changed {
 					data, _ = json.Marshal(event)
 				}
 			}

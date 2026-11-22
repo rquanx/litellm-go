@@ -15,6 +15,16 @@ func TestContainerOperationsEnforceOwnership(t *testing.T) {
 			t.Error("upstream credential missing")
 		}
 		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/responses":
+			var input struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			if json.NewDecoder(r.Body).Decode(&input) != nil || len(input.Tools) != 1 ||
+				input.Tools[0]["container"] != "cntr_fixture" {
+				t.Errorf("unexpected Responses tool payload: %+v", input)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"id":"resp_fixture","output":[{"type":"code_interpreter_call","container_id":"cntr_fixture"}]}`)
 		case "POST /v1/containers":
 			var input map[string]any
 			if json.NewDecoder(r.Body).Decode(&input) != nil || input["name"] != "fixture" || input["model"] != nil {
@@ -40,7 +50,7 @@ func TestContainerOperationsEnforceOwnership(t *testing.T) {
 	}))
 	defer upstream.Close()
 	server := NewServer(Config{Token: "master", AuthorizeInference: true, Routes: []Route{{
-		Alias: "fixture", Candidates: []Candidate{{Provider: "openai", APIBase: upstream.URL, APIKey: "provider-key", DeploymentID: "fixture"}},
+		Alias: "fixture", Candidates: []Candidate{{Provider: "openai", APIBase: upstream.URL, APIKey: "provider-key", DeploymentID: "fixture", Endpoint: "responses"}},
 	}}, AuthorizeKey: func(key string) ([]string, bool) { return []string{"fixture"}, key == "a" || key == "b" || key == "same-project" },
 		ResourceOwnerScopes: func(key string) []string {
 			if key == "a" || key == "same-project" {
@@ -67,6 +77,11 @@ func TestContainerOperationsEnforceOwnership(t *testing.T) {
 	}
 	send("GET", path, "b", "", "", 404)
 	send("GET", path, "same-project", "", "", 200)
+	tool := `{"model":"fixture","input":"fixture","tools":[{"type":"code_interpreter","container":"` + container + `"}]}`
+	send("POST", "/v1/responses", "b", tool, "application/json", 404)
+	if result := send("POST", "/v1/responses", "a", tool, "application/json", 200); !strings.Contains(result, container) {
+		t.Fatalf("code interpreter returned %s", result)
+	}
 	send("GET", "/v1/containers?after="+container, "b", "", "", 404)
 	if result := send("GET", "/v1/containers", "a", "", "", 200); strings.Contains(result, encodeResourceID("containers", "fixture", "cntr_other")) ||
 		strings.Count(result, container) != 3 {
