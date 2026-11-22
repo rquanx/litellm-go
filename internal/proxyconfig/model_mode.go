@@ -20,6 +20,8 @@ func openAIModelEndpoint(mode, model string) string {
 		return "speech"
 	case "moderation":
 		return "moderations"
+	case "rerank":
+		return "rerank"
 	}
 	switch {
 	case strings.HasPrefix(model, "text-embedding-"):

@@ -532,6 +532,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if endpoint == "rerank" && candidate.Provider == "voyage" {
 				body = voyageRerankResponse(body)
 			}
+			if endpoint == "rerank" && (candidate.Provider == "fireworks_ai" || candidate.Provider == "hosted_vllm") {
+				body = hostedRerankResponse(body, candidate.Provider)
+			}
 			if endpoint == "rerank" && candidate.Vertex != nil {
 				body = vertexRerankResponse(body)
 			}
@@ -866,6 +869,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	}
 	if targetEndpoint == "rerank" && candidate.Provider == "voyage" {
 		payload = voyageRerankRequest(payload)
+	}
+	if targetEndpoint == "rerank" && (candidate.Provider == "fireworks_ai" || candidate.Provider == "hosted_vllm") {
+		payload = hostedRerankRequest(payload, candidate.Provider)
 	}
 	if targetEndpoint == "rerank" && candidate.Vertex != nil {
 		payload = vertexRerankRequest(payload)

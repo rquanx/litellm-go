@@ -508,6 +508,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
 	}
+	if base == "" && provider == "fireworks_ai" && entry.hostedRerank() {
+		base = "https://api.fireworks.ai"
+	}
 	var bedrock *runtime.BedrockConfig
 	if provider == "bedrock" {
 		bedrock, err = entry.bedrockConfig()
@@ -548,6 +551,20 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+	}
+	if key == "" && entry.hostedRerank() {
+		switch provider {
+		case "fireworks_ai":
+			key = os.Getenv("FIREWORKS_API_KEY")
+			if key == "" {
+				key = os.Getenv("FIREWORKS_AI_API_KEY")
+			}
+		case "hosted_vllm":
+			key = os.Getenv("HOSTED_VLLM_API_KEY")
+			if key == "" {
+				key = "fake-api-key"
+			}
+		}
 	}
 	if key == "" && rerankProvider(provider) {
 		if provider == "voyage" {
@@ -707,9 +724,12 @@ func rerankProvider(name string) bool {
 	return name == "cohere" || name == "cohere_chat" || name == "jina_ai" || name == "voyage"
 }
 
+func (entry deployment) hostedRerank() bool {
+	return entry.Info.Mode == "rerank" || slices.Contains(entry.Info.Endpoints, "/v1/rerank")
+}
+
 func (entry deployment) bedrockRerank() bool {
-	return entry.Info.Mode == "rerank" || slices.Contains(entry.Info.Endpoints, "/v1/rerank") ||
-		strings.Contains(entry.Params.Model, ".rerank-")
+	return entry.hostedRerank() || strings.Contains(entry.Params.Model, ".rerank-")
 }
 
 func resolveEnv(value string) (string, error) {

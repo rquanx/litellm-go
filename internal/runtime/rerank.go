@@ -164,6 +164,24 @@ func voyageRerankResponse(body []byte) []byte {
 
 func rerankTarget(base, provider string) string {
 	base = strings.TrimRight(base, "/")
+	switch provider {
+	case "fireworks_ai":
+		if strings.HasSuffix(base, "/rerank") {
+			return base
+		}
+		if strings.HasSuffix(base, "/v1") {
+			return base + "/rerank"
+		}
+		return base + "/inference/v1/rerank"
+	case "hosted_vllm":
+		if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {
+			return root + "/rerank"
+		}
+		if strings.HasSuffix(base, "/rerank") {
+			return base
+		}
+		return base + "/rerank"
+	}
 	path := "/v1/rerank"
 	if provider == "cohere" || provider == "cohere_chat" {
 		path = "/v2/rerank"
@@ -173,4 +191,79 @@ func rerankTarget(base, provider string) string {
 	}
 	base = strings.TrimSuffix(strings.TrimSuffix(base, "/v2"), "/v1")
 	return base + path
+}
+
+func hostedRerankRequest(payload map[string]any, provider string) map[string]any {
+	request := map[string]any{"model": payload["model"], "query": payload["query"],
+		"documents": payload["documents"], "return_documents": true}
+	for _, field := range []string{"top_n", "return_documents"} {
+		if value := payload[field]; value != nil {
+			request[field] = value
+		}
+	}
+	if provider == "fireworks_ai" {
+		model, _ := payload["model"].(string)
+		request["model"] = "fireworks/" + strings.TrimPrefix(model, "fireworks/")
+	} else if fields := payload["rank_fields"]; fields != nil {
+		request["rank_fields"] = fields
+	}
+	return request
+}
+
+func hostedRerankResponse(body []byte, provider string) []byte {
+	type result struct {
+		Index    int             `json:"index"`
+		Score    float64         `json:"relevance_score"`
+		Document json.RawMessage `json:"document,omitempty"`
+	}
+	var response struct {
+		ID      string   `json:"id"`
+		Model   string   `json:"model"`
+		Data    []result `json:"data"`
+		Results []result `json:"results"`
+		Usage   struct {
+			Total      int `json:"total_tokens"`
+			Prompt     int `json:"prompt_tokens"`
+			Completion int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return body
+	}
+	units := map[string]int{"total_tokens": response.Usage.Total}
+	tokens := map[string]int{"input_tokens": response.Usage.Total}
+	if provider == "fireworks_ai" {
+		if len(response.Data) > 0 {
+			response.Results = response.Data
+		}
+		units = map[string]int{"search_units": response.Usage.Total}
+		tokens = map[string]int{"input_tokens": response.Usage.Prompt, "output_tokens": response.Usage.Completion}
+		if response.ID == "" {
+			response.ID = response.Model
+		}
+	}
+	if response.Results == nil {
+		return body
+	}
+	for i := range response.Results {
+		document := &response.Results[i].Document
+		var object map[string]any
+		var value string
+		if json.Unmarshal(*document, &object) == nil && len(object) > 0 {
+			value, _ = object["text"].(string)
+		} else if provider == "fireworks_ai" {
+			_ = json.Unmarshal(*document, &value)
+		}
+		if value != "" || (provider == "hosted_vllm" && len(object) > 0) {
+			*document, _ = json.Marshal(map[string]string{"text": value})
+		} else {
+			*document = nil
+		}
+	}
+	if response.ID == "" {
+		response.ID = newUUID()
+	}
+	encoded, _ := json.Marshal(map[string]any{"id": response.ID, "results": response.Results,
+		"meta": map[string]any{"billed_units": units, "tokens": tokens}})
+	return encoded
 }

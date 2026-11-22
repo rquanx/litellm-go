@@ -16,6 +16,22 @@ func TestProviderRerank(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
+		if request["model"] == "fireworks/demo" {
+			if r.URL.Path != "/inference/v1/rerank" || r.Header.Get("Authorization") != "Bearer fixture-fireworks" ||
+				request["top_n"] != float64(1) || request["rank_fields"] != nil || request["return_documents"] != true {
+				t.Errorf("unexpected Fireworks request: %s %+v", r.URL.Path, request)
+			}
+			w.Write([]byte(`{"model":"fireworks/demo","data":[{"index":0,"relevance_score":0.9,"document":"fixture"}],"usage":{"total_tokens":4,"prompt_tokens":3,"completion_tokens":1}}`))
+			return
+		}
+		if request["model"] == "local-ranker" {
+			if r.URL.Path != "/rerank" || r.Header.Get("Authorization") != "Bearer fixture-vllm" ||
+				request["rank_fields"] == nil || request["return_documents"] != true {
+				t.Errorf("unexpected hosted vLLM request: %s %+v", r.URL.Path, request)
+			}
+			w.Write([]byte(`{"id":"local-job","results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}],"usage":{"total_tokens":4}}`))
+			return
+		}
 		if r.URL.Path == "/rerank" {
 			if request["rerankingConfiguration"] == nil || request["sources"] == nil ||
 				r.Header.Get("Authorization") != "Bearer fixture-bedrock" {
@@ -63,17 +79,33 @@ model_list:
     litellm_params: {model: vertex_ai/semantic-ranker-fixture, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-vertex, vertex_project: demo-project}
   - model_name: bedrock
     litellm_params: {model: bedrock/cohere.rerank-v3-5:0, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-bedrock, aws_region_name: us-east-1}
+  - model_name: fireworks
+    litellm_params: {model: fireworks_ai/demo, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-fireworks}
+    model_info: {mode: rerank}
+  - model_name: local
+    litellm_params: {model: hosted_vllm/local-ranker, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-vllm}
+    model_info: {supported_endpoints: [/v1/rerank]}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
 		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"relevance_score":0.9`) {
 			t.Fatalf("unexpected rerank result: %d %s", result.Code, result.Body.String())
+		}
+		var expected string
+		switch model {
+		case "fireworks":
+			expected = `{"id":"fireworks/demo","meta":{"billed_units":{"search_units":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}]}`
+		case "local":
+			expected = `{"id":"local-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":4}},"results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}]}`
+		}
+		if expected != "" && strings.TrimSpace(result.Body.String()) != expected {
+			t.Fatalf("unexpected %s response: %s", model, result.Body.String())
 		}
 	}
 }
