@@ -34,6 +34,7 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	}
 	digest := keyDigest("sk-test")
 	keys.state.Projects = map[string]project{"fixture-project": {ID: "fixture-project", TeamID: "fixture-team"}}
+	keys.state.Teams["fixture-team"] = team{ID: "fixture-team", Alias: "fixture alias"}
 	keys.state.Keys[digest] = virtualKey{Alias: "test-key", ProjectID: "fixture-project"}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -70,6 +71,7 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	call("master", "/global/spend/logs", 200, `"total_tokens":5`)
 	call("master", "/global/spend/models?limit=1", 200, `"model":"fixture"`)
 	call("master", "/global/spend/keys?limit=1", 200, `"key_alias":"test-key"`)
+	call("master", "/global/spend/teams", 200, `"fixture alias":0.01`)
 	if _, err := db.Exec(`CREATE TEMP TABLE "LiteLLM_SpendLogs" (
 		request_id TEXT, "startTime" TIMESTAMP, "endTime" TIMESTAMP, api_key TEXT, metadata JSONB,
 		"user" TEXT, team_id TEXT, model TEXT, model_group TEXT, model_id TEXT, custom_llm_provider TEXT,

@@ -3,6 +3,9 @@ package proxyconfig
 import (
 	"context"
 	"net/http"
+	"maps"
+	"math"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -67,4 +70,79 @@ func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelJSON(w, http.StatusOK, results)
+}
+
+func (log *SpendLog) teamSpend(w http.ResponseWriter, r *http.Request) {
+	if !log.keys.requireMaster(w, r) {
+		return
+	}
+	log.keys.mu.RLock()
+	aliases := make(map[string]string, len(log.keys.state.Teams))
+	for id, entry := range log.keys.state.Teams {
+		aliases[id] = entry.Alias
+	}
+	log.keys.mu.RUnlock()
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -30)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	rows, err := log.db.QueryContext(ctx, `SELECT (started_at AT TIME ZONE 'UTC')::date AS day, team_id, sum(spend)
+		FROM minato_proxy_spend WHERE started_at >= $1 GROUP BY day, team_id ORDER BY day, team_id`, from)
+	if err != nil {
+		modelError(w, http.StatusInternalServerError, "Could not read team spend")
+		return
+	}
+	defer rows.Close()
+	daily := make(map[string]map[string]float64)
+	for rows.Next() {
+		var date time.Time
+		var id string
+		var spend *float64
+		if err := rows.Scan(&date, &id, &spend); err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not decode team spend")
+			return
+		}
+		day, name := date.Format(time.DateOnly), aliases[id]
+		if name == "" {
+			name = "Unassigned"
+		}
+		if daily[day] == nil {
+			daily[day] = make(map[string]float64)
+		}
+		if spend != nil {
+			daily[day][name] += *spend
+		}
+	}
+	if rows.Err() != nil {
+		modelError(w, http.StatusInternalServerError, "Could not finish reading team spend")
+		return
+	}
+	days := make([]map[string]any, 0, len(daily))
+	totals := make(map[string]float64)
+	for _, day := range slices.Sorted(maps.Keys(daily)) {
+		entry := map[string]any{"date": day}
+		for name, value := range daily[day] {
+			rounded := math.RoundToEven(value*100) / 100
+			entry[name] = rounded
+			totals[name] += rounded
+		}
+		days = append(days, entry)
+	}
+	teams := slices.Sorted(maps.Keys(totals))
+	ranked := slices.Clone(teams)
+	slices.SortStableFunc(ranked, func(a, b string) int {
+		switch {
+		case totals[a] > totals[b]:
+			return -1
+		case totals[a] < totals[b]:
+			return 1
+		default:
+			return 0
+		}
+	})
+	result := make([]map[string]any, 0, min(10, len(ranked)))
+	for _, name := range ranked[:min(10, len(ranked))] {
+		result = append(result, map[string]any{"team_id": name, "total_spend": totals[name]})
+	}
+	modelJSON(w, http.StatusOK, map[string]any{"daily_spend": days, "teams": teams, "total_spend_per_team": result})
 }

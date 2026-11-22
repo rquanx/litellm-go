@@ -125,6 +125,7 @@ func (log *SpendLog) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /global/spend/logs", log.daily)
 	mux.HandleFunc("GET /global/spend/keys", log.ranked)
 	mux.HandleFunc("GET /global/spend/models", log.ranked)
+	mux.HandleFunc("GET /global/spend/teams", log.teamSpend)
 	mux.Handle("/", next)
 	return mux
 }
