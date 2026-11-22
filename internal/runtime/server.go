@@ -548,7 +548,13 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
 			if endpoint == "ocr" && usesMistralOCR(candidate.Provider) {
-				body = mistralOCRResponse(responseBody, route.Alias)
+				if isDocumentIntelligence(candidate) {
+					body = azureDocumentOCRResponse(responseBody, route.Alias)
+				} else if isVertexDeepSeekOCR(candidate) {
+					body = deepSeekOCRResponse(responseBody, route.Alias)
+				} else {
+					body = mistralOCRResponse(responseBody, route.Alias)
+				}
 			}
 			if endpoint == "rerank" && candidate.Provider == "voyage" {
 				body = voyageRerankResponse(body)
@@ -939,7 +945,13 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 		payload = cohereEmbeddingRequest(payload)
 	}
 	if targetEndpoint == "ocr" && usesMistralOCR(candidate.Provider) {
-		payload = mistralOCRRequest(payload)
+		if isDocumentIntelligence(candidate) {
+			payload = azureDocumentOCRRequest(payload)
+		} else if isVertexDeepSeekOCR(candidate) {
+			payload = deepSeekOCRRequest(payload)
+		} else {
+			payload = mistralOCRRequest(payload)
+		}
 	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
@@ -956,7 +968,9 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		finished()
 		<-s.sem
 	}
-	if candidate.Endpoint == "ocr" && (candidate.Provider == "azure_ai" || candidate.Vertex != nil) {
+	azureDocument := candidate.Endpoint == "ocr" && isDocumentIntelligence(candidate)
+	if candidate.Endpoint == "ocr" && (candidate.Provider == "azure_ai" || candidate.Vertex != nil) &&
+		!isVertexDeepSeekOCR(candidate) && !azureDocument {
 		fields, err := preparePartnerOCR(ctx, payload.fields, s.config.MaxBodyBytes)
 		if err != nil {
 			release()
@@ -995,11 +1009,16 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = geminiTarget(candidate, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
 		target = azureTarget(candidate.APIBase, candidate.ModelID, pathEndpoint, candidate.APIVersion)
+	} else if azureDocument {
+		target, err = azureDocumentOCRTarget(candidate, payload.fields["pages"])
+		if err != nil {
+			release()
+			return nil, err
+		}
 	} else if candidate.Endpoint == "ocr" && candidate.Provider == "azure_ai" {
 		target = strings.TrimRight(candidate.APIBase, "/") + "/providers/mistral/azure/ocr"
 	} else if candidate.Endpoint == "ocr" && candidate.Vertex != nil {
-		target = base + "/v1/projects/" + url.PathEscape(candidate.Vertex.Project) + "/locations/" +
-			url.PathEscape(candidate.Vertex.Location) + "/publishers/mistralai/models/" + url.PathEscape(candidate.ModelID) + ":rawPredict"
+		target = vertexOCRTarget(base, candidate)
 	} else if candidate.Endpoint == "rerank" && candidate.Vertex != nil {
 		target = vertexRerankTarget(candidate)
 	} else if candidate.Endpoint == "rerank" && candidate.Bedrock != nil {
@@ -1040,6 +1059,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			release()
 			return nil, err
 		}
+	} else if azureDocument {
+		upstream.Header.Set("Ocp-Apim-Subscription-Key", apiKey)
 	} else if candidate.WatsonX != nil && candidate.Endpoint == "rerank" {
 		if err := candidate.WatsonX.authorize(upstream, s.config.HTTPClient, apiKey); err != nil {
 			release()
@@ -1060,7 +1081,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			return nil, err
 		}
 	}
-	response, err := s.config.HTTPClient.Do(upstream)
+	var response *http.Response
+	if azureDocument {
+		response, err = s.callAzureDocumentOCR(upstream)
+	} else {
+		response, err = s.config.HTTPClient.Do(upstream)
+	}
 	if err != nil {
 		release()
 		return nil, err

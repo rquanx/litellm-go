@@ -5,12 +5,95 @@ import (
 	"encoding/json"
 	"errors"
 	"mime"
+	"net/url"
 	"path/filepath"
 	"strings"
 )
 
 func usesMistralOCR(provider string) bool {
 	return provider == "mistral" || provider == "azure_ai" || provider == "vertex_ai"
+}
+
+func isVertexDeepSeekOCR(candidate Candidate) bool {
+	return candidate.Vertex != nil && strings.Contains(candidate.ModelID, "deepseek")
+}
+
+func vertexOCRTarget(base string, candidate Candidate) string {
+	target := base + "/v1/projects/" + url.PathEscape(candidate.Vertex.Project) + "/locations/" + url.PathEscape(candidate.Vertex.Location)
+	if isVertexDeepSeekOCR(candidate) {
+		return target + "/endpoints/openapi/chat/completions"
+	}
+	return target + "/publishers/mistralai/models/" + url.PathEscape(candidate.ModelID) + ":rawPredict"
+}
+
+func deepSeekOCRRequest(payload map[string]any) map[string]any {
+	document, _ := payload["document"].(map[string]any)
+	kind, _ := document["type"].(string)
+	model, _ := payload["model"].(string)
+	request := map[string]any{
+		"model": "deepseek-ai/" + strings.TrimPrefix(model, "deepseek-ai/"),
+		"messages": []map[string]any{{
+			"role": "user", "content": []map[string]any{{"type": "image_url", "image_url": document[kind]}},
+		}},
+	}
+	for _, name := range []string{"temperature", "max_tokens", "top_p", "n", "stop"} {
+		if field, ok := payload[name]; ok {
+			request[name] = field
+		}
+	}
+	return request
+}
+
+func deepSeekOCRResponse(body []byte, alias string) []byte {
+	var response struct {
+		Choices []struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage map[string]any `json:"usage"`
+	}
+	if json.Unmarshal(body, &response) != nil || len(response.Choices) == 0 || len(response.Choices[0].Message.Content) == 0 {
+		return body
+	}
+	content := response.Choices[0].Message.Content
+	var markdown string
+	if json.Unmarshal(content, &markdown) != nil {
+		markdown = string(content)
+		content = []byte(markdown)
+	} else {
+		content = []byte(markdown)
+	}
+	var ocr map[string]any
+	_ = json.Unmarshal(content, &ocr)
+	if _, ok := ocr["pages"].([]any); !ok {
+		if ocr == nil {
+			ocr = make(map[string]any)
+		}
+		ocr["pages"] = []map[string]any{{"index": 0, "markdown": markdown}}
+		if ocr["usage_info"] == nil {
+			if response.Usage == nil {
+				response.Usage = map[string]any{}
+			}
+			ocr["usage_info"] = response.Usage
+		}
+	}
+	if pages, ok := ocr["pages"].([]any); ok {
+		for _, raw := range pages {
+			page, _ := raw.(map[string]any)
+			if page == nil {
+				continue
+			}
+			if _, exists := page["index"]; !exists {
+				page["index"] = 0
+			}
+			if _, exists := page["markdown"]; !exists {
+				page["markdown"] = ""
+			}
+		}
+	}
+	encoded, _ := json.Marshal(ocr)
+	return mistralOCRResponse(encoded, alias)
 }
 
 func decodeOCRPayload(contentType string, body []byte) (requestPayload, error) {

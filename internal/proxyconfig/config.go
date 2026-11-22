@@ -475,10 +475,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	_, explicitOCR := strings.CutPrefix(model, "ocr/")
 	configuredOCR := entry.Info.Mode == "ocr" || explicitOCR || strings.HasPrefix(model, "mistral-ocr") ||
+		strings.Contains(model, "deepseek-ocr") ||
 		slices.Contains(entry.Info.Endpoints, "/v1/ocr")
 	mistralOCR := provider == "mistral" && configuredOCR
-	partnerOCR := configuredOCR && ((provider == "vertex_ai" && !strings.Contains(model, "deepseek")) ||
+	partnerOCR := configuredOCR && (provider == "vertex_ai" ||
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
+	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
 		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !mistralOCR) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
@@ -531,6 +533,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && partnerOCR && provider == "azure_ai" {
 		base = os.Getenv("AZURE_AI_API_BASE")
+	}
+	if base == "" && documentIntelligence {
+		base = os.Getenv("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT")
 	}
 	if base == "" && entry.rerankConfigured() {
 		switch provider {
@@ -607,6 +612,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && partnerOCR && provider == "azure_ai" {
 		key = os.Getenv("AZURE_AI_API_KEY")
+	}
+	if key == "" && documentIntelligence {
+		key = os.Getenv("AZURE_DOCUMENT_INTELLIGENCE_API_KEY")
 	}
 	if key == "" && entry.rerankConfigured() {
 		switch provider {
@@ -713,7 +721,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = inferred
 		}
 	}
-	if partnerOCR {
+	if partnerOCR || documentIntelligence {
 		endpoint = "ocr"
 	}
 	if len(entry.Info.Endpoints) == 1 {
