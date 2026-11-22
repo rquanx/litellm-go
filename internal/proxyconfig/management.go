@@ -209,6 +209,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}
+		if model.Info.Mode == "" {
+			model.Info.Mode = existing.Info.Mode
+		}
 		next[index] = model
 	} else {
 		next = append(next, model)

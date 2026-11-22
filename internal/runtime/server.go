@@ -603,6 +603,17 @@ func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endp
 	eligible := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) {
+			if candidate.DeploymentID != "" {
+				index := slices.IndexFunc(eligible, func(existing Candidate) bool {
+					return existing.DeploymentID == candidate.DeploymentID && existing.RoutingGroup == candidate.RoutingGroup
+				})
+				if index >= 0 {
+					if candidate.Endpoint == endpoint {
+						eligible[index] = candidate
+					}
+					continue
+				}
+			}
 			eligible = append(eligible, candidate)
 		}
 	}

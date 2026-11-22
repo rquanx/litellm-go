@@ -71,6 +71,7 @@ type deployment struct {
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
 		Endpoints []string `yaml:"supported_endpoints" json:"supported_endpoints,omitempty"`
+		Mode      string   `yaml:"mode" json:"mode,omitempty"`
 	} `yaml:"model_info" json:"model_info"`
 }
 
@@ -192,14 +193,14 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		if err != nil {
 			return nil, fmt.Errorf("model %q: %w", model.Alias, err)
 		}
-		candidate, err := effective.candidate()
+		candidates, err := effective.candidates()
 		if err != nil {
 			return nil, fmt.Errorf("model %q: %w", model.Alias, err)
 		}
 		if _, exists := byAlias[model.Alias]; !exists {
 			aliases = append(aliases, model.Alias)
 		}
-		byAlias[model.Alias] = append(byAlias[model.Alias], candidate)
+		byAlias[model.Alias] = append(byAlias[model.Alias], candidates...)
 	}
 	for alias, mapping := range config.modelGroupAliases {
 		if alias == "" || alias == "*" || byAlias[alias] != nil {
@@ -250,28 +251,26 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		}
 		for _, target := range targets {
 			if !explicit && (target == alias || target == config.modelGroupAliases[alias].Model ||
-				!runtime.CompatibleEndpoints(candidates[0].Endpoint, byAlias[target][0].Endpoint)) {
+				!hasCompatibleDeployment(byAlias[alias], byAlias[target])) {
 				continue
 			}
 			if seen[target] || len(byAlias[target]) == 0 {
 				return nil, fmt.Errorf("model %q has an unknown or repeated fallback %q", alias, target)
 			}
+			if !hasCompatibleDeployment(byAlias[alias], byAlias[target]) {
+				return nil, fmt.Errorf("model %q has an incompatible fallback %q", alias, target)
+			}
 			seen[target] = true
 			candidates = append(candidates, byAlias[target]...)
 		}
 		for _, target := range config.defaultFallbacks {
-			if !seen[target] && runtime.CompatibleEndpoints(candidates[0].Endpoint, byAlias[target][0].Endpoint) {
+			if !seen[target] && hasCompatibleDeployment(byAlias[alias], byAlias[target]) {
 				candidates = append(candidates, byAlias[target]...)
 				seen[target] = true
 			}
 		}
 		if len(candidates) > 16 {
 			return nil, fmt.Errorf("model %q exceeds the 16-candidate limit", alias)
-		}
-		for _, candidate := range candidates {
-			if !runtime.CompatibleEndpoints(candidate.Endpoint, candidates[0].Endpoint) {
-				return nil, fmt.Errorf("model %q mixes incompatible endpoints", alias)
-			}
 		}
 		routes = append(routes, runtime.Route{Alias: alias, Version: "1", Candidates: candidates, Hidden: config.modelGroupAliases[alias].Hidden})
 	}
@@ -307,6 +306,17 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 	return routes, nil
 }
 
+func hasCompatibleDeployment(primary, fallback []runtime.Candidate) bool {
+	for _, first := range primary {
+		for _, other := range fallback {
+			if runtime.CompatibleEndpoints(first.Endpoint, other.Endpoint) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func compileSpecialFallbacks(entries []map[string][]string, deployments map[string][]runtime.Candidate) (map[string][]runtime.Candidate, error) {
 	fallbacks := make(map[string][]runtime.Candidate)
 	for _, entry := range entries {
@@ -322,12 +332,10 @@ func compileSpecialFallbacks(entries []map[string][]string, deployments map[stri
 					return nil, fmt.Errorf("model %q has an unknown or repeated fallback %q", model, target)
 				}
 				seen[target] = true
-				for _, candidate := range deployments[target] {
-					if !runtime.CompatibleEndpoints(primary[0].Endpoint, candidate.Endpoint) {
-						return nil, fmt.Errorf("model %q has an incompatible fallback %q", model, target)
-					}
-					candidates = append(candidates, candidate)
+				if !hasCompatibleDeployment(primary, deployments[target]) {
+					return nil, fmt.Errorf("model %q has an incompatible fallback %q", model, target)
 				}
+				candidates = append(candidates, deployments[target]...)
 			}
 			if len(candidates) > 16 {
 				return nil, fmt.Errorf("model %q exceeds the 16-candidate limit", model)
@@ -336,6 +344,31 @@ func compileSpecialFallbacks(entries []map[string][]string, deployments map[stri
 		}
 	}
 	return fallbacks, nil
+}
+
+func (entry deployment) candidates() ([]runtime.Candidate, error) {
+	paths := entry.Info.Endpoints
+	if len(paths) <= 1 {
+		candidate, err := entry.candidate()
+		if err != nil {
+			return nil, err
+		}
+		return []runtime.Candidate{candidate}, nil
+	}
+	candidates := make([]runtime.Candidate, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		entry.Info.Endpoints = []string{path}
+		candidate, err := entry.candidate()
+		if err != nil {
+			return nil, err
+		}
+		if !seen[candidate.Endpoint] {
+			seen[candidate.Endpoint] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, nil
 }
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
@@ -467,8 +500,10 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if rerankProvider(provider) {
 		endpoint = "rerank"
 	}
-	if len(entry.Info.Endpoints) > 1 {
-		return runtime.Candidate{}, errors.New("each deployment accepts one supported_endpoints entry")
+	if supportsOpenAITransport(provider) || provider == "azure" {
+		if inferred := openAIModelEndpoint(entry.Info.Mode, model); inferred != "" {
+			endpoint = inferred
+		}
 	}
 	if rerankProvider(provider) && endpoint != "rerank" {
 		return runtime.Candidate{}, errors.New("this provider requires a rerank endpoint")

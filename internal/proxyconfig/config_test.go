@@ -10,6 +10,26 @@ import (
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
+func TestConfiguredModelModeSetsInferenceEndpoint(t *testing.T) {
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: embeddings
+    litellm_params: {model: openai/text-embedding-3-small}
+  - model_name: images
+    litellm_params: {model: openai/private-image}
+    model_info: {mode: image_generation, supported_endpoints: [/v1/images/generations, /v1/images/edits]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Routes[0].Candidates[0].Endpoint != "embeddings" ||
+		len(config.Routes[1].Candidates) != 2 ||
+		config.Routes[1].Candidates[0].Endpoint != "image-generation" ||
+		config.Routes[1].Candidates[1].Endpoint != "image-edit" {
+		t.Fatal("model mode did not select its inference endpoint")
+	}
+}
+
 func TestLoadLiteLLMProxyConfig(t *testing.T) {
 	t.Setenv("TEST_LITELLM_KEY", "fixture-master")
 	config, err := Load(strings.NewReader(`
