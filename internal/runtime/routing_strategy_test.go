@@ -24,4 +24,13 @@ func TestRoutingStrategyKeepsFallbackGroupsOrdered(t *testing.T) {
 	if len(server.deploymentTraffic) != 0 {
 		t.Fatal("completed deployment was retained in the traffic table")
 	}
+
+	server = NewServer(Config{RoutingStrategy: "cost-based-routing"})
+	candidates[0].TokenPrice = 1
+	candidates[1].TokenPrice = 0.5
+	candidates[2].TokenPrice = 0
+	server.orderDeployments(candidates)
+	if candidates[0].DeploymentID != "second" || candidates[2].DeploymentID != "third" {
+		t.Fatal("cost-based routing did not rank costs within each fallback group")
+	}
 }

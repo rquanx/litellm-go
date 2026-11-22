@@ -9,6 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "internal/proxyconfig/openai-compatible.json"
 SETTINGS = ROOT / "internal/proxyconfig/openai-provider-settings.json"
+PRICES = ROOT / "internal/proxyconfig/model-token-prices.json"
 
 
 def main():
@@ -31,14 +32,32 @@ def main():
         ["git", "-C", args.checkout, "show", f"{revision}:litellm/llms/openai_like/providers.json"]
     ))
     settings_output = json.dumps(settings, sort_keys=True, indent=2) + "\n"
+    upstream_prices = json.loads(subprocess.check_output(
+        ["git", "-C", args.checkout, "show", f"{revision}:model_prices_and_context_window.json"]
+    ))
+    price_fields = ("input_cost_per_token", "output_cost_per_token")
+    prices = {}
+    for model, metadata in upstream_prices.items():
+        if model == "sample_spec":
+            continue
+        entry = [metadata.get(field) for field in price_fields]
+        if any(type(price) in (int, float) for price in entry):
+            prices[model] = [price if type(price) in (int, float) else None for price in entry]
+    price_output = "{\n" + ",\n".join(
+        f"  {json.dumps(model)}: {json.dumps(prices[model])}" for model in sorted(prices)
+    ) + "\n}\n"
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
             raise SystemExit("Go provider list differs from the pinned LiteLLM source")
         print(f"{len(set(providers))} provider names match LiteLLM {revision}")
         print(f"{len(settings)} provider settings match LiteLLM {revision}")
+        if PRICES.read_text(encoding="utf-8") != price_output:
+            raise SystemExit("Go token prices differ from the pinned LiteLLM source")
+        print(f"{len(prices)} model prices match LiteLLM {revision}")
     else:
         TARGET.write_text(output, encoding="utf-8")
         SETTINGS.write_text(settings_output, encoding="utf-8")
+        PRICES.write_text(price_output, encoding="utf-8")
 
 
 if __name__ == "__main__":

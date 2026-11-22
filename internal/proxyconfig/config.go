@@ -40,6 +40,8 @@ type deployment struct {
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
+		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
+		OutputPrice *float64 `yaml:"output_cost_per_token" json:"output_cost_per_token,omitempty"`
 		RPM *int `yaml:"rpm" json:"rpm,omitempty"`
 		TPM *int `yaml:"tpm" json:"tpm,omitempty"`
 		AWSRegion string `yaml:"aws_region_name" json:"aws_region_name,omitempty"`
@@ -84,7 +86,7 @@ func Load(reader io.Reader) (Config, error) {
 	if strategy == "" {
 		strategy = "simple-shuffle"
 	}
-	if strategy != "simple-shuffle" && strategy != "least-busy" {
+	if strategy != "simple-shuffle" && strategy != "least-busy" && strategy != "cost-based-routing" {
 		return Config{}, errors.New("unsupported routing_strategy")
 	}
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
@@ -262,6 +264,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = settings.BaseURL
 		}
 	}
+	if base == "" && provider == "openai" {
+		base = "https://api.openai.com"
+	}
 	if base == "" && provider == "anthropic" {
 		base = "https://api.anthropic.com"
 	}
@@ -296,6 +301,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && hasSettings {
 		key = os.Getenv(settings.APIKeyEnv)
+	}
+	if key == "" && provider == "openai" && parsed.Scheme == "https" && parsed.Host == "api.openai.com" {
+		key = os.Getenv("OPENAI_API_KEY")
 	}
 	if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
@@ -351,10 +359,15 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 		endpoint = configured
 	}
+	price, err := tokenPrice(entry.Params.Model, entry.Params.InputPrice, entry.Params.OutputPrice)
+	if err != nil {
+		return runtime.Candidate{}, err
+	}
 	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
-		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock}, nil
+		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
+		TokenPrice: price}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

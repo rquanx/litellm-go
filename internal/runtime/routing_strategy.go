@@ -1,6 +1,10 @@
 package runtime
 
-import "math/rand/v2"
+import (
+	"cmp"
+	"math/rand/v2"
+	"slices"
+)
 
 func (s *Server) orderDeployments(candidates []Candidate) {
 	if s.config.RoutingStrategy == "" {
@@ -13,13 +17,19 @@ func (s *Server) orderDeployments(candidates []Candidate) {
 		}
 		if candidates[start].RoutingGroup != "" && end-start > 1 {
 			group := candidates[start:end]
-			selected := chooseWeighted(group)
-			if s.config.RoutingStrategy == "least-busy" {
-				selected = s.leastBusy(group)
+			if s.config.RoutingStrategy == "cost-based-routing" {
+				slices.SortStableFunc(group, func(a, b Candidate) int { return cmp.Compare(a.TokenPrice, b.TokenPrice) })
+			} else {
+				selected := 0
+				if s.config.RoutingStrategy == "least-busy" {
+					selected = s.leastBusy(group)
+				} else {
+					selected = chooseWeighted(group)
+				}
+				first := group[selected]
+				copy(group[1:selected+1], group[:selected])
+				group[0] = first
 			}
-			first := group[selected]
-			copy(group[1:selected+1], group[:selected])
-			group[0] = first
 		}
 		start = end
 	}

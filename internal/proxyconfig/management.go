@@ -157,6 +157,12 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.Weight == nil {
 			model.Params.Weight = existing.Params.Weight
 		}
+		if model.Params.InputPrice == nil {
+			model.Params.InputPrice = existing.Params.InputPrice
+		}
+		if model.Params.OutputPrice == nil {
+			model.Params.OutputPrice = existing.Params.OutputPrice
+		}
 		if model.Params.RPM == nil {
 			model.Params.RPM = existing.Params.RPM
 		}
