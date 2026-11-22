@@ -47,3 +47,40 @@ func TestProxyHealthProbesAndDiagnostics(t *testing.T) {
 		t.Fatalf("unexpected backlog body %q", body)
 	}
 }
+
+func TestModelHealthScopesProbesAndHidesUpstreamAddress(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/allowed/v1/chat/completions" {
+			t.Errorf("unexpected deployment probe: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{Token: "fixture-master", AuthorizeInference: true,
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"allowed"}, token == "fixture-key" },
+		Routes: []Route{
+			{Alias: "allowed", Candidates: []Candidate{
+				{DeploymentID: "allowed-id", ModelID: "fixture", RoutingGroup: "allowed", Endpoint: "chat-completions", APIBase: upstream.URL + "/allowed"},
+				{DeploymentID: "blocked-id", ModelID: "fixture", RoutingGroup: "blocked", Endpoint: "chat-completions", APIBase: upstream.URL + "/blocked"},
+			}},
+			{Alias: "blocked", Candidates: []Candidate{
+				{DeploymentID: "blocked-id", ModelID: "fixture", RoutingGroup: "blocked", Endpoint: "chat-completions", APIBase: upstream.URL + "/blocked"},
+			}},
+		},
+	})
+	for _, path := range []string{"/health", "/health?model_id=blocked-id"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer fixture-key")
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, req)
+		if body := output.Body.String(); strings.Contains(body, "api_base") || strings.Contains(body, "blocked-id") {
+			t.Fatalf("restricted deployment metadata was exposed: %s", body)
+		}
+		if path == "/health" && (output.Code != 200 || !strings.Contains(output.Body.String(), `"healthy_count":1`)) {
+			t.Fatalf("unexpected health status %d: %s", output.Code, output.Body.String())
+		}
+		if path != "/health" && output.Code != 503 {
+			t.Fatalf("unavailable target returned %d", output.Code)
+		}
+	}
+}

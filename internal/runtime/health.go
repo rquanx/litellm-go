@@ -8,6 +8,8 @@ import (
 
 func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 	path := r.URL.Path
+	isAdmin := s.authorized(r)
+	var scope []string
 	switch path {
 	case "/health/readiness", "/health/liveliness", "/health/liveness":
 		if r.Method == http.MethodOptions {
@@ -17,11 +19,11 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 			w.WriteHeader(http.StatusOK)
 			return true
 		}
-	case "/health/readiness/details", "/health/backlog":
-		if r.Method == http.MethodGet && !s.authorized(r) {
+	case "/health/readiness/details", "/health/backlog", "/health":
+		if r.Method == http.MethodGet && !isAdmin {
 			valid := false
 			if s.config.AuthorizeKey != nil {
-				_, valid = s.config.AuthorizeKey(ProxyCredential(r))
+				scope, valid = s.config.AuthorizeKey(ProxyCredential(r))
 			}
 			if !valid {
 				writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
@@ -41,6 +43,8 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, http.StatusOK, "I'm alive!")
 	case "/health/backlog":
 		writeJSON(w, http.StatusOK, map[string]int64{"in_flight_requests": s.inFlight.Load()})
+	case "/health":
+		s.modelHealth(w, r, scope, isAdmin)
 	default:
 		s.readiness(w, r, path == "/health/readiness/details" || s.config.PublicReadinessDetails)
 	}
