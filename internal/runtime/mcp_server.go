@@ -13,11 +13,40 @@ type mcpRPCRequest struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+func (s *Server) serveMCPEndpoint(w http.ResponseWriter, r *http.Request) bool {
+	path := strings.TrimSuffix(r.URL.Path, "/")
+	if path == "/mcp" {
+		s.serveMCP(w, r)
+		return true
+	}
+	name, ok := strings.CutSuffix(strings.TrimPrefix(path, "/"), "/mcp")
+	if !ok || name == "" || strings.Contains(name, "/") {
+		return false
+	}
+	for _, server := range s.currentMCPServers() {
+		if server.matches(name) {
+			s.serveMCPForServer(w, r, server.ID)
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
+	s.serveMCPForServer(w, r, "")
+}
+
+func (s *Server) serveMCPForServer(w http.ResponseWriter, r *http.Request, serverID string) {
 	access, valid := s.mcpAccess(r)
 	if !valid {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 		return
+	}
+	if serverID != "" {
+		original := access
+		access = func(server MCPServer, name string) bool {
+			return server.ID == serverID && original(server, name)
+		}
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")

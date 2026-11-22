@@ -135,8 +135,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if s.config.AuthorizeInference && s.serveMCPClientSSE(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && (request.URL.Path == "/mcp" || request.URL.Path == "/mcp/") {
-		s.serveMCP(writer, request)
+	if s.config.AuthorizeInference && s.serveMCPEndpoint(writer, request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.servePassThrough(writer, request) {

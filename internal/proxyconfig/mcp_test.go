@@ -174,7 +174,7 @@ mcp_servers:
 		{`{"jsonrpc":"2.0","id":6,"method":"resources/list"}`, "fixture-manual"},
 		{`{"jsonrpc":"2.0","id":7,"method":"resources/read","params":{"uri":"file:///fixture"}}`, "fixture resource"},
 	} {
-		if result := call("POST", "/mcp", "fixture-key", tc.body, 200); !strings.Contains(result, tc.expected) {
+		if result := call("POST", "/fixture/mcp", "fixture-key", tc.body, 200); !strings.Contains(result, tc.expected) {
 			t.Fatalf("unexpected MCP response %s", result)
 		}
 	}
