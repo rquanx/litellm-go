@@ -224,6 +224,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.containerResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && isEvalPath(request.URL.Path) {
+		s.evalResource(writer, request, modelScope)
+		return
+	}
 	if s.config.AuthorizeInference && isVideoPath(request.URL.Path) {
 		s.videoResource(writer, request, modelScope)
 		return

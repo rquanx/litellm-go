@@ -88,6 +88,8 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	registry.registerMCPRoutes(mux)
 	registry.registerMCPToolsetRoutes(mux)
 	registerPublicCatalogs(mux)
+	mux.HandleFunc("GET /.well-known/litellm-ui-config", publicUIConfig)
+	mux.HandleFunc("GET /litellm/.well-known/litellm-ui-config", publicUIConfig)
 	registry.registerPublicModelHub(mux)
 	server.ReplaceMCPToolsets(registry.mcpToolsets)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)

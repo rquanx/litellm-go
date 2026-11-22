@@ -273,7 +273,7 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	query := upstream.URL.Query()
-	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter", "variant"} {
+	for _, key := range []string{"after", "before", "limit", "order", "order_by", "purpose", "filter", "variant"} {
 		for _, value := range request.URL.Query()[key] {
 			if key == "after" || key == "before" {
 				if family == "containers" {
@@ -370,6 +370,11 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 		if family == "container_files" {
 			if id, ok := entry["container_id"].(string); ok && id != "" {
 				entry["container_id"] = encodeResourceID("containers", deployment, id)
+			}
+		}
+		if family == "eval_runs" {
+			if id, ok := entry["eval_id"].(string); ok && id != "" {
+				entry["eval_id"] = encodeResourceID("evals", deployment, id)
 			}
 		}
 		if strings.HasPrefix(family, "vector_stores") {
