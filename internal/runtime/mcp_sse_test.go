@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,47 @@ import (
 	"testing"
 	"time"
 )
+
+func TestLegacyMCPClientSSEBindsMessagePostsToSessionKey(t *testing.T) {
+	server := NewServer(Config{AuthorizeInference: true, Token: "fixture-master"})
+	proxy := httptest.NewServer(server)
+	defer proxy.Close()
+	get, _ := http.NewRequest(http.MethodGet, proxy.URL+"/sse", nil)
+	get.Header.Set("Authorization", "Bearer fixture-master")
+	client := &http.Client{Timeout: 3 * time.Second}
+	stream, err := client.Do(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != 200 {
+		t.Fatalf("SSE status %d", stream.StatusCode)
+	}
+	scanner := bufio.NewScanner(stream.Body)
+	event, address, ok := nextMCPEvent(scanner, 8192)
+	if !ok || event != "endpoint" || !strings.HasPrefix(string(address), mcpSSEMessages+"?session_id=") {
+		t.Fatalf("invalid MCP event endpoint %q", address)
+	}
+	for _, tc := range []struct {
+		key string
+		status int
+	}{{"wrong", 404}, {"fixture-master", 202}} {
+		post, _ := http.NewRequest(http.MethodPost, proxy.URL+string(address), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+		post.Header.Set("Authorization", "Bearer "+tc.key)
+		response, err := client.Do(post)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != tc.status {
+			t.Fatalf("MCP message POST returned %d, want %d", response.StatusCode, tc.status)
+		}
+	}
+	event, data, ok := nextMCPEvent(scanner, 8192)
+	if !ok || event != "message" || !strings.Contains(string(data), `"result":{}`) {
+		t.Fatalf("invalid MCP ping reply %q", data)
+	}
+}
 
 func TestLegacySSEUpstreamMCPTransport(t *testing.T) {
 	events := make(chan string, 4)

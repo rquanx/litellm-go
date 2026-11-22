@@ -66,6 +66,7 @@ type Server struct {
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
 	mcpServers []MCPServer
+	mcpSSESessions map[string]*clientMCPSession
 	passThrough []PassThroughRoute
 	searchFallbacks map[string][]string
 	healthResults map[string]ModelHealthRecord
@@ -129,6 +130,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveMCPREST(writer, request) {
+		return
+	}
+	if s.config.AuthorizeInference && s.serveMCPClientSSE(writer, request) {
 		return
 	}
 	if s.config.AuthorizeInference && (request.URL.Path == "/mcp" || request.URL.Path == "/mcp/") {
