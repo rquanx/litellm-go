@@ -64,7 +64,7 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Method == "tools/list" {
-			s.handleMCPList(w, r, req, access)
+			writeMCPResult(w, req.ID, map[string]any{"tools": s.listProtocolTools(r, access)})
 		} else {
 			s.handleMCPCall(w, r, req, access)
 		}
@@ -73,7 +73,7 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, access MCPAccess) {
+func (s *Server) listProtocolTools(r *http.Request, access MCPAccess) []map[string]any {
 	tools := make([]map[string]any, 0)
 	for _, server := range s.currentMCPServers() {
 		if !access(server, "") {
@@ -93,7 +93,7 @@ func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRP
 			tools = append(tools, tool)
 		}
 	}
-	writeMCPResult(w, req.ID, map[string]any{"tools": tools})
+	return tools
 }
 
 func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, access MCPAccess) {

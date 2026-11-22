@@ -19,6 +19,7 @@ type mcpServerConfig struct {
 	Description string `yaml:"description" json:"description,omitempty"`
 	AllowAllKeys bool `yaml:"allow_all_keys" json:"allow_all_keys"`
 	AllowedTools []string `yaml:"allowed_tools" json:"allowed_tools"`
+	AccessGroups []string `yaml:"mcp_access_groups" json:"mcp_access_groups,omitempty"`
 	Headers map[string]string `yaml:"headers" json:"static_headers,omitempty"`
 	Command string `yaml:"command" json:"command,omitempty"`
 	Args []string `yaml:"args" json:"args,omitempty"`
@@ -80,7 +81,8 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 		}
 		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
 			Command: entry.Command, Args: entry.Args, Env: env,
-			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools, Headers: headers})
+			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools,
+			AccessGroups: entry.AccessGroups, Headers: headers})
 	}
 	return result, nil
 }

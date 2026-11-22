@@ -138,6 +138,10 @@ func (importer accessImporter) expandObjectPermission(payload []byte) ([]byte, e
 			if err := json.Unmarshal(value, &permission.MCPTools); err != nil {
 				return nil, errors.New("invalid MCP tool scope")
 			}
+		case "mcp_access_groups":
+			if err := json.Unmarshal(value, &permission.MCPAccessGroups); err != nil {
+				return nil, errors.New("invalid MCP group scope")
+			}
 		default:
 			switch string(value) {
 			case "null", "[]", "{}", `""`:

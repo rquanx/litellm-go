@@ -99,8 +99,8 @@ func (registry *KeyRegistry) AuthorizeMCP(token string) (runtime.MCPAccess, bool
 	return func(server runtime.MCPServer, tool string) bool {
 		key, team := permissions.key, permissions.team
 		serverAllowed := team.grantsMCPServer(server)
-		if key != nil && key.MCPServers != nil {
-			serverAllowed = key.grantsMCPServer(server) && (team == nil || team.MCPServers == nil || serverAllowed)
+		if key.hasMCPGrants() {
+			serverAllowed = key.grantsMCPServer(server) && (!team.hasMCPGrants() || serverAllowed)
 		}
 		serverAllowed = serverAllowed || server.AllowAllKeys
 		return serverAllowed && key.allowsMCPTool(server, tool) && team.allowsMCPTool(server, tool)
@@ -111,6 +111,11 @@ type objectPermission struct {
 	SearchTools []string `json:"search_tools,omitempty"`
 	MCPServers []string `json:"mcp_servers"`
 	MCPTools map[string][]string `json:"mcp_tool_permissions,omitempty"`
+	MCPAccessGroups []string `json:"mcp_access_groups,omitempty"`
+}
+
+func (permission *objectPermission) hasMCPGrants() bool {
+	return permission != nil && (permission.MCPServers != nil || len(permission.MCPAccessGroups) > 0)
 }
 
 func (permission *objectPermission) grantsMCPServer(server runtime.MCPServer) bool {
@@ -119,6 +124,11 @@ func (permission *objectPermission) grantsMCPServer(server runtime.MCPServer) bo
 	}
 	for _, id := range permission.MCPServers {
 		if id == server.ID || id == server.Name || (server.Alias != "" && id == server.Alias) {
+			return true
+		}
+	}
+	for _, group := range server.AccessGroups {
+		if slices.Contains(permission.MCPAccessGroups, group) {
 			return true
 		}
 	}

@@ -103,6 +103,7 @@ mcp_servers:
   fixture:
     url: os.environ/TEST_MCP_URL
     transport: http
+    mcp_access_groups: [fixture-group]
     allowed_tools: [echo]
     headers: {Authorization: Bearer mcp-fixture}
 `))
@@ -114,7 +115,7 @@ mcp_servers:
 		t.Fatal(err)
 	}
 	registry.state.Teams["fixture-team"] = team{ID: "fixture-team", ObjectPermission: &objectPermission{
-		MCPServers: []string{"fixture"}, MCPTools: map[string][]string{"fixture": {"echo"}},
+		MCPAccessGroups: []string{"fixture-group"}, MCPTools: map[string][]string{"fixture": {"echo"}},
 	}}
 	registry.state.Keys[keyDigest("fixture-key")] = virtualKey{TeamID: "fixture-team"}
 	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "fixture-master", MCPServers: cfg.MCPServers,
@@ -132,6 +133,9 @@ mcp_servers:
 	}
 	if result := call("GET", "/mcp-rest/tools/list", "fixture-key", "", 200); !strings.Contains(result, "echo") || strings.Contains(result, "private") {
 		t.Fatalf("unexpected tools %s", result)
+	}
+	if result := call("GET", "/v1/mcp/access_groups", "fixture-key", "", 200); !strings.Contains(result, "fixture-group") {
+		t.Fatalf("unexpected MCP access groups %s", result)
 	}
 	call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"private"}`, 403)
 	if result := call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"echo"}`, 200); !strings.Contains(result, "fixture") {

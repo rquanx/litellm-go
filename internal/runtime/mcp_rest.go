@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -41,12 +42,25 @@ func (s *Server) mcpAccess(r *http.Request) (MCPAccess, bool) {
 func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
 	list := r.Method == http.MethodGet && r.URL.Path == "/mcp-rest/tools/list"
 	call := r.Method == http.MethodPost && r.URL.Path == "/mcp-rest/tools/call"
-	if !list && !call {
+	groupList := r.Method == http.MethodGet && r.URL.Path == "/v1/mcp/access_groups"
+	protocolList := r.Method == http.MethodGet && r.URL.Path == "/v1/mcp/tools"
+	if !list && !call && !groupList && !protocolList {
 		return false
 	}
 	access, valid := s.mcpAccess(r)
 	if !valid {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+		return true
+	}
+	if groupList {
+		groups := make([]string, 0)
+		for _, server := range s.currentMCPServers() {
+			if access(server, "") {
+				groups = append(groups, server.AccessGroups...)
+			}
+		}
+		slices.Sort(groups)
+		writeJSON(w, http.StatusOK, map[string]any{"access_groups": slices.Compact(groups)})
 		return true
 	}
 	select {
@@ -55,7 +69,9 @@ func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
 	case <-r.Context().Done():
 		return true
 	}
-	if list {
+	if protocolList {
+		writeJSON(w, http.StatusOK, map[string]any{"tools": s.listProtocolTools(r, access)})
+	} else if list {
 		s.listMCPTools(w, r, access)
 	} else {
 		s.callMCPTool(w, r, access)
