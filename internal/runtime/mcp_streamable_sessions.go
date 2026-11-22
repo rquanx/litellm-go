@@ -109,7 +109,7 @@ func (s *Server) protocolMCPSession(ctx context.Context, server MCPServer) (*mcp
 		return session, session.close, nil
 	}
 	// A change in endpoint or credentials requires a fresh upstream handshake.
-	encoded, _ := json.Marshal([]any{server.ID, server.URL, server.Headers})
+	encoded, _ := json.Marshal([]any{server.ID, server.URL, server.Headers, server.OAuth.fingerprint()})
 	key := sha256.Sum256(encoded)
 	client.mu.Lock()
 	defer client.mu.Unlock()

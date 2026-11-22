@@ -20,6 +20,7 @@ type MCPServer struct {
 	PublicID                         string
 	Transport                        string
 	Headers                          http.Header
+	OAuth                            *MCPOAuth
 	AllowAllKeys                     bool
 	AllowedTools                     []string
 	DisallowedTools                  []string
@@ -123,7 +124,17 @@ func (session *mcpSession) send(ctx context.Context, method string, payload any)
 	if session.id != "" {
 		request.Header.Set("Mcp-Session-Id", session.id)
 	}
-	return session.client.Do(request)
+	var bearer string
+	if auth := session.server.OAuth; auth != nil {
+		bearer, err = auth.bearer(ctx, &session.client)
+		if err != nil { return nil, err }
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	response, err := session.client.Do(request)
+	if err == nil && response.StatusCode == http.StatusUnauthorized && bearer != "" {
+		session.server.OAuth.reset(bearer)
+	}
+	return response, err
 }
 
 func (session *mcpSession) close() {

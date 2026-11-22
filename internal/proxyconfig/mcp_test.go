@@ -27,7 +27,7 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL);
 		CREATE TEMP TABLE "LiteLLM_MCPServerTable" (
 			server_id TEXT, server_name TEXT, transport TEXT, url TEXT, approval_status TEXT,
-			auth_type TEXT, credentials JSONB, static_headers JSONB
+			auth_type TEXT, credentials JSONB, static_headers JSONB, token_url TEXT
 		);
 		CREATE TEMP TABLE "LiteLLM_MCPToolsetTable" (
 			toolset_id TEXT, toolset_name TEXT, description TEXT, tools JSONB, created_at TIMESTAMP, updated_at TIMESTAMP
@@ -36,13 +36,15 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 			('fixture-set','collection',NULL,'[{"server_id":"fixture-id","tool_name":"echo"}]',now(),now());
 		INSERT INTO "LiteLLM_MCPServerTable" VALUES
 			('fixture-id','fixture','http','http://localhost:1/mcp','active','bearer_token',
-			'{"auth_value":"fixture-import-token"}','{"X-Fixture":"value"}'),
-			('pending','unreviewed','stdio',NULL,'pending',NULL,NULL,NULL);`)
+			'{"auth_value":"fixture-import-token"}','{"X-Fixture":"value"}',NULL),
+			('oauth-id','oauth-fixture','http','http://localhost:1/mcp','active','oauth2',
+			'{"client_id":"fixture-client","client_secret":"fixture-oauth-secret"}',NULL,'http://localhost:1/token'),
+			('pending','unreviewed','stdio',NULL,'pending',NULL,NULL,NULL,NULL);`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config := Config{MasterKey: "fixture-master"}
-	if count, err := ImportLiteLLMMCPServers(db, config); err != nil || count != 1 {
+	if count, err := ImportLiteLLMMCPServers(db, config); err != nil || count != 2 {
 		t.Fatalf("import count %d: %v", count, err)
 	}
 	var state modelState
@@ -51,8 +53,12 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 	}
 	entry := state.MCPServers["fixture"]
 	if entry.ServerID != "fixture-id" || entry.Headers["Authorization"] != "Bearer fixture-import-token" ||
-		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 1 {
+		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 2 {
 		t.Fatal("stored MCP server did not retain its ID and credentials")
+	}
+	oauth := state.MCPServers["oauth-fixture"]
+	if oauth.AuthType != "oauth2" || oauth.ClientID != "fixture-client" || oauth.ClientSecret != "fixture-oauth-secret" || oauth.TokenURL != "http://localhost:1/token" {
+		t.Fatal("stored MCP server did not retain its OAuth settings")
 	}
 	if len(state.MCPToolsets) != 1 || state.MCPToolsets[0].ID != "fixture-set" ||
 		len(state.MCPToolsets[0].Tools) != 1 || state.MCPToolsets[0].Tools[0].ServerID != entry.ServerID {

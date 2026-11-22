@@ -39,6 +39,11 @@ type mcpServerConfig struct {
 	Public bool `yaml:"available_on_public_internet" json:"available_on_public_internet,omitempty"`
 	PublicInfo map[string]any `yaml:"mcp_info" json:"mcp_info,omitempty"`
 	ImportedAuthType string `yaml:"-" json:"imported_auth_type,omitempty"`
+	AuthType string `yaml:"auth_type" json:"auth_type,omitempty"`
+	TokenURL string `yaml:"token_url" json:"token_url,omitempty"`
+	ClientID string `yaml:"client_id" json:"client_id,omitempty"`
+	ClientSecret string `yaml:"client_secret" json:"client_secret,omitempty"`
+	Scopes []string `yaml:"scopes" json:"scopes,omitempty"`
 	AllowedTools []string `yaml:"allowed_tools" json:"allowed_tools"`
 	AccessGroups []string `yaml:"mcp_access_groups" json:"mcp_access_groups,omitempty"`
 	YAMLAccessGroups []string `yaml:"access_groups" json:"-"`
@@ -110,11 +115,34 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 			}
 			env = append(env, key+"="+value)
 		}
-		result = append(result, runtime.MCPServer{ID: id, PublicID: publicID, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
+		oauth, err := entry.clientOAuth()
+		if err != nil { return nil, fmt.Errorf("MCP server %q: %w", name, err) }
+		result = append(result, runtime.MCPServer{ID: id, PublicID: publicID, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport, OAuth: oauth,
 			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools,
 			AccessGroups: append(slices.Clone(entry.AccessGroups), entry.YAMLAccessGroups...), Headers: headers,
 			DisallowedTools: entry.DisallowedTools, AllowedParams: entry.AllowedParams})
 	}
 	return result, nil
+}
+
+func (entry mcpServerConfig) clientOAuth() (*runtime.MCPOAuth, error) {
+	if entry.TokenURL == "" && entry.ClientID == "" && entry.ClientSecret == "" {
+		if entry.AuthType == "oauth2" {
+			return nil, fmt.Errorf("OAuth client credentials require token_url, client_id and client_secret")
+		}
+		return nil, nil
+	}
+	if entry.Transport == "stdio" || (entry.AuthType != "" && entry.AuthType != "oauth2") {
+		return nil, fmt.Errorf("unsupported OAuth transport or authentication mode")
+	}
+	tokenURL, urlErr := resolveEnv(entry.TokenURL)
+	clientID, idErr := resolveEnv(entry.ClientID)
+	secret, secretErr := resolveEnv(entry.ClientSecret)
+	address, err := url.Parse(tokenURL)
+	if urlErr != nil || idErr != nil || secretErr != nil || err != nil || clientID == "" || secret == "" ||
+		address.Hostname() == "" || address.User != nil || address.Fragment != "" || (address.Scheme != "https" && address.Scheme != "http") {
+		return nil, fmt.Errorf("invalid OAuth client credentials")
+	}
+	return &runtime.MCPOAuth{TokenURL: tokenURL, ClientID: clientID, ClientSecret: secret, Scopes: slices.Clone(entry.Scopes)}, nil
 }

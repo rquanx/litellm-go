@@ -152,6 +152,16 @@ func decodeLiteLLMMCPServer(payload []byte, salt string) (string, mcpServerConfi
 		if len(credentials) != 0 {
 			return "", entry, false, fmt.Errorf("MCP server %q has credentials without a supported auth type", name)
 		}
+	case "oauth2":
+		if len(credentials) != 2 || credentials["client_id"] == "" || credentials["client_secret"] == "" || entry.TokenURL == "" {
+			return "", entry, false, fmt.Errorf("MCP server %q requires machine-to-machine OAuth credentials", name)
+		}
+		encoded, _ := json.Marshal(credentials)
+		decoded, err := decryptLiteLLMParams(encoded, salt)
+		if err != nil || json.Unmarshal(decoded, &credentials) != nil {
+			return "", entry, false, fmt.Errorf("MCP server %q OAuth credentials could not be decrypted", name)
+		}
+		entry.AuthType, entry.ClientID, entry.ClientSecret = row.AuthType, credentials["client_id"], credentials["client_secret"]
 	case "authorization", "bearer_token", "api_key", "basic", "token":
 		if len(credentials) != 1 || credentials["auth_value"] == "" {
 			return "", entry, false, fmt.Errorf("MCP server %q requires a static auth value", name)
