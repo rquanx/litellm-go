@@ -44,6 +44,7 @@ type Config struct {
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
+	RoutingState       RoutingState
 	LatencyBuffer      float64
 	LatencySamples     int
 	Callback           func(InferenceEvent)
@@ -489,14 +490,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
-	eligible := s.eligibleCandidates(route.Candidates, modelScope, endpoint, stream)
+	eligible := s.eligibleCandidates(request.Context(), route.Candidates, modelScope, endpoint, stream)
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
 	}
 	route.Candidates = eligible
-	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint, stream)
-	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint, stream)
+	route.ContextFallback = s.eligibleCandidates(request.Context(), route.ContextFallback, modelScope, endpoint, stream)
+	route.PolicyFallback = s.eligibleCandidates(request.Context(), route.PolicyFallback, modelScope, endpoint, stream)
 	if s.config.AuthorizeInference && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
@@ -557,7 +558,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 		started := time.Now()
-		reservation, admitted := s.admitDeployment(candidate, payload)
+		reservation, admitted := s.admitDeployment(request.Context(), candidate, payload)
 		var status int
 		var responseBody []byte
 		var responseHeaders http.Header
@@ -565,9 +566,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		var callErr error
 		if admitted {
 			status, responseBody, responseHeaders, retryable, callErr = s.callJSON(request.Context(), request, endpoint, candidate, payload)
-			s.recordCooldown(candidate, status, retryable, responseHeaders)
+			s.recordCooldown(request.Context(), candidate, status, retryable, responseHeaders)
 			if reservation != nil && status >= 200 && status < 300 {
-				s.settleCapacity(reservation, usageFromJSON(responseBody))
+				s.settleCapacity(request.Context(), reservation, usageFromJSON(responseBody))
 			}
 		} else {
 			status, responseBody, responseHeaders = capacityError()
@@ -669,7 +670,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 		started := time.Now()
-		reservation, admitted := s.admitDeployment(candidate, payload)
+		reservation, admitted := s.admitDeployment(request.Context(), candidate, payload)
 		var status int
 		var response *http.Response
 		var retryable bool
@@ -717,7 +718,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			if response != nil {
 				headers = response.Header
 			}
-			s.recordCooldown(candidate, status, retryable, headers)
+			s.recordCooldown(request.Context(), candidate, status, retryable, headers)
 		}
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
 			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
@@ -746,7 +747,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			if reservation != nil {
 				baseConvert := convert
 				convert = func(frame []byte) []byte {
-					s.settleCapacity(reservation, usageFromJSON(streamErrorBody(frame)))
+					s.settleCapacity(request.Context(), reservation, usageFromJSON(streamErrorBody(frame)))
 					return baseConvert(frame)
 				}
 			}
@@ -814,7 +815,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	}
 }
 
-func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endpoint string, stream bool) []Candidate {
+func (s *Server) eligibleCandidates(ctx context.Context, candidates []Candidate, scope []string, endpoint string, stream bool) []Candidate {
 	if candidates == nil {
 		return nil
 	}
@@ -835,7 +836,7 @@ func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endp
 			eligible = append(eligible, candidate)
 		}
 	}
-	s.orderDeployments(eligible, stream)
+	s.orderDeployments(ctx, eligible, stream)
 	return s.filterUnhealthyCandidates(eligible)
 }
 

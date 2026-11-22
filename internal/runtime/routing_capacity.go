@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"math/rand/v2"
 	"net/http"
@@ -22,9 +23,28 @@ type capacityReservation struct {
 	deployment string
 	minute     int64
 	tokens     int
+	shared     bool
 }
 
-func (s *Server) lowestUsage(candidates []Candidate) int {
+func (s *Server) lowestUsage(ctx context.Context, candidates []Candidate) int {
+	if store := s.config.RoutingState; store != nil {
+		deployments := make([]string, len(candidates))
+		for i, candidate := range candidates {
+			deployments[i] = candidate.DeploymentID
+		}
+		bounded, cancel := context.WithTimeout(ctx, routingStateTimeout)
+		values, err := store.Usage(bounded, deployments, time.Now().Unix()/60)
+		cancel()
+		if err == nil && len(values) == len(candidates) {
+			selected := rand.IntN(len(values))
+			for i, count := range values {
+				if count < values[selected] {
+					selected = i
+				}
+			}
+			return selected
+		}
+	}
 	s.trafficMu.Lock()
 	defer s.trafficMu.Unlock()
 	s.rollCapacityWindow(time.Now().Unix() / 60)
@@ -44,17 +64,24 @@ func (s *Server) rollCapacityWindow(minute int64) {
 	}
 }
 
-func (s *Server) reserveCapacity(candidate Candidate, payload requestPayload) (*capacityReservation, bool) {
+func (s *Server) tracksCapacity(candidate Candidate) bool {
 	if candidate.DeploymentID == "" {
-		return nil, true
+		return false
 	}
 	switch s.config.RoutingStrategy {
 	case "latency-based-routing", "cost-based-routing":
 		if candidate.RPM == nil && candidate.TPM == nil {
-			return nil, true
+			return false
 		}
 	case "usage-based-routing", "usage-based-routing-v2":
 	default:
+		return false
+	}
+	return true
+}
+
+func (s *Server) reserveCapacity(candidate Candidate, payload requestPayload) (*capacityReservation, bool) {
+	if !s.tracksCapacity(candidate) {
 		return nil, true
 	}
 	tokens := estimatedInputTokens(payload.fields)
@@ -73,8 +100,16 @@ func (s *Server) reserveCapacity(candidate Candidate, payload requestPayload) (*
 	return &capacityReservation{deployment: candidate.DeploymentID, minute: minute, tokens: tokens}, true
 }
 
-func (s *Server) settleCapacity(reservation *capacityReservation, tokens int) {
-	if tokens <= 0 {
+func (s *Server) settleCapacity(ctx context.Context, reservation *capacityReservation, tokens int) {
+	if tokens <= 0 || tokens == reservation.tokens {
+		return
+	}
+	if reservation.shared {
+		bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), routingStateTimeout)
+		defer cancel()
+		if s.config.RoutingState.Adjust(bounded, reservation.deployment, reservation.minute, tokens-reservation.tokens) == nil {
+			reservation.tokens = tokens
+		}
 		return
 	}
 	s.trafficMu.Lock()
@@ -106,13 +141,13 @@ func usageFromJSON(body []byte) int {
 		return 0
 	}
 	type usage struct {
-		TotalTokens int `json:"total_tokens"`
+		TotalTokens        int `json:"total_tokens"`
 		BedrockTotalTokens int `json:"totalTokens"`
-		InputTokens int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens        int `json:"input_tokens"`
+		OutputTokens       int `json:"output_tokens"`
 	}
 	var result struct {
-		Usage usage `json:"usage"`
+		Usage    usage `json:"usage"`
 		Response struct {
 			Usage usage `json:"usage"`
 		} `json:"response"`
@@ -127,5 +162,5 @@ func usageFromJSON(body []byte) int {
 	if result.Response.Usage != (usage{}) {
 		read = result.Response.Usage
 	}
-	return max(read.TotalTokens, read.BedrockTotalTokens, read.InputTokens + read.OutputTokens, result.UsageMetadata.Total)
+	return max(read.TotalTokens, read.BedrockTotalTokens, read.InputTokens+read.OutputTokens, result.UsageMetadata.Total)
 }

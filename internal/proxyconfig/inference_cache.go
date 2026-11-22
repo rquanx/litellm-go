@@ -95,7 +95,7 @@ func (params inferenceCacheParams) redisOptions() (*redis.Options, error) {
 	if err != nil {
 		return nil, err
 	}
-	if address == "" {
+	if address == "" && params.Host == "" {
 		address = os.Getenv("REDIS_URL")
 	}
 	if address != "" {

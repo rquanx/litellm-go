@@ -29,7 +29,7 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 		writeError(w, http.StatusNotFound, "model_not_found", "Unknown model")
 		return
 	}
-	candidates := s.eligibleCandidates(route.Candidates, scope, "responses", true)
+	candidates := s.eligibleCandidates(request.Context(), route.Candidates, scope, "responses", true)
 	if len(candidates) == 0 {
 		writeError(w, http.StatusBadRequest, "unsupported_endpoint", "No eligible Responses deployment")
 		return

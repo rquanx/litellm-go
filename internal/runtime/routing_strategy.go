@@ -2,11 +2,12 @@ package runtime
 
 import (
 	"cmp"
+	"context"
 	"math/rand/v2"
 	"slices"
 )
 
-func (s *Server) orderDeployments(candidates []Candidate, stream bool) {
+func (s *Server) orderDeployments(ctx context.Context, candidates []Candidate, stream bool) {
 	if s.config.RoutingStrategy == "" {
 		return
 	}
@@ -25,7 +26,7 @@ func (s *Server) orderDeployments(candidates []Candidate, stream bool) {
 				case "latency-based-routing":
 					selected = s.lowestLatency(group, stream)
 				case "usage-based-routing", "usage-based-routing-v2":
-					selected = s.lowestUsage(group)
+					selected = s.lowestUsage(ctx, group)
 				case "least-busy":
 					selected = s.leastBusy(group)
 				default:

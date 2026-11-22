@@ -226,6 +226,14 @@ func main() {
 		defer cache.Close()
 		config.InferenceCacheStore = cache
 	}
+	if proxy.RoutingRedis != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		state, err := proxyconfig.OpenRedisRoutingState(ctx, proxy.RoutingRedis, proxy.RoutingRedisNamespace)
+		cancel()
+		if err != nil { log.Fatal(err) }
+		defer state.Close()
+		config.RoutingState = state
+	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {

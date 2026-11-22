@@ -41,6 +41,11 @@ type configFile struct {
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
+		RedisURL string `yaml:"redis_url"`
+		RedisHost string `yaml:"redis_host"`
+		RedisPort string `yaml:"redis_port"`
+		RedisPassword string `yaml:"redis_password"`
+		RedisNamespace string `yaml:"redis_namespace"`
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
 		DefaultFallbacks []string       `yaml:"default_fallbacks"`
 		ContextFallbacks []map[string][]string `yaml:"context_window_fallbacks"`
@@ -139,6 +144,8 @@ type Config struct {
 	PollingRedisURL string
 	InferenceCache runtime.InferenceCacheConfig
 	InferenceCacheRedis *redis.Options
+	RoutingRedis *redis.Options
+	RoutingRedisNamespace string
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -199,6 +206,16 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	if file.Router.RedisURL != "" || file.Router.RedisHost != "" {
+		params := inferenceCacheParams{RedisURL: file.Router.RedisURL, Host: file.Router.RedisHost,
+			Port: file.Router.RedisPort, Password: file.Router.RedisPassword}
+		options, err := params.redisOptions()
+		if err != nil {
+			return Config{}, errors.New("invalid router Redis settings")
+		}
+		config.RoutingRedis = options
+		config.RoutingRedisNamespace = file.Router.RedisNamespace
+	}
 	if file.Callbacks.Cache {
 		if err := file.Callbacks.CacheParams.apply(&config); err != nil {
 			return Config{}, err
