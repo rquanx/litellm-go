@@ -28,6 +28,7 @@ func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog
 		key_alias TEXT NOT NULL,
 		user_id TEXT NOT NULL,
 		team_id TEXT NOT NULL,
+		project_id TEXT NOT NULL DEFAULT '',
 		model TEXT NOT NULL,
 		model_group TEXT NOT NULL,
 		model_id TEXT NOT NULL DEFAULT '',
@@ -40,6 +41,7 @@ func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog
 		spend DOUBLE PRECISION
 	);
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS model_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS project_id TEXT NOT NULL DEFAULT '';
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_started_at ON minato_proxy_spend (started_at DESC, request_id);`)
 	if err != nil {
 		return nil, errors.New("could not initialize Go proxy spend logs")
@@ -55,6 +57,7 @@ type spendRow struct {
 	KeyAlias   string    `json:"key_alias"`
 	User       string    `json:"user"`
 	Team       string    `json:"team_id"`
+	Project    string    `json:"project_id"`
 	Model      string    `json:"model"`
 	Group      string    `json:"model_group"`
 	ModelID    string    `json:"model_id"`
@@ -78,15 +81,18 @@ func (log *SpendLog) Record(event runtime.InferenceEvent) {
 	if key.RotationTarget != "" {
 		key = log.keys.state.Keys[key.RotationTarget]
 	}
+	if key.TeamID == "" && key.ProjectID != "" {
+		key.TeamID = log.keys.state.Projects[key.ProjectID].TeamID
+	}
 	log.keys.mu.RUnlock()
 
 	start := time.Unix(0, int64(event.StartTime*1e9)).UTC()
 	end := time.Unix(0, int64(event.EndTime*1e9)).UTC()
 	_, _ = log.db.ExecContext(ctx, `INSERT INTO minato_proxy_spend
-		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (request_id) DO NOTHING`,
-		event.ID, start, end, event.KeyDigest, key.Alias, key.UserID, key.TeamID, event.Model, event.ModelGroup,
+		event.ID, start, end, event.KeyDigest, key.Alias, key.UserID, key.TeamID, key.ProjectID, event.Model, event.ModelGroup,
 		event.ModelID, event.Provider, event.CallType, event.Status, event.Prompt, event.Completion, event.Total, event.Spend)
 }
 
@@ -153,7 +159,7 @@ func (log *SpendLog) list(w http.ResponseWriter, request *http.Request) {
 		log.dailyBetween(w, request, start, end)
 		return
 	}
-	const columns = `request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,model,model_group,model_id,
+	const columns = `request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,
 		provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend`
 	where, args, err := spendFilter(query, start, end)
 	if err != nil {
@@ -185,7 +191,7 @@ func (log *SpendLog) list(w http.ResponseWriter, request *http.Request) {
 	data := make([]spendRow, 0, size)
 	for rows.Next() {
 		var row spendRow
-		if err := rows.Scan(&row.ID, &row.Started, &row.Ended, &row.Key, &row.KeyAlias, &row.User, &row.Team,
+		if err := rows.Scan(&row.ID, &row.Started, &row.Ended, &row.Key, &row.KeyAlias, &row.User, &row.Team, &row.Project,
 			&row.Model, &row.Group, &row.ModelID, &row.Provider, &row.Call, &row.Status, &row.Prompt, &row.Completion, &row.Total, &row.Spend); err != nil {
 			modelError(w, http.StatusInternalServerError, "Could not decode spend logs")
 			return
@@ -207,7 +213,7 @@ func (log *SpendLog) list(w http.ResponseWriter, request *http.Request) {
 func spendFilter(query url.Values, start, end time.Time) (string, []any, error) {
 	args := []any{start, end}
 	conditions := []string{"started_at >= $1", "started_at < $2"}
-	for _, pair := range [][2]string{{"request_id", "request_id"}, {"user_id", "user_id"}, {"team_id", "team_id"},
+	for _, pair := range [][2]string{{"request_id", "request_id"}, {"user_id", "user_id"}, {"team_id", "team_id"}, {"project_id", "project_id"},
 		{"model", "model"}, {"model_id", "model_id"}, {"key_alias", "key_alias"}, {"status_filter", "status"}, {"api_key", "api_key"}} {
 		if value := query.Get(pair[0]); value != "" {
 			if pair[0] == "api_key" && strings.HasPrefix(value, "sk-") {

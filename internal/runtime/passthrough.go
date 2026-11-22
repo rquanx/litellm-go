@@ -316,6 +316,8 @@ func (s *Server) recordPassThrough(r *http.Request, event InferenceEvent, status
 		event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 	}
 	event.Stream = stream
+	event.Model = event.ModelGroup
+	event.Provider = "pass_through"
 	event.Status = "failure"
 	if status >= 200 && status < 300 {
 		event.Status, event.Spend = "success", cost

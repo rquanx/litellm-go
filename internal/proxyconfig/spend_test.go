@@ -33,7 +33,8 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := keyDigest("sk-test")
-	keys.state.Keys[digest] = virtualKey{Alias: "test-key"}
+	keys.state.Projects = map[string]project{"fixture-project": {ID: "fixture-project", TeamID: "fixture-team"}}
+	keys.state.Keys[digest] = virtualKey{Alias: "test-key", ProjectID: "fixture-project"}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	spend, err := OpenSpendLog(ctx, db, keys)
@@ -64,5 +65,7 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 		t.Fatalf("unexpected spend log attribution: %s", found)
 	}
 	call("master", "/spend/logs?request_id=req-two", 200, `"spend":null`)
+	call("master", "/spend/logs/v2?project_id=fixture-project", 200, `"total_count":1`)
+	call("master", "/spend/logs/v2?team_id=fixture-team", 200, `"total_count":1`)
 	call("master", "/global/spend/logs", 200, `"total_tokens":5`)
 }
