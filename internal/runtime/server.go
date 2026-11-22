@@ -114,7 +114,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && (realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
-		request.URL.Path == "/utils/token_counter" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+		request.URL.Path == "/utils/token_counter" || request.URL.Path == "/model_group/info" ||
+		strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
@@ -126,6 +127,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
 		s.countTokens(writer, request, modelScope)
+		return
+	}
+	if s.config.AuthorizeInference && request.Method == http.MethodGet && request.URL.Path == "/model_group/info" {
+		s.modelGroups(writer, request, modelScope)
 		return
 	}
 	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "client_secrets" {

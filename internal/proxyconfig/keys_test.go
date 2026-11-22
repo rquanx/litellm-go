@@ -57,6 +57,11 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	send(handler, "GET", "/models", "unknown", "", 401)
 	send(handler, "GET", "/models", generated.Key, "", 200)
 	send(handler, "GET", "/models/restricted", generated.Key, "", 404)
+	send(handler, "GET", "/model_group/info?model_group=restricted", generated.Key, "", 404)
+	send(handler, "GET", "/model_group/info", "unknown", "", 401)
+	if groups := send(handler, "GET", "/model_group/info", generated.Key, "", 200); !strings.Contains(groups, "permitted") || strings.Contains(groups, "restricted") {
+		t.Fatal("model group discovery did not apply the virtual key scope")
+	}
 	model := send(handler, "GET", "/v1/models/permitted", generated.Key, "", 200)
 	if !strings.Contains(model, `"created":1677610602`) {
 		t.Fatalf("individual model discovery response missing creation time: %s", model)

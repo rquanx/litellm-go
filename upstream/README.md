@@ -56,3 +56,5 @@ For each behavior change, record its upstream commit and Python source path, tra
 ## Container memory comparison
 
 On Docker Desktop, LiteLLM Proxy `v1.85.0` and the Go runtime started with the same YAML configuration and handled a warm-up request plus 60 sequential Chat Completions requests each. Both targeted the same synthetic upstream and returned 12 tokens per measured request. Docker reported 989.9 MiB for the Python container and 6.875 MiB for the Go container after the requests. This comparison covers one non-streaming route and measures container memory after the requests.
+
+The same synthetic Chat Completions workload on Go revision `b211ea4` reported 8.188 MiB for Go and 985.2 MiB for Python after 60 measured requests per proxy. PostgreSQL, callback delivery, tokenization and persistent WebSocket sessions were outside this measurement.
