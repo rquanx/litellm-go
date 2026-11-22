@@ -13,6 +13,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 type virtualKey struct {
@@ -176,7 +178,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 }
 
 func (registry *KeyRegistry) requireMaster(w http.ResponseWriter, r *http.Request) bool {
-	if subtle.ConstantTimeCompare([]byte("Bearer "+registry.master), []byte(r.Header.Get("Authorization"))) == 1 {
+	if subtle.ConstantTimeCompare([]byte(registry.master), []byte(runtime.ProxyCredential(r))) == 1 {
 		return true
 	}
 	modelError(w, http.StatusUnauthorized, "Proxy master key required")

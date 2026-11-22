@@ -126,7 +126,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
-			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
+			modelScope, allowed = s.config.AuthorizeKey(ProxyCredential(request))
 		}
 		if !allowed {
 			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
@@ -348,7 +348,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 	if s.config.Callback != nil {
 		recorder := &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream)}
-		if key := inferenceCredential(request); key != "" && !s.authorized(request) {
+		if key := ProxyCredential(request); key != "" && !s.authorized(request) {
 			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 		}
 		if s.config.LogMessages {
@@ -996,27 +996,36 @@ func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias st
 }
 
 func (s *Server) authorized(request *http.Request) bool {
-	return s.config.Token == "" || inferenceCredential(request) == s.config.Token
+	if s.config.Token == "" {
+		return true
+	}
+	if s.config.AuthorizeInference {
+		return ProxyCredential(request) == s.config.Token
+	}
+	token, _ := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	return token == s.config.Token
 }
 
-func inferenceCredential(request *http.Request) string {
-	if strings.HasPrefix(request.URL.Path, "/openai/deployments/") {
-		if key := request.Header.Get("api-key"); key != "" {
+// ProxyCredential selects the credential from headers in LiteLLM order.
+func ProxyCredential(request *http.Request) string {
+	if header := request.Header.Get("x-litellm-api-key"); header != "" {
+		key, _ := strings.CutPrefix(header, "Bearer ")
+		return key
+	}
+	if header := request.Header.Get("Authorization"); header != "" {
+		key, ok := strings.CutPrefix(header, "Bearer ")
+		if ok {
+			return key
+		}
+		return ""
+	}
+	for _, header := range []string{"api-key", "x-api-key", "x-goog-api-key", "Ocp-Apim-Subscription-Key"} {
+		if key := request.Header.Get(header); key != "" {
 			return key
 		}
 	}
 	if _, endpoint := geminiMethod(request.URL.Path); endpoint != "" {
-		if key := request.Header.Get("x-goog-api-key"); key != "" {
-			return key
-		}
-	}
-	if request.URL.Path == "/v1/messages" || request.URL.Path == "/v1/messages/count_tokens" || isAnthropicBatchPath(request.URL.Path) {
-		if key := request.Header.Get("x-api-key"); key != "" {
-			return key
-		}
-	}
-	if token, ok := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer "); ok {
-		return token
+		return request.URL.Query().Get("key")
 	}
 	return ""
 }

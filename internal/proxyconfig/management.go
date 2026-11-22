@@ -93,8 +93,7 @@ func (registry *modelRegistry) compileRouter(models []deployment, credentials ma
 }
 
 func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) bool {
-	expected := "Bearer " + registry.token
-	if registry.token == "" || subtle.ConstantTimeCompare([]byte(expected), []byte(r.Header.Get("Authorization"))) != 1 {
+	if registry.token == "" || subtle.ConstantTimeCompare([]byte(registry.token), []byte(runtime.ProxyCredential(r))) != 1 {
 		modelError(w, http.StatusUnauthorized, "Proxy master key required")
 		return false
 	}

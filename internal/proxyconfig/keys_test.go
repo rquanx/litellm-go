@@ -56,6 +56,14 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	send(handler, "POST", "/v1/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
 	send(handler, "GET", "/models", "unknown", "", 401)
 	send(handler, "GET", "/models", generated.Key, "", 200)
+	headerRequest := httptest.NewRequest("GET", "/v1/models", nil)
+	headerRequest.Header.Set("Authorization", "Bearer "+master)
+	headerRequest.Header.Set("x-litellm-api-key", generated.Key)
+	headerResponse := httptest.NewRecorder()
+	handler.ServeHTTP(headerResponse, headerRequest)
+	if headerResponse.Code != 200 || strings.Contains(headerResponse.Body.String(), "restricted") {
+		t.Fatal("LiteLLM credential header did not take precedence with the virtual key scope")
+	}
 	send(handler, "GET", "/models/restricted", generated.Key, "", 404)
 	send(handler, "GET", "/model_group/info?model_group=restricted", generated.Key, "", 404)
 	send(handler, "GET", "/model_group/info", "unknown", "", 401)

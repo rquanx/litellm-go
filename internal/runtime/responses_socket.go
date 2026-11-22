@@ -135,7 +135,7 @@ func (s *Server) socketStillAllowed(request *http.Request, alias string, candida
 	if s.config.AuthorizeKey == nil {
 		return false
 	}
-	scope, allowed := s.config.AuthorizeKey(inferenceCredential(request))
+	scope, allowed := s.config.AuthorizeKey(ProxyCredential(request))
 	return allowed && modelAllowed(scope, alias) && candidateAllowed(scope, candidate)
 }
 
