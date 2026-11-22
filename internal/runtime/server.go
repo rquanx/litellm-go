@@ -50,6 +50,7 @@ type Server struct {
 	mu     sync.RWMutex
 	routes map[string]Route
 	configuredRoutes map[string]Route
+	searchTools []SearchTool
 	searchFallbacks map[string][]string
 	sem    chan struct{}
 	trafficMu sync.Mutex
@@ -77,17 +78,18 @@ func NewServer(config Config) *Server {
 		routes[route.Alias] = route
 	}
 	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
-		searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
+		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 
 // ReplaceConfiguredRouting publishes the model routes and search fallback rules together.
-func (s *Server) ReplaceConfiguredRouting(routes []Route, searchFallbacks map[string][]string) {
+func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTool, searchFallbacks map[string][]string) {
 	next := make(map[string]Route, len(routes))
 	for _, route := range routes {
 		next[route.Alias] = route
 	}
 	s.mu.Lock()
 	s.configuredRoutes = next
+	s.searchTools = searchTools
 	s.searchFallbacks = searchFallbacks
 	s.mu.Unlock()
 }

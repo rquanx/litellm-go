@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -88,5 +89,72 @@ router_settings:
 		events[0].Provider != "perplexity" || events[0].KeyDigest != keyDigest(issued.Key) || events[0].Total != 0 ||
 		events[0].Spend == nil || *events[0].Spend != 0.005 || events[0].Messages != nil || events[0].Response != nil {
 		t.Fatalf("unexpected search events: %+v", events)
+	}
+}
+
+func TestManagedSearchToolSurvivesRestart(t *testing.T) {
+	var served atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture-search-credential" {
+			t.Error("stored search credential missing")
+		}
+		served.Add(1)
+		w.Write([]byte(`{"results":[]}`))
+	}))
+	defer provider.Close()
+	const master = "fixture-master"
+	cfg := Config{MasterKey: master}
+	state := filepath.Join(t.TempDir(), "models.json")
+	open := func() http.Handler {
+		t.Helper()
+		server := runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true})
+		handler, err := WithModelManagement(server, cfg, master, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler
+	}
+	handler := open()
+	call := func(method, path, token, body string, status int) string {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		output := httptest.NewRecorder()
+		handler.ServeHTTP(output, req)
+		if output.Code != status || strings.Contains(output.Body.String(), "fixture-search-credential") {
+			t.Fatalf("%s %s returned %d, want %d: %s", method, path, output.Code, status, output.Body.String())
+		}
+		return output.Body.String()
+	}
+	body := `{"search_tool":{"search_tool_name":"managed","litellm_params":{"search_provider":"perplexity","api_base":"` + provider.URL + `","api_key":"fixture-search-credential"}}}`
+	probe := `{"litellm_params":{"search_provider":"perplexity","api_base":"` + provider.URL + `","api_key":"fixture-search-credential"}}`
+	call(http.MethodPost, "/search_tools/test_connection", "other", probe, 401)
+	probeResult := call(http.MethodPost, "/search_tools/test_connection", master, probe, 200)
+	if !strings.Contains(probeResult, `"status":"success"`) {
+		t.Fatalf("connection check failed: %s", probeResult)
+	}
+	call(http.MethodGet, "/search_tools/ui/available_providers", master, "", 200)
+	call(http.MethodPost, "/search_tools", "other", body, 401)
+	response := call(http.MethodPost, "/search_tools", master, body, 200)
+	var created struct {
+		ID string `json:"search_tool_id"`
+	}
+	if json.Unmarshal([]byte(response), &created) != nil || created.ID == "" {
+		t.Fatalf("missing search tool ID: %s", response)
+	}
+	call(http.MethodPost, "/v1/search/managed", master, `{"query":"fixture"}`, 200)
+	handler = open()
+	path := "/search_tools/" + created.ID
+	call(http.MethodGet, path, master, "", 200)
+	updated := strings.ReplaceAll(body, "managed", "renamed")
+	updated = strings.ReplaceAll(updated, `,"api_key":"fixture-search-credential"`, "")
+	call(http.MethodPut, path, master, updated, 200)
+	call(http.MethodPost, "/v1/search/managed", master, `{"query":"fixture"}`, 400)
+	call(http.MethodPost, "/v1/search/renamed", master, `{"query":"fixture"}`, 200)
+	call(http.MethodDelete, path, master, "", 200)
+	handler = open()
+	call(http.MethodGet, path, master, "", 404)
+	if served.Load() != 3 {
+		t.Fatalf("unexpected provider call count %d", served.Load())
 	}
 }

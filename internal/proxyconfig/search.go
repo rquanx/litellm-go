@@ -13,18 +13,34 @@ import (
 )
 
 type searchToolConfig struct {
-	Name   string `yaml:"search_tool_name"`
+	Name   string `yaml:"search_tool_name" json:"search_tool_name"`
 	Params struct {
-		Provider string  `yaml:"search_provider"`
-		APIKey   string  `yaml:"api_key"`
-		APIBase  string  `yaml:"api_base"`
-		EngineID string  `yaml:"search_engine_id"`
-		Timeout  float64 `yaml:"timeout"`
-		Retries  *int    `yaml:"max_retries"`
-	} `yaml:"litellm_params"`
+		Provider string  `yaml:"search_provider" json:"search_provider"`
+		APIKey   string  `yaml:"api_key" json:"api_key,omitempty"`
+		APIBase  string  `yaml:"api_base" json:"api_base,omitempty"`
+		EngineID string  `yaml:"search_engine_id" json:"search_engine_id,omitempty"`
+		Timeout  float64 `yaml:"timeout" json:"timeout,omitempty"`
+		Retries  *int    `yaml:"max_retries" json:"max_retries,omitempty"`
+	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
-		Description string `yaml:"description"`
-	} `yaml:"search_tool_info"`
+		Description string `yaml:"description" json:"description,omitempty"`
+	} `yaml:"search_tool_info" json:"search_tool_info"`
+}
+
+var searchProviderNames = map[string]string{
+	"perplexity": "Perplexity",
+	"tavily": "Tavily",
+	"exa_ai": "Exa AI",
+	"linkup": "Linkup",
+	"firecrawl": "Firecrawl",
+	"serper": "Serper",
+	"searxng": "SearXNG",
+	"parallel_ai": "Parallel AI",
+	"searchapi": "SearchAPI.io (Google Search)",
+	"google_pse": "Google PSE",
+	"dataforseo": "DataForSEO",
+	"brave": "Brave Search",
+	"duckduckgo": "DuckDuckGo",
 }
 
 func (config Config) searchFallbacks() map[string][]string {
@@ -71,7 +87,7 @@ func prepareSearchTools(entries []searchToolConfig) ([]runtime.SearchTool, error
 
 func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 	params := entry.Params
-	if strings.TrimSpace(entry.Name) == "" || strings.Contains(entry.Name, "/") ||
+	if strings.TrimSpace(entry.Name) == "" || entry.Name == "*" || strings.Contains(entry.Name, "/") ||
 		params.Timeout < 0 || params.Timeout > 86400 || math.IsNaN(params.Timeout) ||
 		(params.Retries != nil && (*params.Retries < 0 || *params.Retries > 8)) {
 		return runtime.SearchTool{}, fmt.Errorf("invalid name, timeout or max_retries")

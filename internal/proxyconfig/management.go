@@ -26,6 +26,7 @@ type modelRegistry struct {
 	models []deployment
 	credentials map[string]providerCredential
 	router routerPatch
+	searchTools []managedSearchTool
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -48,12 +49,13 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 			return nil, errors.New("could not load dynamic model state")
 		}
 		registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
+		registry.searchTools = state.SearchTools
 	}
-	routes, err := registry.compile(registry.models)
+	config, err := registry.compileConfiguration(registry.models, registry.credentials, registry.router, registry.searchTools)
 	if err != nil {
 		return nil, err
 	}
-	server.ReplaceConfiguredRouting(routes, registry.router.apply(registry.base).searchFallbacks())
+	server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /model/info", registry.info)
@@ -63,6 +65,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("POST /model/update", registry.update)
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)
 	registry.registerCredentialRoutes(mux)
+	registry.registerSearchToolRoutes(mux)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.HandleFunc("POST /config/update", registry.updateRouter)
@@ -79,17 +82,28 @@ func (registry *modelRegistry) compileState(models []deployment, credentials map
 }
 
 func (registry *modelRegistry) compileRouter(models []deployment, credentials map[string]providerCredential, router routerPatch) ([]runtime.Route, error) {
+	config, err := registry.compileConfiguration(models, credentials, router, registry.searchTools)
+	return config.Routes, err
+}
+
+func (registry *modelRegistry) compileConfiguration(models []deployment, credentials map[string]providerCredential, router routerPatch, searchTools []managedSearchTool) (Config, error) {
 	all := append(slices.Clone(registry.base.models), models...)
 	seen := make(map[string]bool, len(all))
 	for _, model := range all {
 		if model.Info.ID == "" || seen[model.Info.ID] {
-			return nil, errors.New("model IDs must be unique and nonempty")
+			return Config{}, errors.New("model IDs must be unique and nonempty")
 		}
 		seen[model.Info.ID] = true
 	}
 	config := router.apply(registry.base)
 	config.credentials = combinedCredentials(config.credentials, credentials)
-	return config.buildRoutes(all)
+	var err error
+	config.SearchTools, err = combineSearchTools(config.SearchTools, searchTools)
+	if err != nil {
+		return Config{}, err
+	}
+	config.Routes, err = config.buildRoutes(all)
+	return config, err
 }
 
 func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) bool {
@@ -261,19 +275,24 @@ func (registry *modelRegistry) applyState(w http.ResponseWriter, models []deploy
 }
 
 func (registry *modelRegistry) publish(w http.ResponseWriter, models []deployment, credentials map[string]providerCredential, router routerPatch) bool {
-	routes, err := registry.compileRouter(models, credentials, router)
+	return registry.publishConfiguration(w, models, credentials, router, registry.searchTools)
+}
+
+func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, models []deployment, credentials map[string]providerCredential, router routerPatch, searchTools []managedSearchTool) bool {
+	config, err := registry.compileConfiguration(models, credentials, router, searchTools)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router}); err != nil {
+		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
 	}
 	registry.models, registry.credentials, registry.router = models, credentials, router
-	registry.server.ReplaceConfiguredRouting(routes, router.apply(registry.base).searchFallbacks())
+	registry.searchTools = searchTools
+	registry.server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
 	return true
 }
 

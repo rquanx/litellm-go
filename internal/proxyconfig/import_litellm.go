@@ -61,7 +61,7 @@ func ImportLiteLLMModels(db *sql.DB, config Config) (int, error) {
 		existing.Credentials = make(map[string]providerCredential)
 	}
 	maps.Copy(existing.Credentials, credentials)
-	registry := modelRegistry{base: config, credentials: existing.Credentials, router: existing.Router}
+	registry := modelRegistry{base: config, credentials: existing.Credentials, router: existing.Router, searchTools: existing.SearchTools}
 	if _, err := registry.compile(models); err != nil {
 		return 0, err
 	}

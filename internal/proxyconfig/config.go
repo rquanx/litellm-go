@@ -27,6 +27,7 @@ type configFile struct {
 		DatabaseURL string `yaml:"database_url"`
 		StoreModels bool `yaml:"store_model_in_db"`
 		DisableSpendLogs bool `yaml:"disable_spend_logs"`
+		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
@@ -82,6 +83,7 @@ type Config struct {
 	Routes    []runtime.Route
 	SearchTools []runtime.SearchTool
 	SearchFallbacks map[string][]string
+	staticSearchTools []searchToolConfig
 	MasterKey string
 	Timeout   time.Duration
 	NumRetries int
@@ -114,6 +116,9 @@ func Load(reader io.Reader) (Config, error) {
 	}
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return Config{}, errors.New("expected one LiteLLM YAML document")
+	}
+	if len(file.SearchTools) == 0 {
+		file.SearchTools = file.General.SearchTools
 	}
 	if len(file.Models)+len(file.SearchTools) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
 		return Config{}, errors.New("model_list or search_tools is required and router settings must use a valid timeout and retry count between zero and eight")
@@ -175,6 +180,7 @@ func Load(reader io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	config.staticSearchTools = file.SearchTools
 	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
 	if err != nil {
 		return Config{}, err

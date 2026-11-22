@@ -23,6 +23,29 @@ type SearchTool struct {
 	LocationCode                 int
 }
 
+// TestSearchTool checks one provider with a small request outside the configured routes.
+func (s *Server) TestSearchTool(ctx context.Context, tool SearchTool) (int, int) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		return 0, http.StatusGatewayTimeout
+	}
+	tool.Timeout = 0
+	payload := searchPayload(tool, map[string]json.RawMessage{"query": json.RawMessage(`"test"`), "max_results": json.RawMessage("1")}, "test", nil)
+	status, _, body := s.callSearch(ctx, tool, payload)
+	if status < 200 || status >= 300 {
+		return 0, status
+	}
+	results, ok := normalizeSearch(tool.Provider, body, payload)
+	if !ok {
+		return 0, http.StatusBadGateway
+	}
+	return len(results), http.StatusOK
+}
+
 func (s *Server) serveSearch(w http.ResponseWriter, r *http.Request) bool {
 	path := strings.TrimPrefix(r.URL.Path, "/v1")
 	if path != "/search" && !strings.HasPrefix(path, "/search/") {
@@ -51,8 +74,11 @@ func (s *Server) serveSearch(w http.ResponseWriter, r *http.Request) bool {
 		}
 	}
 	if list {
-		data := make([]map[string]string, 0, len(s.config.SearchTools))
-		for _, tool := range s.config.SearchTools {
+		s.mu.RLock()
+		tools := s.searchTools
+		s.mu.RUnlock()
+		data := make([]map[string]string, 0, len(tools))
+		for _, tool := range tools {
 			info := map[string]string{"search_tool_name": tool.Name, "search_provider": tool.Provider}
 			if tool.Description != "" {
 				info["description"] = tool.Description
@@ -161,6 +187,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 func (s *Server) searchCandidates(name string, scope []string) []SearchTool {
 	s.mu.RLock()
 	fallbacks := s.searchFallbacks[name]
+	configured := s.searchTools
 	s.mu.RUnlock()
 	var tools []SearchTool
 	for _, group := range append([]string{name}, fallbacks...) {
@@ -168,7 +195,7 @@ func (s *Server) searchCandidates(name string, scope []string) []SearchTool {
 			continue
 		}
 		start := len(tools)
-		for _, tool := range s.config.SearchTools {
+		for _, tool := range configured {
 			if tool.Name == group {
 				tools = append(tools, tool)
 			}
