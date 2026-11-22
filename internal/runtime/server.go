@@ -76,8 +76,9 @@ func (s *Server) ReplaceConfiguredRoutes(routes []Route) {
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	alias, geminiEndpoint := geminiMethod(request.URL.Path)
 	var deployment, deploymentOperation string
-	if s.config.AuthorizeInference {
+	if s.config.AuthorizeInference && geminiEndpoint == "" {
 		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
 		path := request.URL.Path
 		if unversioned := proxyAlias(path); unversioned || path == "/openai/v1/responses/compact" {
@@ -96,7 +97,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			request = copy
 		}
 	}
-	alias, geminiEndpoint := geminiMethod(request.URL.Path)
 	var modelScope []string
 	if s.config.AuthorizeInference && (deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
@@ -144,7 +144,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case request.Method == http.MethodGet && (request.URL.Path == "/healthz" || request.URL.Path == "/health/liveliness"):
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
-		s.models(writer, modelScope)
+		s.models(writer, request, modelScope)
+	case s.config.AuthorizeInference && request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
+		s.modelInfo(writer, strings.TrimPrefix(request.URL.Path, "/v1/models/"), modelScope)
 	case strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
@@ -152,21 +154,75 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func (s *Server) models(writer http.ResponseWriter, modelScope []string) {
+func (s *Server) models(writer http.ResponseWriter, request *http.Request, modelScope []string) {
+	query := request.URL.Query()
+	fallbackType := query.Get("fallback_type")
+	includeMetadata := s.config.AuthorizeInference && query.Get("include_metadata") == "true"
+	if includeMetadata && fallbackType != "" && fallbackType != "general" &&
+		fallbackType != "context_window" && fallbackType != "content_policy" {
+		writeError(writer, http.StatusBadRequest, "invalid_fallback_type", "Invalid fallback type")
+		return
+	}
+	if s.config.AuthorizeInference && query.Get("scope") != "" && query.Get("scope") != "expand" {
+		writeError(writer, http.StatusBadRequest, "invalid_scope", "Invalid model scope")
+		return
+	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	data := make([]map[string]any, 0, len(s.routes)+len(s.configuredRoutes))
-	for alias := range s.routes {
+	for alias, route := range s.routes {
 		if modelAllowed(modelScope, alias) {
-			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "minato-runtime"})
+			data = append(data, s.modelEntry(route, includeMetadata, fallbackType, modelScope))
 		}
 	}
-	for alias := range s.configuredRoutes {
+	for alias, route := range s.configuredRoutes {
 		if _, overridden := s.routes[alias]; !overridden && modelAllowed(modelScope, alias) {
-			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "minato-runtime"})
+			data = append(data, s.modelEntry(route, includeMetadata, fallbackType, modelScope))
 		}
 	}
+	s.mu.RUnlock()
 	writeJSON(writer, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+func (s *Server) modelInfo(writer http.ResponseWriter, alias string, scope []string) {
+	s.mu.RLock()
+	route, ok := s.routes[alias]
+	if !ok {
+		route, ok = s.configuredRoutes[alias]
+	}
+	s.mu.RUnlock()
+	if !ok || !modelAllowed(scope, alias) {
+		writeError(writer, http.StatusNotFound, "model_not_found", "Model not found")
+		return
+	}
+	writeJSON(writer, http.StatusOK, s.modelEntry(route, false, "", scope))
+}
+
+func (s *Server) modelEntry(route Route, metadata bool, fallbackType string, scope []string) map[string]any {
+	entry := map[string]any{"id": route.Alias, "object": "model", "owned_by": "minato-runtime"}
+	if s.config.AuthorizeInference {
+		entry["created"] = 1677610602
+		if len(route.Candidates) > 0 && route.Candidates[0].Provider != "" {
+			entry["owned_by"] = route.Candidates[0].Provider
+		}
+	}
+	if metadata {
+		candidates := route.Candidates
+		switch fallbackType {
+		case "context_window":
+			candidates = route.ContextFallback
+		case "content_policy":
+			candidates = route.PolicyFallback
+		}
+		fallbacks := make([]string, 0)
+		for _, candidate := range candidates {
+			name := candidate.RoutingGroup
+			if name != "" && name != route.Alias && modelAllowed(scope, name) && !slices.Contains(fallbacks, name) {
+				fallbacks = append(fallbacks, name)
+			}
+		}
+		entry["metadata"] = map[string]any{"fallbacks": fallbacks}
+	}
+	return entry
 }
 
 func (s *Server) route(writer http.ResponseWriter, request *http.Request) {

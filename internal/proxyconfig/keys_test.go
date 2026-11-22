@@ -56,6 +56,11 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	send(handler, "POST", "/v1/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
 	send(handler, "GET", "/models", "unknown", "", 401)
 	send(handler, "GET", "/models", generated.Key, "", 200)
+	send(handler, "GET", "/models/restricted", generated.Key, "", 404)
+	model := send(handler, "GET", "/v1/models/permitted", generated.Key, "", 200)
+	if !strings.Contains(model, `"created":1677610602`) {
+		t.Fatalf("individual model discovery response missing creation time: %s", model)
+	}
 	send(handler, "POST", "/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
 	send(handler, "POST", "/engines/restricted/chat/completions", generated.Key, `{"model":"permitted","messages":[]}`, 403)
 	azureRequest := httptest.NewRequest("POST", "/openai/deployments/restricted/chat/completions?api-version=2024-10-21",
