@@ -170,13 +170,34 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 		ctx, cancel = context.WithTimeout(ctx, tool.Timeout)
 		defer cancel()
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, tool.URL, bytes.NewReader(payload))
+	method := http.MethodPost
+	var bodyReader io.Reader = bytes.NewReader(payload)
+	if tool.Provider == "searxng" {
+		method, bodyReader = http.MethodGet, nil
+	}
+	request, err := http.NewRequestWithContext(ctx, method, tool.URL, bodyReader)
 	if err != nil {
 		return http.StatusBadGateway, nil, nil
 	}
-	if tool.Provider == "exa_ai" {
+	if tool.Provider == "searxng" {
+		var params map[string]json.RawMessage
+		if json.Unmarshal(payload, &params) != nil {
+			return http.StatusBadGateway, nil, nil
+		}
+		query := request.URL.Query()
+		for key, value := range params {
+			var decoded string
+			if json.Unmarshal(value, &decoded) == nil {
+				query.Set(key, decoded)
+			} else {
+				query.Set(key, string(value))
+			}
+		}
+		request.URL.RawQuery = query.Encode()
+	}
+	if tool.Provider == "exa_ai" || tool.Provider == "serper" {
 		request.Header.Set("X-API-Key", tool.APIKey)
-	} else {
+	} else if tool.APIKey != "" {
 		request.Header.Set("Authorization", "Bearer "+tool.APIKey)
 	}
 	request.Header.Set("Content-Type", "application/json")

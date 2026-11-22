@@ -46,6 +46,35 @@ func searchPayload(provider string, input map[string]json.RawMessage, query stri
 	case "firecrawl":
 		copyParam("max_results", "limit")
 		extras = []string{"limit", "country", "sources", "categories", "tbs", "location", "timeout", "ignoreInvalidURLs", "scrapeOptions"}
+	case "serper":
+		delete(params, "query")
+		copyParam("max_results", "num")
+		var country string
+		if json.Unmarshal(input["country"], &country) == nil && country != "" {
+			params["gl"], _ = json.Marshal(strings.ToLower(country))
+		}
+		var domains []string
+		if json.Unmarshal(input["search_domain_filter"], &domains) == nil && len(domains) != 0 {
+			query = "(" + query + ") (site:" + strings.Join(domains, " OR site:") + ")"
+		}
+		params["q"], _ = json.Marshal(query)
+		extras = []string{"gl", "hl", "location", "num", "page", "tbs", "autocorrect"}
+	case "searxng":
+		delete(params, "query")
+		params["q"] = queryText
+		params["format"] = json.RawMessage(`"json"`)
+		var country string
+		if json.Unmarshal(input["country"], &country) == nil && country != "" {
+			language := strings.ToLower(country)
+			switch language {
+			case "us", "uk":
+				language = "en"
+			case "jp":
+				language = "ja"
+			}
+			params["language"], _ = json.Marshal(language)
+		}
+		extras = []string{"categories", "engines", "language", "pageno", "time_range", "safesearch"}
 	}
 	for _, key := range extras {
 		copyParam(key, key)
@@ -86,11 +115,14 @@ type searchProviderResult struct {
 	Type          string  `json:"type"`
 	Markdown      string  `json:"markdown"`
 	Description   string  `json:"description"`
+	Link          string  `json:"link"`
+	Pubdate       *string `json:"pubdate"`
 }
 
 func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 	var payload *struct {
 		Results []searchProviderResult `json:"results"`
+		Organic []searchProviderResult `json:"organic"`
 		Data    json.RawMessage        `json:"data"`
 	}
 	if json.Unmarshal(body, &payload) != nil || payload == nil {
@@ -98,6 +130,9 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 	}
 	if provider == "firecrawl" {
 		return normalizeFirecrawlSearch(payload.Data)
+	}
+	if provider == "serper" {
+		payload.Results = payload.Organic
 	}
 	results := make([]searchResult, 0, len(payload.Results))
 	for _, item := range payload.Results {
@@ -107,6 +142,13 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 			result.Snippet, result.Date, result.LastUpdated = item.Content, nil, nil
 		case "exa_ai":
 			result.Snippet, result.Date, result.LastUpdated = item.Text, item.PublishedDate, nil
+		case "serper":
+			result.URL, result.LastUpdated = item.Link, nil
+		case "searxng":
+			result.Snippet, result.Date, result.LastUpdated = item.Content, item.PublishedDate, nil
+			if result.Date == nil || *result.Date == "" {
+				result.Date = item.Pubdate
+			}
 		case "linkup":
 			if item.Type != "" && item.Type != "text" && item.Type != "image" {
 				continue

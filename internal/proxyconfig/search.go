@@ -56,6 +56,10 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		defaultBase, baseEnv, keyEnv = "https://api.linkup.so/v1", "LINKUP_API_BASE", "LINKUP_API_KEY"
 	case "firecrawl":
 		defaultBase, baseEnv, keyEnv = "https://api.firecrawl.dev/v2", "FIRECRAWL_API_BASE", "FIRECRAWL_API_KEY"
+	case "serper":
+		defaultBase, baseEnv, keyEnv = "https://google.serper.dev", "SERPER_API_BASE", "SERPER_API_KEY"
+	case "searxng":
+		baseEnv, keyEnv = "SEARXNG_API_BASE", "SEARXNG_API_KEY"
 	default:
 		return runtime.SearchTool{}, fmt.Errorf("unsupported search_provider %q", params.Provider)
 	}
@@ -84,7 +88,7 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 	if key == "" {
 		key = os.Getenv(keyEnv)
 	}
-	if key == "" {
+	if key == "" && params.Provider != "searxng" {
 		return runtime.SearchTool{}, fmt.Errorf("missing search API key (%s)", keyEnv)
 	}
 	return runtime.SearchTool{Name: entry.Name, Provider: params.Provider, URL: target.String(), APIKey: key,
