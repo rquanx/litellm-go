@@ -50,6 +50,10 @@ func geminiUsage(payload map[string]any) any {
 		result["input_tokens_details"] = map[string]any{"cached_tokens": cached}
 	}
 	if thoughts := raw["thoughtsTokenCount"]; thoughts != nil {
+		if count, ok := thoughts.(float64); ok {
+			candidates, _ := raw["candidatesTokenCount"].(float64)
+			result["output_tokens"] = candidates + count
+		}
 		result["output_tokens_details"] = map[string]any{"reasoning_tokens": thoughts}
 	}
 	return result
