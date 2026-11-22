@@ -25,7 +25,7 @@ func interactionSuffix(path string) (string, bool) {
 	return "", false
 }
 
-func (s *Server) interactionCandidate(alias, deployment string, scope []string) (Candidate, bool) {
+func (s *Server) geminiResourceCandidate(alias, deployment string, scope []string) (Candidate, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var selected Candidate
@@ -114,7 +114,7 @@ func (s *Server) serveInteraction(w http.ResponseWriter, r *http.Request, suffix
 		}
 		alias = r.URL.Query().Get("model")
 	}
-	candidate, ok := s.interactionCandidate(alias, deployment, scope)
+	candidate, ok := s.geminiResourceCandidate(alias, deployment, scope)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "model_required", "Select a configured Gemini interaction deployment")
 		return

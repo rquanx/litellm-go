@@ -37,6 +37,7 @@ func vectorStoreOperation(path, method string, deployment *string) (string, stri
 	parts := strings.Split(strings.TrimPrefix(path, vectorStorePath+"/"), "/")
 	id, err := url.PathUnescape(parts[0])
 	if err == nil {
+		id = strings.TrimPrefix(id, geminiStorePrefix)
 		id, err = nativeResourceID(id, stores, deployment)
 	}
 	if err != nil {
@@ -90,6 +91,8 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 	if alias == "" {
 		alias = query.Get("target_model_names")
 	}
+	provider := query.Get("custom_llm_provider")
+	var fields map[string]any
 	var body []byte
 	contentType := ""
 	if request.Method == http.MethodPost {
@@ -119,10 +122,29 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		body, _ = json.Marshal(payload.fields)
+		fields = payload.fields
+		if requested, _ := fields["custom_llm_provider"].(string); requested != "" {
+			provider = requested
+		}
+		delete(fields, "custom_llm_provider")
+		body, _ = json.Marshal(fields)
 		contentType = "application/json"
 	}
-	candidate, ok := s.resourceCandidate(alias, deployment, scope)
+	if provider == "gemini" {
+		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
+			s.geminiVectorStore(w, request, candidate, family, path, fields)
+			return
+		}
+		writeError(w, http.StatusBadRequest, "model_required", "Select one configured Gemini vector store deployment")
+		return
+	}
+	candidate, ok := s.selectResourceCandidate(alias, deployment, provider, scope)
+	if !ok && provider == "" && (alias != "" || deployment != "") {
+		if gemini, found := s.geminiResourceCandidate(alias, deployment, scope); found {
+			s.geminiVectorStore(w, request, gemini, family, path, fields)
+			return
+		}
+	}
 	if !ok {
 		writeError(w, http.StatusBadRequest, "model_required", "Select one configured vector store deployment")
 		return
