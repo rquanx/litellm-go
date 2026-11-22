@@ -22,6 +22,10 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer provider-fixture" || r.Header.Get("OpenAI-Beta") != "assistants=v2" {
 				t.Error("OpenAI did not receive its provider credential and beta version")
 			}
+		case "/fixture/v1/models":
+			if r.Header.Get("X-Api-Key") != "provider-fixture" || r.Header.Get("Anthropic-Version") != "2023-06-01" {
+				t.Error("Anthropic did not receive its provider key and API version")
+			}
 		default:
 			t.Errorf("unexpected upstream path %q", r.URL.Path)
 		}
@@ -34,6 +38,8 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 	t.Setenv("COHERE_API_KEY", "provider-fixture")
 	t.Setenv("OPENAI_API_BASE", origin.URL+"/fixture")
 	t.Setenv("OPENAI_API_KEY", "provider-fixture")
+	t.Setenv("ANTHROPIC_API_BASE", origin.URL+"/fixture")
+	t.Setenv("ANTHROPIC_API_KEY", "provider-fixture")
 	server := NewServer(Config{Token: "fixture-master", AuthorizeInference: true,
 		AuthorizeKey: func(token string) ([]string, bool) { return []string{"limited"}, token == "fixture-limited" }})
 	for _, tc := range []struct {
@@ -46,6 +52,7 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 		{"/cohere/v2/models", "fixture-limited", 403},
 		{"/openai/v1/threads", "fixture-master", 200},
 		{"/openai_passthrough/v1/threads", "fixture-master", 200},
+		{"/anthropic/v1/models", "fixture-master", 200},
 	} {
 		r := httptest.NewRequest(http.MethodGet, tc.path, nil)
 		if tc.token != "" {

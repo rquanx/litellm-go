@@ -22,6 +22,7 @@ var providerPassThroughRoutes = map[string]providerPassThrough{
 	"eu.assemblyai": {"https://api.eu.assemblyai.com", "ASSEMBLYAI_EU_API_BASE", []string{"ASSEMBLYAI_EU_API_KEY", "ASSEMBLYAI_API_KEY"}},
 	"cursor":        {"https://api.cursor.com", "CURSOR_API_BASE", []string{"CURSOR_API_KEY"}},
 	"openai":        {"https://api.openai.com", "OPENAI_API_BASE", []string{"OPENAI_API_KEY"}},
+	"anthropic":     {"https://api.anthropic.com", "ANTHROPIC_API_BASE", []string{"ANTHROPIC_API_KEY"}},
 }
 
 func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request) bool {
@@ -64,6 +65,9 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		return true
 	}
 	base := os.Getenv(config.baseEnv)
+	if base == "" && provider == "anthropic" {
+		base = os.Getenv("ANTHROPIC_BASE_URL")
+	}
 	if base == "" {
 		base = config.base
 	}
@@ -80,6 +84,12 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		route.Headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(key+":")))
 	case "assemblyai", "eu.assemblyai":
 		route.Headers.Set("Authorization", key)
+	case "anthropic":
+		route.ForwardHeaders = true
+		route.Headers.Set("X-Api-Key", key)
+		if r.Header.Get("Anthropic-Version") == "" {
+			route.Headers.Set("Anthropic-Version", "2023-06-01")
+		}
 	case "openai":
 		route.Headers.Set("Authorization", "Bearer "+key)
 		route.Headers.Set("Api-Key", key)
