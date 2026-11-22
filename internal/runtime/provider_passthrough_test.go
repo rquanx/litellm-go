@@ -1,10 +1,45 @@
 package runtime
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestVLLMPassThroughMapsScopedAliases(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer provider-fixture" ||
+			json.NewDecoder(r.Body).Decode(&body) != nil || body["model"] != "provider/model" {
+			t.Error("vLLM did not receive the resolved deployment and model")
+		}
+		w.Write([]byte(`{"fixture":true}`))
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "fixture-master", AuthorizeInference: true,
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"allowed"}, token == "fixture-limited" },
+		Routes: []Route{{Alias: "allowed", Candidates: []Candidate{{DeploymentID: "id", RoutingGroup: "allowed",
+			Provider: "hosted_vllm", APIBase: origin.URL + "/v1", APIKey: "provider-fixture", ModelID: "provider/model"}}}},
+	})
+	for _, tc := range []struct {
+		path, model string
+		status int
+	}{
+		{"/vllm/v1/chat/completions", "allowed", 200},
+		{"/vllm/v1/chat/completions", "denied", 403},
+		{"/vllm/admin/control", "allowed", 403},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(`{"model":"`+tc.model+`"}`))
+		req.Header.Set("Authorization", "Bearer fixture-limited")
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+		if w.Code != tc.status {
+			t.Fatalf("%s returned %d, want %d", tc.path, w.Code, tc.status)
+		}
+	}
+}
 
 func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
