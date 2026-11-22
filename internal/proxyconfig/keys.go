@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 )
@@ -17,13 +19,31 @@ type virtualKey struct {
 	Alias   string     `json:"key_alias,omitempty"`
 	Models  []string   `json:"models"`
 	Expires *time.Time `json:"expires,omitempty"`
+	TeamID  string     `json:"team_id,omitempty"`
+}
+
+type accessState struct {
+	Keys  map[string]virtualKey `json:"keys"`
+	Teams map[string]team       `json:"teams"`
+}
+
+func (state *accessState) UnmarshalJSON(payload []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
+		return errors.New("invalid access state")
+	}
+	if _, exists := fields["keys"]; !exists {
+		return json.Unmarshal(payload, &state.Keys)
+	}
+	type stateJSON accessState
+	return json.Unmarshal(payload, (*stateJSON)(state))
 }
 
 type KeyRegistry struct {
 	master string
 	store  stateStore
 	mu     sync.RWMutex
-	keys   map[string]virtualKey
+	state  accessState
 }
 
 func LoadKeys(master, path string) (*KeyRegistry, error) {
@@ -38,11 +58,13 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 	if master == "" {
 		return nil, errors.New("virtual keys require a proxy master key")
 	}
-	registry := &KeyRegistry{master: master, store: store, keys: make(map[string]virtualKey)}
+	registry := &KeyRegistry{master: master, store: store, state: accessState{
+		Keys: make(map[string]virtualKey), Teams: make(map[string]team),
+	}}
 	if store == nil {
 		return registry, nil
 	}
-	if err := store.load(&registry.keys); err != nil || registry.keys == nil {
+	if err := store.load(&registry.state); err != nil || registry.state.Keys == nil || registry.state.Teams == nil {
 		return nil, errors.New("invalid virtual key state")
 	}
 	return registry, nil
@@ -53,9 +75,44 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 		return nil, false
 	}
 	registry.mu.RLock()
-	key, exists := registry.keys[keyDigest(token)]
-	registry.mu.RUnlock()
-	return key.Models, exists && (key.Expires == nil || time.Now().Before(*key.Expires))
+	defer registry.mu.RUnlock()
+	key, exists := registry.state.Keys[keyDigest(token)]
+	if !exists || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
+		return nil, false
+	}
+	if key.TeamID == "" {
+		return unrestrictedScope(key.Models), true
+	}
+	owner, exists := registry.state.Teams[key.TeamID]
+	if !exists || owner.Blocked {
+		return nil, false
+	}
+	return intersectScopes(key.Models, owner.Models), true
+}
+
+func intersectScopes(key, team []string) []string {
+	key = unrestrictedScope(key)
+	team = unrestrictedScope(team)
+	switch {
+	case key == nil || slices.Contains(key, "all-team-models"):
+		return team
+	case team == nil:
+		return key
+	}
+	scope := make([]string, 0, len(key))
+	for _, model := range key {
+		if slices.Contains(team, model) {
+			scope = append(scope, model)
+		}
+	}
+	return scope
+}
+
+func unrestrictedScope(models []string) []string {
+	if len(models) == 0 || slices.Contains(models, "*") {
+		return nil
+	}
+	return models
 }
 
 func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
@@ -63,6 +120,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("POST /key/generate", registry.generate)
 	mux.HandleFunc("GET /key/info", registry.info)
 	mux.HandleFunc("POST /key/delete", registry.remove)
+	registry.registerTeamRoutes(mux)
 	mux.Handle("/", next)
 	return mux
 }
@@ -83,12 +141,13 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		Alias    string   `json:"key_alias"`
 		Duration string   `json:"duration"`
 		Models   []string `json:"models"`
+		TeamID   string   `json:"team_id"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key configuration")
 		return
 	}
-	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...)}
+	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID}
 	if input.Duration != "" {
 		duration, err := time.ParseDuration(input.Duration)
 		if err != nil || duration <= 0 {
@@ -103,9 +162,16 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 	token := "sk-" + hex.EncodeToString(random[:])
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	next := maps.Clone(registry.keys)
+	if input.TeamID != "" {
+		if _, exists := registry.state.Teams[input.TeamID]; !exists {
+			modelError(w, http.StatusBadRequest, "Team not found")
+			return
+		}
+	}
+	next := registry.state
+	next.Keys = maps.Clone(next.Keys)
 	digest := keyDigest(token)
-	next[digest] = key
+	next.Keys[digest] = key
 	if registry.apply(w, next) {
 		modelJSON(w, http.StatusOK, map[string]any{"key": token, "token_id": digest, "expires": key.Expires, "key_alias": key.Alias})
 	}
@@ -117,7 +183,7 @@ func (registry *KeyRegistry) info(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.URL.Query().Get("key")
 	registry.mu.RLock()
-	key, exists := registry.keys[keyDigest(token)]
+	key, exists := registry.state.Keys[keyDigest(token)]
 	registry.mu.RUnlock()
 	if !exists {
 		modelError(w, http.StatusNotFound, "Virtual key not found")
@@ -139,12 +205,13 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	next := maps.Clone(registry.keys)
+	next := registry.state
+	next.Keys = maps.Clone(next.Keys)
 	removed := 0
 	for _, token := range input.Keys {
 		digest := keyDigest(token)
-		if _, exists := next[digest]; exists {
-			delete(next, digest)
+		if _, exists := next.Keys[digest]; exists {
+			delete(next.Keys, digest)
 			removed++
 		}
 	}
@@ -153,14 +220,14 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (registry *KeyRegistry) apply(w http.ResponseWriter, next map[string]virtualKey) bool {
+func (registry *KeyRegistry) apply(w http.ResponseWriter, next accessState) bool {
 	if registry.store != nil {
 		if err := registry.store.save(next); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
 	}
-	registry.keys = next
+	registry.state = next
 	return true
 }
 

@@ -53,11 +53,11 @@ func ImportLiteLLMModels(db *sql.DB, config Config) (int, error) {
 
 func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 	store := &postgresState{db: db, name: "keys"}
-	var existing map[string]virtualKey
+	existing := accessState{Keys: make(map[string]virtualKey), Teams: make(map[string]team)}
 	if err := store.load(&existing); err != nil {
 		return 0, errors.New("could not read Go key state")
 	}
-	if len(existing) != 0 {
+	if len(existing.Keys) != 0 {
 		return 0, errors.New("Go key state already contains credentials")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -87,7 +87,8 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 	if len(keys) == 0 {
 		return 0, nil
 	}
-	if err := store.save(keys); err != nil {
+	existing.Keys = keys
+	if err := store.save(existing); err != nil {
 		return 0, errors.New("could not commit imported virtual keys")
 	}
 	return len(keys), nil

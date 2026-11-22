@@ -61,7 +61,7 @@ func (s *Server) resourceCandidate(alias, deployment string, scope []string) (Ca
 			continue
 		}
 		for _, candidate := range route.Candidates {
-			if (candidate.Provider != "openai" && candidate.Provider != "azure") || candidate.DeploymentID == "" {
+			if !candidateAllowed(scope, candidate) || (candidate.Provider != "openai" && candidate.Provider != "azure") || candidate.DeploymentID == "" {
 				continue
 			}
 			if deployment != "" {

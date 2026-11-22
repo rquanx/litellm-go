@@ -219,7 +219,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 	eligible := make([]Candidate, 0, len(route.Candidates))
 	for _, candidate := range route.Candidates {
-		if servesEndpoint(endpoint, candidate.Endpoint) {
+		if candidateAllowed(modelScope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) {
 			eligible = append(eligible, candidate)
 		}
 	}
@@ -722,7 +722,12 @@ func inferenceCredential(request *http.Request) string {
 }
 
 func modelAllowed(scope []string, alias string) bool {
-	return len(scope) == 0 || slices.Contains(scope, "*") || slices.Contains(scope, alias)
+	// A nil scope is unrestricted. An empty intersection denies every model.
+	return scope == nil || slices.Contains(scope, "*") || slices.Contains(scope, alias)
+}
+
+func candidateAllowed(scope []string, candidate Candidate) bool {
+	return candidate.RoutingGroup == "" || modelAllowed(scope, candidate.RoutingGroup)
 }
 
 func retryableStatus(status int) bool {

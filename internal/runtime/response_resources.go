@@ -81,7 +81,7 @@ func (s *Server) responseDeployment(id, provider string, scope []string) (Candid
 			continue
 		}
 		for _, candidate := range route.Candidates {
-			if candidate.DeploymentID == id && candidate.Provider == provider && candidate.Endpoint == "responses" {
+			if candidateAllowed(scope, candidate) && candidate.DeploymentID == id && candidate.Provider == provider && candidate.Endpoint == "responses" {
 				return candidate, true
 			}
 		}

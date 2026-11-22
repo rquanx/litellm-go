@@ -46,6 +46,8 @@ Standalone mode supports dynamic deployments through `/model/info`, `/model/new`
 
 The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. Use `--key-state PATH` to persist hashed virtual keys, scopes and expiry. Use distinct paths for the model and key state files.
 
+The master key can also create teams at `/team/new` and bind new virtual keys with `team_id`. Bound keys use the intersection of their own model list and the team's list. A key with `models: ["all-team-models"]` follows the team's model list. Changes made through `/team/update`, `/team/block` and `/team/unblock` apply to subsequent requests. `/team/delete` revokes the team's keys, including when another team is later created with the same ID.
+
 For PostgreSQL storage, set `general_settings.database_url` and omit the local state flags. The Go proxy uses its own `minato_proxy_state` table, and encrypts model state using `MINATO_RUNTIME_STATE_KEY` or the proxy master key. On a copy of a LiteLLM database, `--import-litellm-models` copies compatible model deployments into empty Go state. Run `--import-litellm-keys` separately to import model-scoped keys without changing the token presented by clients. Preserve `LITELLM_SALT_KEY` during model import if the source deployment used a separate salt.
 
 ```yaml
