@@ -25,6 +25,7 @@ var endpoints = map[string]endpointSpec{
 	"gemini-generate":    {"", "gemini", false},
 	"gemini-stream":      {"", "gemini", true},
 	"google-embeddings":  {"", "embeddings", false},
+	"cohere-embeddings":  {"", "embeddings", false},
 	"bedrock-converse":   {"", "bedrock", true},
 	"bedrock-embeddings": {"", "embeddings", false},
 }

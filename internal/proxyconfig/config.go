@@ -527,13 +527,16 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if rerankProvider(provider) {
 		endpoint = "rerank"
 	}
+	if (provider == "cohere" || provider == "cohere_chat") && (entry.Info.Mode == "embedding" || strings.HasPrefix(model, "embed-")) {
+		endpoint = "cohere-embeddings"
+	}
+	if provider == "voyage" && entry.Info.Mode == "embedding" {
+		endpoint = "embeddings"
+	}
 	if supportsOpenAITransport(provider) || provider == "azure" {
 		if inferred := openAIModelEndpoint(entry.Info.Mode, model); inferred != "" {
 			endpoint = inferred
 		}
-	}
-	if rerankProvider(provider) && endpoint != "rerank" {
-		return runtime.Candidate{}, errors.New("this provider requires a rerank endpoint")
 	}
 	if len(entry.Info.Endpoints) == 1 {
 		configured := runtime.EndpointFromPath(entry.Info.Endpoints[0])
@@ -542,6 +545,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 		if configured == "embeddings" && (endpoint == "bedrock-embeddings" || endpoint == "google-embeddings") {
 			configured = endpoint
+		}
+		if configured == "embeddings" && (provider == "cohere" || provider == "cohere_chat") {
+			configured = "cohere-embeddings"
 		}
 		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" &&
 			!(provider == "vertex_ai" && configured == "rerank")) ||

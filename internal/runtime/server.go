@@ -804,6 +804,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	if targetEndpoint == "rerank" && candidate.Bedrock != nil {
 		payload = bedrockRerankRequest(payload, candidate.Bedrock.Region)
 	}
+	if targetEndpoint == "cohere-embeddings" {
+		payload = cohereEmbeddingRequest(payload)
+	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
 }
@@ -862,6 +865,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
 	} else if candidate.Endpoint == "google-embeddings" {
 		target = geminiTarget(candidate, "google-embeddings")
+	} else if candidate.Endpoint == "cohere-embeddings" {
+		target = cohereEmbeddingTarget(candidate.APIBase)
 	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(encoded))
 	if err != nil {
@@ -940,6 +945,9 @@ func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias st
 		}
 		encoded, _ := json.Marshal(chat)
 		return encoded
+	}
+	if candidateEndpoint == "cohere-embeddings" {
+		return cohereEmbeddingResponse(body, alias)
 	}
 	if isGeminiEndpoint(candidateEndpoint) && isTextEndpoint(endpoint) {
 		var native map[string]any
