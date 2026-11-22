@@ -1,0 +1,118 @@
+{
+  "abliteration": {
+    "api_key_env": "ABLITERATION_API_KEY",
+    "base_url": "https://api.abliteration.ai/v1"
+  },
+  "aihubmix": {
+    "api_base_env": "AIHUBMIX_API_BASE",
+    "api_key_env": "AIHUBMIX_API_KEY",
+    "base_url": "https://aihubmix.com/v1"
+  },
+  "apertis": {
+    "api_key_env": "STIMA_API_KEY",
+    "base_url": "https://api.stima.tech/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "assemblyai": {
+    "api_key_env": "ASSEMBLYAI_API_KEY",
+    "base_url": "https://llm-gateway.assemblyai.com/v1"
+  },
+  "charity_engine": {
+    "api_key_env": "CHARITY_ENGINE_API_KEY",
+    "base_url": "https://api.charityengine.services/remotejobs/v2/inference",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "chutes": {
+    "api_key_env": "CHUTES_API_KEY",
+    "base_url": "https://llm.chutes.ai/v1/",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "crusoe": {
+    "api_base_env": "CRUSOE_API_BASE",
+    "api_key_env": "CRUSOE_API_KEY",
+    "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "gmi": {
+    "api_key_env": "GMI_API_KEY",
+    "base_url": "https://api.gmi-serving.com/v1"
+  },
+  "helicone": {
+    "api_key_env": "HELICONE_API_KEY",
+    "base_url": "https://ai-gateway.helicone.ai/"
+  },
+  "llamagate": {
+    "api_key_env": "LLAMAGATE_API_KEY",
+    "base_url": "https://api.llamagate.dev/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "nano-gpt": {
+    "api_key_env": "NANOGPT_API_KEY",
+    "base_url": "https://nano-gpt.com/api/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "poe": {
+    "api_key_env": "POE_API_KEY",
+    "base_url": "https://api.poe.com/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "publicai": {
+    "api_base_env": "PUBLICAI_API_BASE",
+    "api_key_env": "PUBLICAI_API_KEY",
+    "base_class": "openai_gpt",
+    "base_url": "https://api.publicai.co/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "convert_content_list_to_string": true
+    }
+  },
+  "sarvam": {
+    "api_key_env": "SARVAM_API_KEY",
+    "base_class": "openai_gpt",
+    "base_url": "https://api.sarvam.ai/v1",
+    "headers": {
+      "api-subscription-key": "{api_key}"
+    },
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "scaleway": {
+    "api_key_env": "SCW_SECRET_KEY",
+    "base_url": "https://api.scaleway.ai/v1"
+  },
+  "synthetic": {
+    "api_key_env": "SYNTHETIC_API_KEY",
+    "base_url": "https://api.synthetic.new/openai/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  },
+  "veniceai": {
+    "api_key_env": "VENICE_AI_API_KEY",
+    "base_url": "https://api.venice.ai/api/v1"
+  },
+  "xiaomi_mimo": {
+    "api_key_env": "XIAOMI_MIMO_API_KEY",
+    "base_url": "https://api.xiaomimimo.com/v1",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
+  }
+}

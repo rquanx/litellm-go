@@ -16,6 +16,13 @@ type Candidate struct {
 	APIVersion       string            `json:"apiVersion,omitempty"`
 	Provider         string            `json:"provider,omitempty"`
 	DeploymentID     string            `json:"deploymentId,omitempty"`
+	ParamMappings    map[string]string `json:"paramMappings,omitempty"`
+	RelativeAPIBase  bool              `json:"relativeApiBase,omitempty"`
+	TextOnly         bool              `json:"textOnly,omitempty"`
+	RoutingGroup     string            `json:"routingGroup,omitempty"`
+	Weight           *float64          `json:"weight,omitempty"`
+	RPM              *int              `json:"rpm,omitempty"`
+	TPM              *int              `json:"tpm,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 }
 

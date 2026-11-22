@@ -9,7 +9,30 @@ import (
 //go:embed openai-compatible.json
 var openAICompatibleJSON []byte
 
+//go:embed openai-provider-settings.json
+var openAIProviderSettingsJSON []byte
+
 var openAICompatibleProviders = loadProviderNames()
+var openAIProviderSettings = loadProviderSettings()
+
+type providerSettings struct {
+	BaseURL       string            `json:"base_url"`
+	APIKeyEnv     string            `json:"api_key_env"`
+	APIBaseEnv    string            `json:"api_base_env"`
+	ParamMappings map[string]string `json:"param_mappings"`
+	Headers       map[string]string `json:"headers"`
+	Special       struct {
+		TextOnly bool `json:"convert_content_list_to_string"`
+	} `json:"special_handling"`
+}
+
+func loadProviderSettings() map[string]providerSettings {
+	var result map[string]providerSettings
+	if err := json.Unmarshal(openAIProviderSettingsJSON, &result); err != nil {
+		panic("invalid embedded LiteLLM provider settings")
+	}
+	return result
+}
 
 func loadProviderNames() []string {
 	var names []string
@@ -26,6 +49,7 @@ func supportsOpenAITransport(provider string) bool {
 	case "chatgpt", "github_copilot":
 		return false
 	default:
-		return slices.Contains(openAICompatibleProviders, provider)
+		_, configured := openAIProviderSettings[provider]
+		return configured || slices.Contains(openAICompatibleProviders, provider)
 	}
 }

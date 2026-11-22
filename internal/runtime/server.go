@@ -29,6 +29,7 @@ type Config struct {
 	MaxConcurrent      int
 	NumRetries         int
 	AuthorizeKey       func(string) ([]string, bool)
+	RoutingStrategy    string
 }
 
 type Server struct {
@@ -37,6 +38,8 @@ type Server struct {
 	routes map[string]Route
 	configuredRoutes map[string]Route
 	sem    chan struct{}
+	trafficMu sync.Mutex
+	deploymentTraffic map[string]int
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -225,6 +228,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	route.Candidates = eligible
+	s.orderDeployments(route.Candidates)
 	if previous, ok := input["previous_response_id"].(string); ok && s.config.AuthorizeInference && endpoint == "responses" {
 		provider, deployment, original, wrapped := unwrapResponseID(previous)
 		if wrapped {
@@ -265,7 +269,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			var payload map[string]any
 			if json.Unmarshal(responseBody, &payload) == nil {
 				attempt["usage"] = payload["usage"]
-				if isGeminiEndpoint(endpoint) {
+				if isGeminiEndpoint(candidate.Endpoint) {
 					attempt["usage"] = geminiUsage(payload)
 				}
 				if candidate.Endpoint == "anthropic-messages" && endpoint != "anthropic-count-tokens" {
@@ -363,6 +367,9 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 					return
 				}
 				if readErr != nil {
+					if readErr == io.EOF && isGeminiEndpoint(candidate.Endpoint) && isTextEndpoint(endpoint) {
+						writeStreamFrame(writer, flush, convert(nil))
+					}
 					break
 				}
 			}
@@ -407,6 +414,15 @@ func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []by
 }
 
 func streamConverter(endpoint, upstream, alias string, input map[string]any, limit int64) func([]byte) []byte {
+	if isGeminiEndpoint(upstream) && isTextEndpoint(endpoint) {
+		options, _ := input["stream_options"].(map[string]any)
+		bridge := newGeminiChatStream(alias, endpoint == "responses" || inputBool(options, "include_usage"))
+		if endpoint == "responses" {
+			responses := &chatResponsesStream{alias: alias, limit: limit}
+			return func(frame []byte) []byte { return responses.convert(bridge.convert(frame)) }
+		}
+		return bridge.convert
+	}
 	if upstream == "anthropic-messages" && isTextEndpoint(endpoint) {
 		options, _ := input["stream_options"].(map[string]any)
 		bridge := newAnthropicChatStream(alias, endpoint == "responses" || inputBool(options, "include_usage"))
@@ -487,6 +503,15 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 		}
 		payload = chatToAnthropicRequest(payload)
 	}
+	if isGeminiEndpoint(targetEndpoint) && isTextEndpoint(endpoint) {
+		if endpoint == "responses" {
+			payload = responsesToChat(payload)
+		}
+		payload = chatToGemini(payload)
+	}
+	if targetEndpoint == "chat-completions" {
+		applyProviderChatSettings(payload, candidate)
+	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
 }
@@ -497,7 +522,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	release := func() { <-s.sem }
+	finished := s.trackDeployment(candidate)
+	release := func() {
+		finished()
+		<-s.sem
+	}
 	encoded, contentType, err := encodePayload(payload, endpoint, candidate, stream)
 	if err != nil {
 		release()
@@ -512,8 +541,17 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		base = strings.TrimSuffix(base, "/v1")
 	}
 	target := base + path
+	if candidate.RelativeAPIBase {
+		target = strings.TrimRight(candidate.APIBase, "/") + strings.TrimPrefix(path, "/v1")
+	}
 	if isGeminiEndpoint(endpoint) {
 		target = geminiURL(candidate.APIBase, candidate.ModelID, endpoint)
+	} else if isGeminiEndpoint(candidate.Endpoint) {
+		geminiEndpoint := "gemini-generate"
+		if stream {
+			geminiEndpoint = "gemini-stream"
+		}
+		target = geminiURL(candidate.APIBase, candidate.ModelID, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
 		target = azureTarget(candidate.APIBase, candidate.ModelID, candidate.Endpoint, candidate.APIVersion)
 	}
@@ -572,6 +610,18 @@ func (body *releaseBody) Close() error {
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
+	if isGeminiEndpoint(candidateEndpoint) && isTextEndpoint(endpoint) {
+		var native map[string]any
+		if json.Unmarshal(body, &native) != nil || native == nil {
+			return body
+		}
+		chat := geminiChatResponse(native, alias)
+		if endpoint == "responses" {
+			chat = chatToResponses(chat, alias)
+		}
+		encoded, _ := json.Marshal(chat)
+		return encoded
+	}
 	if candidateEndpoint == "anthropic-messages" && isTextEndpoint(endpoint) {
 		var native map[string]any
 		if json.Unmarshal(body, &native) != nil || native == nil {

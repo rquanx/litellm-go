@@ -60,3 +60,31 @@ general_settings: {master_key: gateway-key}
 		}
 	}
 }
+
+func TestGeminiResponsesStreamCompletesWithUsageOnEOF(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"systemInstruction"`) || !strings.Contains(string(body), `"maxOutputTokens":20`) ||
+			r.URL.Path != "/v1beta/models/gemini-fixture:streamGenerateContent" || r.URL.Query().Get("alt") != "sse" {
+			t.Errorf("unexpected Gemini bridge request: %s %s", r.URL, body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, chunk := range []string{
+			`{"responseId":"gem-test","candidates":[{"content":{"parts":[{"text":"hello"}]}}]}`,
+			`{"responseId":"gem-test","candidates":[{"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":1,"totalTokenCount":5}}`,
+		} {
+			_, _ = io.WriteString(w, "data: "+chunk+"\n\n")
+		}
+	}))
+	defer upstream.Close()
+	server := runtime.NewServer(runtime.Config{Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{
+		{Endpoint: "gemini-generate", ModelID: "gemini-fixture", APIBase: upstream.URL},
+	}}}})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"hello","instructions":"reply briefly","max_output_tokens":20,"stream":true}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, req)
+	if result.Code != http.StatusOK || strings.Count(result.Body.String(), "event: response.completed\n") != 1 ||
+		!strings.Contains(result.Body.String(), `"total_tokens":5`) {
+		t.Fatalf("unexpected conversion: %d %s", result.Code, result.Body.String())
+	}
+}

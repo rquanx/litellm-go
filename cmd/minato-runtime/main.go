@@ -39,6 +39,7 @@ func main() {
 		}
 		config.Routes = proxy.Routes
 		config.NumRetries = proxy.NumRetries
+		config.RoutingStrategy = proxy.RoutingStrategy
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}

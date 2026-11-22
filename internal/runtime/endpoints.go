@@ -38,14 +38,19 @@ func EndpointFromPath(path string) string {
 // CompatibleEndpoints reports whether the runtime can serve both endpoints from a route.
 func CompatibleEndpoints(a, b string) bool {
 	first, ok := endpoints[a]
-	return ok && (first.family == endpoints[b].family ||
-		(a == "anthropic-messages" && isTextEndpoint(b)) ||
-		(b == "anthropic-messages" && isTextEndpoint(a)))
+	return ok && (first.family == endpoints[b].family || (isConversationEndpoint(a) && isConversationEndpoint(b)))
+}
+
+func isConversationEndpoint(endpoint string) bool {
+	return isTextEndpoint(endpoint) || endpoint == "anthropic-messages" || isGeminiEndpoint(endpoint)
 }
 
 func servesEndpoint(request, provider string) bool {
 	if request == "anthropic-count-tokens" {
 		return provider == "anthropic-messages"
+	}
+	if isGeminiEndpoint(request) {
+		return isGeminiEndpoint(provider)
 	}
 	return CompatibleEndpoints(request, provider) &&
 		(request != "anthropic-messages" || provider == "anthropic-messages")

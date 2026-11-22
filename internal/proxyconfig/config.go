@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"os"
 	"strings"
@@ -20,6 +21,8 @@ type configFile struct {
 	} `yaml:"general_settings"`
 	Router struct {
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
+		DefaultFallbacks []string       `yaml:"default_fallbacks"`
+		Strategy string                 `yaml:"routing_strategy"`
 		Timeout   int                  `yaml:"timeout"`
 		Retries   int                  `yaml:"num_retries"`
 	} `yaml:"router_settings"`
@@ -32,6 +35,9 @@ type deployment struct {
 		APIBase string `yaml:"api_base" json:"api_base,omitempty"`
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
+		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
+		RPM *int `yaml:"rpm" json:"rpm,omitempty"`
+		TPM *int `yaml:"tpm" json:"tpm,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
@@ -44,8 +50,10 @@ type Config struct {
 	MasterKey string
 	Timeout   time.Duration
 	NumRetries int
+	RoutingStrategy string
 	models    []deployment
 	fallbacks []map[string][]string
+	defaultFallbacks []string
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -61,7 +69,15 @@ func Load(reader io.Reader) (Config, error) {
 	if len(file.Models) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
 		return Config{}, errors.New("model_list is required and router settings must use a valid timeout and retry count between zero and eight")
 	}
-	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries, models: file.Models, fallbacks: file.Router.Fallbacks}
+	strategy := file.Router.Strategy
+	if strategy == "" {
+		strategy = "simple-shuffle"
+	}
+	if strategy != "simple-shuffle" && strategy != "least-busy" {
+		return Config{}, errors.New("unsupported routing_strategy")
+	}
+	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
+		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks}
 	var err error
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {
@@ -73,14 +89,14 @@ func Load(reader io.Reader) (Config, error) {
 			model.Info.ID = fmt.Sprintf("yaml:%s:%d", model.Alias, index)
 		}
 	}
-	config.Routes, err = buildRoutes(config.models, config.fallbacks)
+	config.Routes, err = buildRoutes(config.models, config.fallbacks, config.defaultFallbacks)
 	if err != nil {
 		return Config{}, err
 	}
 	return config, nil
 }
 
-func buildRoutes(models []deployment, configuredFallbacks []map[string][]string) ([]runtime.Route, error) {
+func buildRoutes(models []deployment, configuredFallbacks []map[string][]string, defaultFallbacks []string) ([]runtime.Route, error) {
 	byAlias := make(map[string][]runtime.Candidate)
 	var aliases []string
 	for _, model := range models {
@@ -103,6 +119,11 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string)
 			fallbacks[alias] = targets
 		}
 	}
+	for _, alias := range defaultFallbacks {
+		if len(byAlias[alias]) == 0 {
+			return nil, fmt.Errorf("unknown default fallback %q", alias)
+		}
+	}
 	routes := make([]runtime.Route, 0, len(aliases))
 	for _, alias := range aliases {
 		candidates := append([]runtime.Candidate(nil), byAlias[alias]...)
@@ -113,6 +134,12 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string)
 			}
 			seen[target] = true
 			candidates = append(candidates, byAlias[target]...)
+		}
+		for _, target := range defaultFallbacks {
+			if !seen[target] && runtime.CompatibleEndpoints(candidates[0].Endpoint, byAlias[target][0].Endpoint) {
+				candidates = append(candidates, byAlias[target]...)
+				seen[target] = true
+			}
 		}
 		if len(candidates) > 16 {
 			return nil, fmt.Errorf("model %q exceeds the 16-candidate limit", alias)
@@ -138,9 +165,20 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if model == "" {
 		return runtime.Candidate{}, errors.New("model ID is required")
 	}
+	if (entry.Params.Weight != nil && (*entry.Params.Weight < 0 || math.IsNaN(*entry.Params.Weight) || math.IsInf(*entry.Params.Weight, 0))) ||
+		(entry.Params.RPM != nil && *entry.Params.RPM < 0) || (entry.Params.TPM != nil && *entry.Params.TPM < 0) {
+		return runtime.Candidate{}, errors.New("weight, rpm and tpm must be finite non-negative values")
+	}
+	settings, hasSettings := openAIProviderSettings[provider]
 	base, err := resolveEnv(entry.Params.APIBase)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_base: %w", err)
+	}
+	if base == "" && hasSettings {
+		base = os.Getenv(settings.APIBaseEnv)
+		if base == "" {
+			base = settings.BaseURL
+		}
 	}
 	if base == "" && provider == "anthropic" {
 		base = "https://api.anthropic.com"
@@ -156,6 +194,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	key, err := resolveEnv(entry.Params.APIKey)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_key: %w", err)
+	}
+	if key == "" && hasSettings {
+		key = os.Getenv(settings.APIKeyEnv)
+	}
+	headers := make(map[string]string, len(settings.Headers))
+	for name, value := range settings.Headers {
+		headers[name] = strings.ReplaceAll(value, "{api_key}", key)
 	}
 	version, err := resolveEnv(entry.Params.APIVersion)
 	if err != nil {
@@ -181,7 +226,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 	}
 	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
-		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID}, nil
+		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
+		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
+		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM}, nil
 }
 
 func resolveEnv(value string) (string, error) {

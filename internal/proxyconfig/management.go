@@ -69,7 +69,7 @@ func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, er
 		}
 		seen[model.Info.ID] = true
 	}
-	return buildRoutes(all, registry.base.fallbacks)
+	return buildRoutes(all, registry.base.fallbacks, registry.base.defaultFallbacks)
 }
 
 func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) bool {
@@ -151,6 +151,15 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		}
 		if model.Params.APIVersion == "" {
 			model.Params.APIVersion = existing.Params.APIVersion
+		}
+		if model.Params.Weight == nil {
+			model.Params.Weight = existing.Params.Weight
+		}
+		if model.Params.RPM == nil {
+			model.Params.RPM = existing.Params.RPM
+		}
+		if model.Params.TPM == nil {
+			model.Params.TPM = existing.Params.TPM
 		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
