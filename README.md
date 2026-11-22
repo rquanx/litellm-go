@@ -50,6 +50,8 @@ The master key can also create teams at `/team/new` and bind new virtual keys wi
 
 Use `/organization/new` to create an organization, then assign its `organization_id` to a team or virtual key. The organization's model list further restricts the models that a key can use. Use `/organization/info`, `/organization/list` and `/organization/update` to view and modify organizations. Deleting an organization also removes its teams and revokes their keys and any keys directly bound to the organization.
 
+Create an internal user with `/user/new` and use the returned key or assign the `user_id` when generating a key separately. User-bound keys follow the user's model list alongside their other model scopes. Changing the role to `internal_user_viewer` disables inference with those keys. Deleting the user revokes their keys.
+
 For PostgreSQL storage, set `general_settings.database_url` and omit the local state flags. The Go proxy uses its own `minato_proxy_state` table, and encrypts model state using `MINATO_RUNTIME_STATE_KEY` or the proxy master key. On a copy of a LiteLLM database, `--import-litellm-models` copies compatible model deployments into empty Go state. Run `--import-litellm-keys` separately to import model-scoped keys without changing the token presented by clients. Preserve `LITELLM_SALT_KEY` during model import if the source deployment used a separate salt.
 
 ```yaml

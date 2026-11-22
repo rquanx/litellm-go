@@ -21,6 +21,7 @@ type virtualKey struct {
 	Expires   *time.Time     `json:"expires,omitempty"`
 	TeamID    string         `json:"team_id,omitempty"`
 	OrgID     string         `json:"organization_id,omitempty"`
+	UserID    string         `json:"user_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
@@ -30,6 +31,7 @@ type accessState struct {
 	Keys  map[string]virtualKey `json:"keys"`
 	Teams map[string]team       `json:"teams"`
 	Organizations map[string]organization `json:"organizations,omitempty"`
+	Users map[string]internalUser `json:"users,omitempty"`
 }
 
 func (state *accessState) UnmarshalJSON(payload []byte) error {
@@ -86,14 +88,21 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 		return nil, false
 	}
 	scope := unrestrictedScope(key.Models)
+	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
+		scope = nil
+	}
+	if key.UserID != "" {
+		user, exists := registry.state.Users[key.UserID]
+		if !exists || user.Role != "internal_user" {
+			return nil, false
+		}
+		scope = intersectScopes(scope, unrestrictedScope(user.Models))
+	}
 	orgID := key.OrgID
 	if key.TeamID != "" {
 		owner, exists := registry.state.Teams[key.TeamID]
 		if !exists || owner.Blocked || (orgID != "" && orgID != owner.OrgID) {
 			return nil, false
-		}
-		if slices.Contains(scope, "all-team-models") {
-			scope = nil
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 		orgID = owner.OrgID
@@ -146,6 +155,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /key/list", registry.listKeys)
 	registry.registerTeamRoutes(mux)
 	registry.registerOrganizationRoutes(mux)
+	registry.registerUserRoutes(mux)
 	mux.Handle("/", next)
 	return mux
 }
@@ -168,6 +178,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		Models   []string       `json:"models"`
 		TeamID   string         `json:"team_id"`
 		OrgID    string         `json:"organization_id"`
+		UserID   string         `json:"user_id"`
 		Blocked  bool           `json:"blocked"`
 		Metadata map[string]any `json:"metadata"`
 	}
@@ -181,11 +192,9 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusBadRequest, "Invalid key duration")
 		return
 	}
-	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, OrgID: input.OrgID,
+	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, OrgID: input.OrgID, UserID: input.UserID,
 		Blocked: input.Blocked, Metadata: input.Metadata, Expires: expiry, CreatedAt: &now}
-	var random [32]byte
-	rand.Read(random[:])
-	token := "sk-" + hex.EncodeToString(random[:])
+	token := newKeyToken()
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	if !registry.validKey(w, key) {
@@ -258,4 +267,10 @@ func (registry *KeyRegistry) apply(w http.ResponseWriter, next accessState) bool
 func keyDigest(token string) string {
 	digest := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(digest[:])
+}
+
+func newKeyToken() string {
+	var random [32]byte
+	rand.Read(random[:])
+	return "sk-" + hex.EncodeToString(random[:])
 }

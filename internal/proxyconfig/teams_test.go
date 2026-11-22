@@ -125,4 +125,20 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	send("GET", "/team/info?team_id=fixture", master, "", 404)
 	send("GET", "/v1/models", orgKey, "", 401)
 	send("GET", "/v1/models", "legacy", "", 200)
+
+	response := send("POST", "/user/new", master, `{"user_id":"user","user_email":"test@example.invalid","models":["second"]}`, 200)
+	var user struct{ Key string }
+	if err := json.Unmarshal([]byte(response), &user); err != nil || user.Key == "" {
+		t.Fatal("user creation did not return a credential")
+	}
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"first","messages":[]}`, 403)
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"second","messages":[]}`, 200)
+	send("POST", "/user/update", master, `{"user_email":"test@example.invalid","user_role":"internal_user_viewer"}`, 200)
+	handler = newHandler()
+	send("GET", "/v1/models", user.Key, "", 401)
+	send("POST", "/user/update", master, `{"user_id":"user","user_role":"internal_user","models":["first"]}`, 200)
+	send("POST", "/v1/chat/completions", user.Key, `{"model":"second","messages":[]}`, 403)
+	send("POST", "/user/delete", master, `{"user_ids":["user"]}`, 200)
+	send("POST", "/user/new", master, `{"user_id":"user","auto_create_key":false}`, 200)
+	send("GET", "/v1/models", user.Key, "", 401)
 }
