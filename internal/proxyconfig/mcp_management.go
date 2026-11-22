@@ -38,6 +38,47 @@ func (registry *modelRegistry) registerMCPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+mcpServerPath, registry.writeMCPServer)
 	mux.HandleFunc("PUT "+mcpServerPath, registry.writeMCPServer)
 	mux.HandleFunc("DELETE "+mcpServerPath+"/{server_id}", registry.writeMCPServer)
+	mux.HandleFunc("POST /mcp-rest/test/connection", registry.testMCPServer)
+	mux.HandleFunc("POST /mcp-rest/test/tools/list", registry.testMCPServer)
+}
+
+func (registry *modelRegistry) testMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !registry.allowed(w, r) {
+		return
+	}
+	var input mcpServerInput
+	if decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input) != nil || input.Transport == "stdio" || input.Command != "" {
+		modelError(w, http.StatusBadRequest, "Invalid remote MCP server configuration")
+		return
+	}
+	if input.Name == "" {
+		input.Name = "test"
+	}
+	if input.Transport == "" {
+		input.Transport = "sse"
+	}
+	servers, err := prepareMCPServers(map[string]mcpServerConfig{input.Name: input.mcpServerConfig})
+	if err != nil {
+		modelError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	listTools := r.URL.Path == "/mcp-rest/test/tools/list"
+	tools, err := registry.server.ProbeMCP(r.Context(), servers[0], listTools)
+	if err != nil {
+		modelError(w, http.StatusBadGateway, "MCP server probe failed")
+		return
+	}
+	if listTools {
+		if tools == nil {
+			tools = []map[string]any{}
+		}
+		for _, tool := range tools {
+			delete(tool, "mcp_info")
+		}
+		modelJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": nil, "message": "Successfully retrieved tools"})
+		return
+	}
+	modelJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func mcpServerEntry(name string, server mcpServerConfig) mcpServerInput {

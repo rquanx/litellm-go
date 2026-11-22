@@ -179,4 +179,17 @@ mcp_servers:
 	if closed.Load() != 8 {
 		t.Fatalf("closed %d MCP sessions", closed.Load())
 	}
+	handler, err := WithModelManagement(server, cfg, "fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"/mcp-rest/test/connection", "/mcp-rest/test/tools/list"} {
+		request := httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{"url":"`+upstream.URL+`","transport":"http","static_headers":{"Authorization":"Bearer mcp-fixture"}}`))
+		request.Header.Set("Authorization", "Bearer fixture-master")
+		output := httptest.NewRecorder()
+		handler.ServeHTTP(output, request)
+		if output.Code != 200 || strings.Contains(output.Body.String(), "mcp-fixture") {
+			t.Fatalf("unexpected probe response %d %s", output.Code, output.Body.String())
+		}
+	}
 }

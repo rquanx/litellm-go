@@ -302,3 +302,23 @@ func (s *Server) mcpTools(ctx context.Context, server MCPServer) ([]map[string]a
 	}
 	return nil, errors.New("MCP pagination did not finish")
 }
+
+func (s *Server) ProbeMCP(ctx context.Context, server MCPServer, listTools bool) ([]map[string]any, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if listTools {
+		return s.mcpTools(ctx, server)
+	}
+	session, err := s.openMCP(ctx, server)
+	if err != nil {
+		return nil, err
+	}
+	session.close()
+	return nil, nil
+}
