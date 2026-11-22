@@ -162,8 +162,9 @@ func voyageRerankResponse(body []byte) []byte {
 	return value
 }
 
-func rerankTarget(base, provider string) string {
-	base = strings.TrimRight(base, "/")
+func rerankTarget(candidate Candidate) string {
+	base := strings.TrimRight(candidate.APIBase, "/")
+	provider := candidate.Provider
 	switch provider {
 	case "fireworks_ai":
 		if strings.HasSuffix(base, "/rerank") {
@@ -173,9 +174,18 @@ func rerankTarget(base, provider string) string {
 			return base + "/rerank"
 		}
 		return base + "/inference/v1/rerank"
-	case "hosted_vllm":
-		if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {
-			return root + "/rerank"
+	case "deepinfra":
+		base = strings.TrimSuffix(base, "/openai")
+		model := strings.Split(candidate.ModelID, "/")
+		for i, segment := range model {
+			model[i] = url.PathEscape(segment)
+		}
+		return base + "/inference/" + strings.Join(model, "/")
+	case "hosted_vllm", "infinity":
+		if provider == "hosted_vllm" {
+			if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {
+				return root + "/rerank"
+			}
 		}
 		if strings.HasSuffix(base, "/rerank") {
 			return base
@@ -191,6 +201,95 @@ func rerankTarget(base, provider string) string {
 	}
 	base = strings.TrimSuffix(strings.TrimSuffix(base, "/v2"), "/v1")
 	return base + path
+}
+
+func deepInfraRerankRequest(payload map[string]any) map[string]any {
+	documents, _ := payload["documents"].([]any)
+	request := map[string]any{"documents": payload["documents"]}
+	if query, ok := payload["query"].(string); ok && query != "" {
+		queries := make([]string, len(documents))
+		for i := range queries {
+			queries[i] = query
+		}
+		request["queries"] = queries
+	}
+	for _, key := range []string{"queries", "service_tier", "instruction", "webhook"} {
+		if value := payload[key]; value != nil {
+			request[key] = value
+		}
+	}
+	return request
+}
+
+func deepInfraRerankResponse(body []byte) []byte {
+	var response struct {
+		ID     string    `json:"request_id"`
+		Scores []float64 `json:"scores"`
+		Tokens int       `json:"input_tokens"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return body
+	}
+	results := make([]map[string]any, len(response.Scores))
+	for i, score := range response.Scores {
+		results[i] = map[string]any{"index": i, "relevance_score": score}
+	}
+	if response.ID == "" {
+		response.ID = newUUID()
+	}
+	encoded, _ := json.Marshal(map[string]any{"id": response.ID, "results": results, "meta": map[string]any{
+		"billed_units": map[string]int{"total_tokens": response.Tokens},
+		"tokens":       map[string]int{"input_tokens": response.Tokens, "output_tokens": 0},
+	}})
+	return encoded
+}
+
+func cohereStyleRerankResponse(body []byte, provider string) []byte {
+	var response struct {
+		ID      string           `json:"id"`
+		Results []map[string]any `json:"results"`
+		Usage   map[string]int   `json:"usage"`
+	}
+	if json.Unmarshal(body, &response) != nil {
+		return body
+	}
+	if response.Results == nil {
+		if provider != "infinity" {
+			return body
+		}
+		response.Results = []map[string]any{}
+	}
+	for _, result := range response.Results {
+		if provider == "infinity" {
+			if document, ok := result["document"].(string); ok && document != "" {
+				result["document"] = map[string]string{"text": document}
+			} else {
+				delete(result, "document")
+			}
+		}
+	}
+	units, tokens := map[string]int{}, map[string]int{}
+	for _, key := range []string{"search_units", "total_tokens"} {
+		if value, ok := response.Usage[key]; ok {
+			units[key] = value
+		}
+	}
+	if provider == "infinity" {
+		tokens["input_tokens"] = response.Usage["prompt_tokens"]
+		tokens["output_tokens"] = response.Usage["total_tokens"] - tokens["input_tokens"]
+	} else {
+		for _, key := range []string{"input_tokens", "output_tokens"} {
+			if value, ok := response.Usage[key]; ok {
+				tokens[key] = value
+			}
+		}
+	}
+	if response.ID == "" {
+		response.ID = newUUID()
+	}
+	encoded, _ := json.Marshal(map[string]any{"id": response.ID, "results": response.Results,
+		"meta": map[string]any{"billed_units": units, "tokens": tokens}})
+	return encoded
 }
 
 func hostedRerankRequest(payload map[string]any, provider string) map[string]any {

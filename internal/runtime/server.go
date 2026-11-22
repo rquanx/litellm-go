@@ -532,8 +532,15 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if endpoint == "rerank" && candidate.Provider == "voyage" {
 				body = voyageRerankResponse(body)
 			}
-			if endpoint == "rerank" && (candidate.Provider == "fireworks_ai" || candidate.Provider == "hosted_vllm") {
-				body = hostedRerankResponse(body, candidate.Provider)
+			if endpoint == "rerank" {
+				switch candidate.Provider {
+				case "fireworks_ai", "hosted_vllm":
+					body = hostedRerankResponse(body, candidate.Provider)
+				case "deepinfra":
+					body = deepInfraRerankResponse(body)
+				case "infinity", "together_ai":
+					body = cohereStyleRerankResponse(body, candidate.Provider)
+				}
 			}
 			if endpoint == "rerank" && candidate.Vertex != nil {
 				body = vertexRerankResponse(body)
@@ -870,8 +877,18 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	if targetEndpoint == "rerank" && candidate.Provider == "voyage" {
 		payload = voyageRerankRequest(payload)
 	}
-	if targetEndpoint == "rerank" && (candidate.Provider == "fireworks_ai" || candidate.Provider == "hosted_vllm") {
-		payload = hostedRerankRequest(payload, candidate.Provider)
+	if targetEndpoint == "rerank" {
+		switch candidate.Provider {
+		case "fireworks_ai", "hosted_vllm", "together_ai":
+			payload = hostedRerankRequest(payload, candidate.Provider)
+		case "deepinfra":
+			payload = deepInfraRerankRequest(payload)
+		case "infinity":
+			payload = hostedRerankRequest(payload, candidate.Provider)
+			if input.fields["max_chunks_per_doc"] != nil {
+				payload["max_chunks_per_doc"] = input.fields["max_chunks_per_doc"]
+			}
+		}
 	}
 	if targetEndpoint == "rerank" && candidate.Vertex != nil {
 		payload = vertexRerankRequest(payload)
@@ -933,7 +950,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	} else if candidate.Endpoint == "rerank" && candidate.Bedrock != nil {
 		target = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/rerank") + "/rerank"
 	} else if candidate.Endpoint == "rerank" {
-		target = rerankTarget(candidate.APIBase, candidate.Provider)
+		target = rerankTarget(candidate)
 	} else if candidate.Endpoint == "bedrock-converse" {
 		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
 	} else if candidate.Endpoint == "bedrock-embeddings" {

@@ -464,8 +464,9 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
+	infinityRerank := provider == "infinity" && entry.rerankConfigured()
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider)) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !infinityRerank) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -508,8 +509,17 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
 	}
-	if base == "" && provider == "fireworks_ai" && entry.hostedRerank() {
-		base = "https://api.fireworks.ai"
+	if base == "" && entry.rerankConfigured() {
+		switch provider {
+		case "fireworks_ai":
+			base = "https://api.fireworks.ai"
+		case "infinity":
+			base = os.Getenv("INFINITY_API_BASE")
+		case "deepinfra":
+			base = os.Getenv("DEEPINFRA_API_BASE")
+		case "together_ai":
+			base = "https://api.together.xyz"
+		}
 	}
 	var bedrock *runtime.BedrockConfig
 	if provider == "bedrock" {
@@ -552,7 +562,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
-	if key == "" && entry.hostedRerank() {
+	if key == "" && entry.rerankConfigured() {
 		switch provider {
 		case "fireworks_ai":
 			key = os.Getenv("FIREWORKS_API_KEY")
@@ -564,6 +574,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			if key == "" {
 				key = "fake-api-key"
 			}
+		case "infinity":
+			key = os.Getenv("INFINITY_API_KEY")
+		case "deepinfra":
+			key = os.Getenv("DEEPINFRA_API_KEY")
+		case "together_ai":
+			key = os.Getenv("TOGETHERAI_API_KEY")
 		}
 	}
 	if key == "" && rerankProvider(provider) {
@@ -628,7 +644,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if provider == "voyage" && entry.Info.Mode == "embedding" {
 		endpoint = "embeddings"
 	}
-	if supportsOpenAITransport(provider) || provider == "azure" {
+	if supportsOpenAITransport(provider) || provider == "azure" || infinityRerank {
 		if inferred := openAIModelEndpoint(entry.Info.Mode, model); inferred != "" {
 			endpoint = inferred
 		}
@@ -724,12 +740,12 @@ func rerankProvider(name string) bool {
 	return name == "cohere" || name == "cohere_chat" || name == "jina_ai" || name == "voyage"
 }
 
-func (entry deployment) hostedRerank() bool {
+func (entry deployment) rerankConfigured() bool {
 	return entry.Info.Mode == "rerank" || slices.Contains(entry.Info.Endpoints, "/v1/rerank")
 }
 
 func (entry deployment) bedrockRerank() bool {
-	return entry.hostedRerank() || strings.Contains(entry.Params.Model, ".rerank-")
+	return entry.rerankConfigured() || strings.Contains(entry.Params.Model, ".rerank-")
 }
 
 func resolveEnv(value string) (string, error) {

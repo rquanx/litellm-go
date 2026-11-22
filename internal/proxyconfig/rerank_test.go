@@ -16,6 +16,28 @@ func TestProviderRerank(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
+		switch r.URL.Path {
+		case "/deep/v1/inference/org/ranker":
+			queries, _ := request["queries"].([]any)
+			if len(queries) != 1 || queries[0] != "fixture" || request["model"] != nil ||
+				r.Header.Get("Authorization") != "Bearer fixture-deepinfra" {
+				t.Errorf("unexpected DeepInfra request: %+v", request)
+			}
+			w.Write([]byte(`{"request_id":"deep-job","scores":[0.9],"input_tokens":3}`))
+			return
+		case "/infinity/rerank":
+			if request["model"] != "infinity-ranker" || r.Header.Get("Authorization") != "Bearer fixture-infinity" {
+				t.Errorf("unexpected Infinity request: %+v", request)
+			}
+			w.Write([]byte(`{"id":"infinity-job","results":[{"index":0,"relevance_score":0.9,"document":"fixture"}],"usage":{"total_tokens":4,"prompt_tokens":3}}`))
+			return
+		case "/together/v1/rerank":
+			if request["model"] != "org/together-ranker" || r.Header.Get("Authorization") != "Bearer fixture-together" {
+				t.Errorf("unexpected Together AI request: %+v", request)
+			}
+			w.Write([]byte(`{"id":"together-job","results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}],"usage":{"total_tokens":4,"input_tokens":3,"output_tokens":1}}`))
+			return
+		}
 		if request["model"] == "fireworks/demo" {
 			if r.URL.Path != "/inference/v1/rerank" || r.Header.Get("Authorization") != "Bearer fixture-fireworks" ||
 				request["top_n"] != float64(1) || request["rank_fields"] != nil || request["return_documents"] != true {
@@ -67,6 +89,12 @@ func TestProviderRerank(t *testing.T) {
 	}))
 	defer upstream.Close()
 	t.Setenv("TEST_RERANK_BASE", upstream.URL)
+	t.Setenv("INFINITY_API_BASE", upstream.URL+"/infinity")
+	t.Setenv("INFINITY_API_KEY", "fixture-infinity")
+	t.Setenv("DEEPINFRA_API_BASE", upstream.URL+"/deep/v1/openai")
+	t.Setenv("DEEPINFRA_API_KEY", "fixture-deepinfra")
+	t.Setenv("TEST_TOGETHER_RERANK_BASE", upstream.URL+"/together")
+	t.Setenv("TOGETHERAI_API_KEY", "fixture-together")
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: cohere
@@ -85,12 +113,21 @@ model_list:
   - model_name: local
     litellm_params: {model: hosted_vllm/local-ranker, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-vllm}
     model_info: {supported_endpoints: [/v1/rerank]}
+  - model_name: infinity
+    litellm_params: {model: infinity/infinity-ranker}
+    model_info: {mode: rerank}
+  - model_name: deepinfra
+    litellm_params: {model: deepinfra/org/ranker}
+    model_info: {mode: rerank}
+  - model_name: together
+    litellm_params: {model: together_ai/org/together-ranker, api_base: os.environ/TEST_TOGETHER_RERANK_BASE}
+    model_info: {mode: rerank}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
@@ -103,6 +140,12 @@ model_list:
 			expected = `{"id":"fireworks/demo","meta":{"billed_units":{"search_units":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}]}`
 		case "local":
 			expected = `{"id":"local-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":4}},"results":[{"index":0,"relevance_score":0.9,"document":{"text":"fixture"}}]}`
+		case "infinity":
+			expected = `{"id":"infinity-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"document":{"text":"fixture"},"index":0,"relevance_score":0.9}]}`
+		case "deepinfra":
+			expected = `{"id":"deep-job","meta":{"billed_units":{"total_tokens":3},"tokens":{"input_tokens":3,"output_tokens":0}},"results":[{"index":0,"relevance_score":0.9}]}`
+		case "together":
+			expected = `{"id":"together-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"document":{"text":"fixture"},"index":0,"relevance_score":0.9}]}`
 		}
 		if expected != "" && strings.TrimSpace(result.Body.String()) != expected {
 			t.Fatalf("unexpected %s response: %s", model, result.Body.String())
