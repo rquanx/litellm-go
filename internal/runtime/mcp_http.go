@@ -16,6 +16,7 @@ import (
 
 type MCPServer struct {
 	ID, Name, Alias, URL, Description string
+	PublicID                         string
 	Transport                        string
 	Headers                          http.Header
 	AllowAllKeys                     bool

@@ -126,6 +126,7 @@ func decodeLiteLLMMCPServer(payload []byte, salt string) (string, mcpServerConfi
 		return "", mcpServerConfig{}, true, nil
 	}
 	entry := row.mcpServerConfig
+	entry.ImportedAuthType = row.AuthType
 	name := row.Name
 	if name == "" {
 		name = entry.Alias

@@ -148,7 +148,7 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPA
 			continue
 		}
 		name := input.Name
-		for _, prefix := range []string{server.Alias, server.Name, server.ID} {
+		for _, prefix := range []string{server.Alias, server.Name, server.ID, server.PublicID} {
 			if prefix != "" && strings.HasPrefix(name, prefix+"-") {
 				name = strings.TrimPrefix(name, prefix+"-")
 				break
@@ -220,7 +220,8 @@ func (s *Server) mcpRequestServer(r *http.Request, server MCPServer) MCPServer {
 }
 
 func (server MCPServer) matches(id string) bool {
-	return id == server.ID || id == server.Name || (server.Alias != "" && id == server.Alias)
+	return id == server.ID || id == server.Name || (server.Alias != "" && id == server.Alias) ||
+		(server.PublicID != "" && id == server.PublicID)
 }
 
 func (server MCPServer) allowsTool(name string) bool {

@@ -133,6 +133,7 @@ type Config struct {
 	LogMessages bool
 	publicModelGroups []string
 	publicModelLinks map[string]any
+	publicMCPServers []string
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -195,6 +196,7 @@ func Load(reader io.Reader) (Config, error) {
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
 	config.publicModelLinks = file.Callbacks.PublicModelLinks
+	config.publicMCPServers = slices.Clone(file.Callbacks.PublicMCPServers)
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
 	if file.General.HealthCheckInterval < 0 || file.General.HealthCheckInterval > 86400 || file.General.HealthCheckConcurrency < 0 ||
 		file.General.HealthCheckConcurrency > 1024 || file.General.HealthCheckStaleness < 0 || file.General.HealthCheckStaleness > 86400 {

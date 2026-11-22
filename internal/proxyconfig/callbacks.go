@@ -24,6 +24,7 @@ type callbackSettings struct {
 	DisableMessages  *bool             `yaml:"turn_off_message_logging"`
 	PublicModelGroups []string         `yaml:"public_model_groups"`
 	PublicModelLinks  map[string]any   `yaml:"public_model_groups_links"`
+	PublicMCPServers  []string         `yaml:"public_mcp_servers"`
 }
 
 type GenericCallback struct {

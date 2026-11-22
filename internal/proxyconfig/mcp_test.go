@@ -90,6 +90,19 @@ func TestManagedMCPServersPersistAndPublish(t *testing.T) {
 	}
 	handler, _ = open()
 	call("GET", mcpServerPath+"/"+created.ServerID, "", 200)
+	if public := string(call("GET", "/public/mcp_hub", "", 200)); strings.TrimSpace(public) != "[]" {
+		t.Fatalf("private MCP server was public: %s", public)
+	}
+	call("PUT", mcpServerPath, `{"server_id":"`+created.ServerID+`","transport":"http","url":"http://localhost:1/mcp?token=fixture-provider-secret","available_on_public_internet":true}`, 200)
+	handler, _ = open()
+	result := httptest.NewRecorder()
+	handler.ServeHTTP(result, httptest.NewRequest(http.MethodGet, "/public/mcp_hub", nil))
+	var public []publicMCPServer
+	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &public) != nil || len(public) != 1 ||
+		public[0].ID != created.ServerID || public[0].URL == nil || *public[0].URL != "http://localhost:1/mcp" ||
+		strings.Contains(result.Body.String(), "fixture-provider-secret") {
+		t.Fatalf("unexpected public MCP metadata: %s", result.Body)
+	}
 	call("PUT", mcpServerPath, `{"server_id":"`+created.ServerID+`","server_name":"renamed","transport":"http","url":"http://localhost:1/mcp"}`, 200)
 	call("DELETE", mcpServerPath+"/"+created.ServerID, "", 200)
 	handler, _ = open()

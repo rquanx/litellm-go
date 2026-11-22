@@ -33,6 +33,7 @@ func (registry *modelRegistry) compileMCP(managed map[string]mcpServerConfig) ([
 }
 
 func (registry *modelRegistry) registerMCPRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /public/mcp_hub", registry.publicMCPHub)
 	mux.HandleFunc("GET "+mcpServerPath, registry.readMCPServer)
 	mux.HandleFunc("GET "+mcpServerPath+"/{server_id}", registry.readMCPServer)
 	mux.HandleFunc("POST "+mcpServerPath, registry.writeMCPServer)

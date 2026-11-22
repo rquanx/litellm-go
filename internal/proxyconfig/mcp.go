@@ -1,6 +1,8 @@
 package proxyconfig
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"net/http"
@@ -11,6 +13,22 @@ import (
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
+func mcpPublicID(name, resolvedURL string, entry mcpServerConfig) string {
+	if entry.ServerID != "" {
+		return entry.ServerID
+	}
+	fields := []string{name, resolvedURL, mcpPublicTransport(entry.Transport), entry.ImportedAuthType, entry.Alias}
+	digest := sha256.Sum256([]byte(strings.Join(fields, "|")))
+	return hex.EncodeToString(digest[:16])
+}
+
+func mcpPublicTransport(transport string) string {
+	if transport == "" || transport == "streamable_http" {
+		return "http"
+	}
+	return transport
+}
+
 type mcpServerConfig struct {
 	URL string `yaml:"url" json:"url"`
 	Transport string `yaml:"transport" json:"transport"`
@@ -18,6 +36,9 @@ type mcpServerConfig struct {
 	ServerID string `yaml:"server_id" json:"server_id"`
 	Description string `yaml:"description" json:"description,omitempty"`
 	AllowAllKeys bool `yaml:"allow_all_keys" json:"allow_all_keys"`
+	Public bool `yaml:"available_on_public_internet" json:"available_on_public_internet,omitempty"`
+	PublicInfo map[string]any `yaml:"mcp_info" json:"mcp_info,omitempty"`
+	ImportedAuthType string `yaml:"-" json:"imported_auth_type,omitempty"`
 	AllowedTools []string `yaml:"allowed_tools" json:"allowed_tools"`
 	AccessGroups []string `yaml:"mcp_access_groups" json:"mcp_access_groups,omitempty"`
 	YAMLAccessGroups []string `yaml:"access_groups" json:"-"`
@@ -58,7 +79,8 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 		if id == "" {
 			id = name
 		}
-		for _, value := range []string{name, entry.Alias, id} {
+		publicID := mcpPublicID(name, base, entry)
+		for _, value := range []string{name, entry.Alias, id, publicID} {
 			if value == "" {
 				continue
 			}
@@ -88,7 +110,7 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 			}
 			env = append(env, key+"="+value)
 		}
-		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
+		result = append(result, runtime.MCPServer{ID: id, PublicID: publicID, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
 			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools,
 			AccessGroups: append(slices.Clone(entry.AccessGroups), entry.YAMLAccessGroups...), Headers: headers,
