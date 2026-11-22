@@ -217,22 +217,20 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
 		return
 	}
-	eligible := make([]Candidate, 0, len(route.Candidates))
-	for _, candidate := range route.Candidates {
-		if candidateAllowed(modelScope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) {
-			eligible = append(eligible, candidate)
-		}
-	}
+	eligible := s.eligibleCandidates(route.Candidates, modelScope, endpoint)
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
 	}
 	route.Candidates = eligible
-	s.orderDeployments(route.Candidates)
+	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint)
+	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint)
 	if previous, ok := input["previous_response_id"].(string); ok && s.config.AuthorizeInference && endpoint == "responses" {
 		provider, deployment, original, wrapped := unwrapResponseID(previous)
 		if wrapped {
 			route.Candidates = nil
+			route.ContextFallback = []Candidate{}
+			route.PolicyFallback = []Candidate{}
 			for _, candidate := range eligible {
 				if candidate.Provider == provider && candidate.DeploymentID == deployment && candidate.Endpoint == "responses" {
 					route.Candidates = []Candidate{candidate}
@@ -291,7 +289,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeResponse(writer, status, responseHeaders, body)
 			return
 		}
-		if !plan.advance(request.Context(), status, responseHeaders, retryable, len(route.Candidates)) {
+		if !plan.next(request.Context(), status, responseHeaders, retryable, responseBody, &route) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if callErr != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", callErr.Error())
@@ -304,15 +302,15 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 }
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload) {
-	eligible := route.Candidates
 	attempts := make([]map[string]any, 0, len(route.Candidates))
 	plan := attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries}
 	for {
-		candidate := eligible[plan.index]
+		candidate := route.Candidates[plan.index]
 		started := time.Now()
 		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, payload)
 		var reader *bufio.Reader
 		var firstFrame []byte
+		var errorBody []byte
 		streamFailure := false
 		if err == nil && response != nil && status >= 200 && status < 300 {
 			reader = bufio.NewReader(response.Body)
@@ -323,6 +321,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 				}
 			}
 			if err != nil || sseFrameFailure(firstFrame) {
+				errorBody = streamErrorBody(firstFrame)
 				streamFailure = true
 				retryable = true
 				status = http.StatusBadGateway
@@ -331,6 +330,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		}
 		if err == nil && !streamFailure && response != nil && (status < 200 || status >= 300) {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
+			errorBody = body
 			response.Body.Close()
 			response.Body = io.NopCloser(bytes.NewReader(body))
 			if readErr != nil {
@@ -382,7 +382,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		if response != nil {
 			headers = response.Header
 		}
-		if !plan.advance(request.Context(), status, headers, retryable, len(eligible)) {
+		if !plan.next(request.Context(), status, headers, retryable, errorBody, &route) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if streamFailure {
 				writeError(writer, http.StatusBadGateway, "upstream_stream_failure", "Upstream stream failed before data")
@@ -401,6 +401,20 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			response.Body.Close()
 		}
 	}
+}
+
+func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endpoint string) []Candidate {
+	if candidates == nil {
+		return nil
+	}
+	eligible := make([]Candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) {
+			eligible = append(eligible, candidate)
+		}
+	}
+	s.orderDeployments(eligible)
+	return eligible
 }
 
 func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []byte) bool {

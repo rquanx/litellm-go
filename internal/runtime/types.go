@@ -4,6 +4,8 @@ type Route struct {
 	Alias      string      `json:"alias"`
 	Version    string      `json:"version"`
 	Candidates []Candidate `json:"candidates"`
+	ContextFallback []Candidate `json:"-"`
+	PolicyFallback []Candidate `json:"-"`
 }
 
 type Candidate struct {

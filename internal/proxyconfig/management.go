@@ -71,7 +71,7 @@ func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, er
 		}
 		seen[model.Info.ID] = true
 	}
-	return buildRoutes(all, registry.base.fallbacks, registry.base.defaultFallbacks)
+	return registry.base.buildRoutes(all)
 }
 
 func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) bool {

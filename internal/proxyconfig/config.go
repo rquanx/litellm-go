@@ -24,6 +24,8 @@ type configFile struct {
 	Router struct {
 		Fallbacks []map[string][]string `yaml:"fallbacks"`
 		DefaultFallbacks []string       `yaml:"default_fallbacks"`
+		ContextFallbacks []map[string][]string `yaml:"context_window_fallbacks"`
+		PolicyFallbacks []map[string][]string `yaml:"content_policy_fallbacks"`
 		Strategy string                 `yaml:"routing_strategy"`
 		Timeout   int                  `yaml:"timeout"`
 		Retries   int                  `yaml:"num_retries"`
@@ -61,6 +63,8 @@ type Config struct {
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
+	contextFallbacks []map[string][]string
+	policyFallbacks []map[string][]string
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -84,7 +88,8 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, errors.New("unsupported routing_strategy")
 	}
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
-		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks}
+		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
+		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks}
 	var err error
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {
@@ -105,14 +110,14 @@ func Load(reader io.Reader) (Config, error) {
 			model.Info.ID = fmt.Sprintf("yaml:%s:%d", model.Alias, index)
 		}
 	}
-	config.Routes, err = buildRoutes(config.models, config.fallbacks, config.defaultFallbacks)
+	config.Routes, err = config.buildRoutes(config.models)
 	if err != nil {
 		return Config{}, err
 	}
 	return config, nil
 }
 
-func buildRoutes(models []deployment, configuredFallbacks []map[string][]string, defaultFallbacks []string) ([]runtime.Route, error) {
+func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 	byAlias := make(map[string][]runtime.Candidate)
 	var aliases []string
 	for _, model := range models {
@@ -126,7 +131,7 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string,
 		byAlias[model.Alias] = append(byAlias[model.Alias], candidate)
 	}
 	fallbacks := make(map[string][]string)
-	for _, entry := range configuredFallbacks {
+	for _, entry := range config.fallbacks {
 		for alias, targets := range entry {
 			_, exists := fallbacks[alias]
 			if len(byAlias[alias]) == 0 || exists {
@@ -135,7 +140,7 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string,
 			fallbacks[alias] = targets
 		}
 	}
-	for _, alias := range defaultFallbacks {
+	for _, alias := range config.defaultFallbacks {
 		if len(byAlias[alias]) == 0 {
 			return nil, fmt.Errorf("unknown default fallback %q", alias)
 		}
@@ -151,7 +156,7 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string,
 			seen[target] = true
 			candidates = append(candidates, byAlias[target]...)
 		}
-		for _, target := range defaultFallbacks {
+		for _, target := range config.defaultFallbacks {
 			if !seen[target] && runtime.CompatibleEndpoints(candidates[0].Endpoint, byAlias[target][0].Endpoint) {
 				candidates = append(candidates, byAlias[target]...)
 				seen[target] = true
@@ -167,7 +172,64 @@ func buildRoutes(models []deployment, configuredFallbacks []map[string][]string,
 		}
 		routes = append(routes, runtime.Route{Alias: alias, Version: "1", Candidates: candidates})
 	}
+	for _, policy := range []struct {
+		name string
+		entries []map[string][]string
+	}{
+		{"context_window_fallbacks", config.contextFallbacks},
+		{"content_policy_fallbacks", config.policyFallbacks},
+	} {
+		if policy.entries == nil {
+			continue
+		}
+		overrides, err := compileSpecialFallbacks(policy.entries, byAlias)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", policy.name, err)
+		}
+		for index := range routes {
+			candidates, exists := overrides[routes[index].Alias]
+			if !exists {
+				candidates = []runtime.Candidate{}
+			}
+			if policy.name == "context_window_fallbacks" {
+				routes[index].ContextFallback = candidates
+			} else {
+				routes[index].PolicyFallback = candidates
+			}
+		}
+	}
 	return routes, nil
+}
+
+func compileSpecialFallbacks(entries []map[string][]string, deployments map[string][]runtime.Candidate) (map[string][]runtime.Candidate, error) {
+	fallbacks := make(map[string][]runtime.Candidate)
+	for _, entry := range entries {
+		for model, targets := range entry {
+			primary := deployments[model]
+			if _, exists := fallbacks[model]; len(primary) == 0 || exists {
+				return nil, fmt.Errorf("unknown or repeated model %q", model)
+			}
+			candidates := []runtime.Candidate{}
+			seen := map[string]bool{model: true}
+			for _, target := range targets {
+				if seen[target] || len(deployments[target]) == 0 {
+					return nil, fmt.Errorf("model %q has an unknown or repeated fallback %q", model, target)
+				}
+				seen[target] = true
+				for _, candidate := range deployments[target] {
+					if !runtime.CompatibleEndpoints(primary[0].Endpoint, candidate.Endpoint) {
+						return nil, fmt.Errorf("model %q has an incompatible fallback %q", model, target)
+					}
+					candidates = append(candidates, candidate)
+				}
+			}
+			if len(candidates) > 16 {
+				return nil, fmt.Errorf("model %q exceeds the 16-candidate limit", model)
+			}
+			fallbacks[model] = candidates
+		}
+	}
+	return fallbacks, nil
 }
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
