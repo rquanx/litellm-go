@@ -160,6 +160,31 @@ func (s *Server) RunBackgroundHealthChecks(ctx context.Context) {
 	}
 }
 
+func (s *Server) filterUnhealthyCandidates(candidates []Candidate) []Candidate {
+	staleness := s.config.HealthRoutingStaleness
+	if staleness <= 0 || len(candidates) < 2 {
+		return candidates
+	}
+	s.mu.RLock()
+	cache := s.healthResults
+	s.mu.RUnlock()
+	if len(cache) == 0 {
+		return candidates
+	}
+	cutoff := time.Now().Add(-staleness)
+	filtered := make([]Candidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		result := cache[candidate.DeploymentID]
+		if result.Status != "unhealthy" || !result.CheckedAt.After(cutoff) {
+			filtered = append(filtered, candidate)
+		}
+	}
+	if len(filtered) == 0 {
+		return candidates
+	}
+	return filtered
+}
+
 func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) bool {
 	const prompt = "ping"
 	endpoint := candidate.Endpoint

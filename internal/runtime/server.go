@@ -49,6 +49,7 @@ type Config struct {
 	BackgroundHealthInterval time.Duration
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
+	HealthRoutingStaleness time.Duration
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
@@ -680,7 +681,7 @@ func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endp
 		}
 	}
 	s.orderDeployments(eligible, stream)
-	return eligible
+	return s.filterUnhealthyCandidates(eligible)
 }
 
 func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []byte) bool {

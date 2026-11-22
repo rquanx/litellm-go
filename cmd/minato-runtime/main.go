@@ -63,6 +63,7 @@ func main() {
 		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
 		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
 		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks
+		config.HealthRoutingStaleness = proxy.HealthRoutingStaleness
 		if proxy.Timeout > 0 {
 			config.HTTPClient.Timeout = proxy.Timeout
 		}

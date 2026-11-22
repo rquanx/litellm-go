@@ -93,6 +93,25 @@ func TestBackgroundHealthCachesEnabledDeployments(t *testing.T) {
 	}
 }
 
+func TestHealthRoutingFiltersOnlyFreshFailuresAndKeepsLastCandidate(t *testing.T) {
+	server := NewServer(Config{HealthRoutingStaleness: time.Minute})
+	now := time.Now()
+	server.healthResults = map[string]ModelHealthRecord{
+		"bad": {Status: "unhealthy", CheckedAt: now},
+		"old": {Status: "unhealthy", CheckedAt: now.Add(-time.Hour)},
+		"also-bad": {Status: "unhealthy", CheckedAt: now},
+	}
+	bad := Candidate{DeploymentID: "bad"}
+	old := Candidate{DeploymentID: "old"}
+	alsoBad := Candidate{DeploymentID: "also-bad"}
+	if candidates := server.filterUnhealthyCandidates([]Candidate{bad, old, alsoBad}); len(candidates) != 1 || candidates[0].DeploymentID != "old" {
+		t.Fatalf("unexpected surviving candidates: %+v", candidates)
+	}
+	if candidates := server.filterUnhealthyCandidates([]Candidate{bad, alsoBad}); len(candidates) != 2 {
+		t.Fatalf("routing removed every candidate: %+v", candidates)
+	}
+}
+
 func TestModelHealthScopesProbesAndHidesUpstreamAddress(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/allowed/v1/chat/completions" {

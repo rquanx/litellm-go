@@ -32,6 +32,8 @@ type configFile struct {
 		HealthCheckInterval int `yaml:"health_check_interval"`
 		HealthCheckConcurrency int `yaml:"health_check_concurrency"`
 		SkipDisabledHealthChecks bool `yaml:"health_check_skip_disabled_background_models"`
+		EnableHealthCheckRouting bool `yaml:"enable_health_check_routing"`
+		HealthCheckStaleness int `yaml:"health_check_staleness_threshold"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
@@ -106,6 +108,7 @@ type Config struct {
 	BackgroundHealthInterval time.Duration
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
+	HealthRoutingStaleness time.Duration
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -177,7 +180,7 @@ func Load(reader io.Reader) (Config, error) {
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
 	if file.General.HealthCheckInterval < 0 || file.General.HealthCheckInterval > 86400 || file.General.HealthCheckConcurrency < 0 ||
-		file.General.HealthCheckConcurrency > 1024 {
+		file.General.HealthCheckConcurrency > 1024 || file.General.HealthCheckStaleness < 0 || file.General.HealthCheckStaleness > 86400 {
 		return Config{}, errors.New("invalid health check interval or concurrency")
 	}
 	config.HealthCheckConcurrency = file.General.HealthCheckConcurrency
@@ -188,6 +191,12 @@ func Load(reader io.Reader) (Config, error) {
 			interval = 300
 		}
 		config.BackgroundHealthInterval = time.Duration(interval) * time.Second
+	}
+	if file.General.EnableHealthCheckRouting {
+		config.HealthRoutingStaleness = time.Duration(file.General.HealthCheckStaleness) * time.Second
+		if config.HealthRoutingStaleness == 0 {
+			config.HealthRoutingStaleness = 10 * time.Minute
+		}
 	}
 	for _, credential := range file.Credentials {
 		if err := credential.validate(); err != nil {
