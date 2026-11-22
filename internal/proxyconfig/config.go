@@ -19,6 +19,7 @@ import (
 
 type configFile struct {
 	Models  []deployment `yaml:"model_list"`
+	SearchTools []searchToolConfig `yaml:"search_tools"`
 	Credentials []providerCredential `yaml:"credential_list"`
 	Callbacks callbackSettings `yaml:"litellm_settings"`
 	General struct {
@@ -79,6 +80,7 @@ type deployment struct {
 
 type Config struct {
 	Routes    []runtime.Route
+	SearchTools []runtime.SearchTool
 	MasterKey string
 	Timeout   time.Duration
 	NumRetries int
@@ -112,8 +114,8 @@ func Load(reader io.Reader) (Config, error) {
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return Config{}, errors.New("expected one LiteLLM YAML document")
 	}
-	if len(file.Models) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
-		return Config{}, errors.New("model_list is required and router settings must use a valid timeout and retry count between zero and eight")
+	if len(file.Models)+len(file.SearchTools) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
+		return Config{}, errors.New("model_list or search_tools is required and router settings must use a valid timeout and retry count between zero and eight")
 	}
 	strategy := file.Router.Strategy
 	if strategy == "" {
@@ -168,6 +170,10 @@ func Load(reader io.Reader) (Config, error) {
 		config.credentials[credential.Name] = credential
 	}
 	var err error
+	config.SearchTools, err = prepareSearchTools(file.SearchTools)
+	if err != nil {
+		return Config{}, err
+	}
 	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
 	if err != nil {
 		return Config{}, err

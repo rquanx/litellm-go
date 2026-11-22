@@ -26,6 +26,7 @@ type virtualKey struct {
 	UserID    string         `json:"user_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	ObjectPermission *searchPermission `json:"object_permission,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
 	RotationTarget string     `json:"rotation_target,omitempty"`
 }
@@ -81,29 +82,51 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 }
 
 func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
+	models, _, valid := registry.authorize(token)
+	return models, valid
+}
+
+func (registry *KeyRegistry) AuthorizeSearch(token string) ([]string, bool) {
+	_, tools, valid := registry.authorize(token)
+	return tools, valid
+}
+
+type searchPermission struct {
+	SearchTools []string `json:"search_tools"`
+}
+
+func (permission *searchPermission) scope() []string {
+	if permission == nil || len(permission.SearchTools) == 0 {
+		return nil
+	}
+	return permission.SearchTools
+}
+
+func (registry *KeyRegistry) authorize(token string) ([]string, []string, bool) {
 	if token == "" {
-		return nil, false
+		return nil, nil, false
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 	key, exists := registry.state.Keys[keyDigest(token)]
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
-		return nil, false
+		return nil, nil, false
 	}
 	if key.RotationTarget != "" {
 		key, exists = registry.state.Keys[key.RotationTarget]
 		if !exists || key.Blocked || key.RotationTarget != "" || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
-			return nil, false
+			return nil, nil, false
 		}
 	}
 	scope := unrestrictedScope(key.Models)
+	searchScope := key.ObjectPermission.scope()
 	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
 		scope = nil
 	}
 	if key.UserID != "" {
 		user, exists := registry.state.Users[key.UserID]
 		if !exists || user.Role != "internal_user" {
-			return nil, false
+			return nil, nil, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(user.Models))
 	}
@@ -111,9 +134,10 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 	if key.TeamID != "" {
 		owner, exists := registry.state.Teams[key.TeamID]
 		if !exists || owner.Blocked || (orgID != "" && orgID != owner.OrgID) {
-			return nil, false
+			return nil, nil, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
+		searchScope = intersectScopes(searchScope, owner.ObjectPermission.scope())
 		if index := memberIndex(owner, key.UserID); index >= 0 {
 			scope = intersectScopes(scope, unrestrictedScope(owner.Members[index].Models))
 		}
@@ -122,15 +146,15 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 	if orgID != "" {
 		owner, exists := registry.state.Organizations[orgID]
 		if !exists {
-			return nil, false
+			return nil, nil, false
 		}
 		if index := organizationMemberIndex(owner, key.UserID); index >= 0 &&
 			owner.Members[index].Role == "internal_user_viewer" {
-			return nil, false
+			return nil, nil, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 	}
-	return scope, true
+	return scope, searchScope, true
 }
 
 func intersectScopes(key, team []string) []string {
@@ -198,6 +222,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		UserID   string         `json:"user_id"`
 		Blocked  bool           `json:"blocked"`
 		Metadata map[string]any `json:"metadata"`
+		ObjectPermission *searchPermission `json:"object_permission"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key configuration")
@@ -210,7 +235,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, OrgID: input.OrgID, UserID: input.UserID,
-		Blocked: input.Blocked, Metadata: input.Metadata, Expires: expiry, CreatedAt: &now}
+		Blocked: input.Blocked, Metadata: input.Metadata, ObjectPermission: input.ObjectPermission, Expires: expiry, CreatedAt: &now}
 	token := newKeyToken()
 	registry.mu.Lock()
 	defer registry.mu.Unlock()

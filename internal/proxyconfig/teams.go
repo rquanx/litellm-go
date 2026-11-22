@@ -2,6 +2,7 @@ package proxyconfig
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"net/http"
@@ -17,6 +18,7 @@ type team struct {
 	Models   []string       `json:"models"`
 	Blocked  bool           `json:"blocked"`
 	Metadata map[string]any `json:"metadata"`
+	ObjectPermission *searchPermission `json:"object_permission,omitempty"`
 	Members []teamMembership `json:"members_with_roles,omitempty"`
 }
 
@@ -27,6 +29,7 @@ type teamChanges struct {
 	Models   *[]string       `json:"models"`
 	Blocked  *bool           `json:"blocked"`
 	Metadata *map[string]any `json:"metadata"`
+	ObjectPermission json.RawMessage `json:"object_permission"`
 }
 
 func (registry *KeyRegistry) registerTeamRoutes(mux *http.ServeMux) {
@@ -106,6 +109,14 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 	}
 	if input.Models != nil {
 		current.Models = *input.Models
+	}
+	if input.ObjectPermission != nil {
+		var permission *searchPermission
+		if err := decodeModelJSON(strings.NewReader(string(input.ObjectPermission)), &permission); err != nil {
+			modelError(w, http.StatusBadRequest, "Invalid or unsupported object permission")
+			return
+		}
+		current.ObjectPermission = permission
 	}
 	if input.Blocked != nil {
 		current.Blocked = *input.Blocked

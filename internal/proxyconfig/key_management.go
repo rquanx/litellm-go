@@ -111,6 +111,7 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 		Blocked  *bool           `json:"blocked"`
 		Metadata *map[string]any `json:"metadata"`
 		Duration json.RawMessage `json:"duration"`
+		ObjectPermission json.RawMessage `json:"object_permission"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil || input.Key == "" {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key update")
@@ -144,6 +145,14 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.Metadata != nil {
 		key.Metadata = *input.Metadata
+	}
+	if input.ObjectPermission != nil {
+		var permission *searchPermission
+		if err := decodeModelJSON(strings.NewReader(string(input.ObjectPermission)), &permission); err != nil {
+			modelError(w, http.StatusBadRequest, "Invalid or unsupported object permission")
+			return
+		}
+		key.ObjectPermission = permission
 	}
 	if input.Duration != nil {
 		var duration string

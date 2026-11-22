@@ -31,6 +31,8 @@ type Config struct {
 	MaxConcurrent      int
 	NumRetries         int
 	AuthorizeKey       func(string) ([]string, bool)
+	AuthorizeSearch    func(string) ([]string, bool)
+	SearchTools        []SearchTool
 	RoutingStrategy    string
 	LatencyBuffer      float64
 	LatencySamples     int
@@ -87,6 +89,9 @@ func (s *Server) ReplaceConfiguredRoutes(routes []Route) {
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
+		return
+	}
 	alias, geminiEndpoint := geminiMethod(request.URL.Path)
 	var deployment, deploymentOperation string
 	if s.config.AuthorizeInference && geminiEndpoint == "" {

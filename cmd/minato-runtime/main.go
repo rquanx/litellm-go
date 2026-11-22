@@ -43,6 +43,7 @@ func main() {
 			log.Fatal(err)
 		}
 		config.Routes = proxy.Routes
+		config.SearchTools = proxy.SearchTools
 		config.NumRetries = proxy.NumRetries
 		config.RoutingStrategy = proxy.RoutingStrategy
 		config.LatencyBuffer = proxy.LatencyBuffer
@@ -114,6 +115,7 @@ func main() {
 			log.Fatal(err)
 		}
 		config.AuthorizeKey = keys.Authorize
+		config.AuthorizeSearch = keys.AuthorizeSearch
 	}
 	if *keyStatePath != "" && keys == nil {
 		log.Fatal("virtual key state requires standalone config and a master key")
