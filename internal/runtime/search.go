@@ -97,12 +97,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		writeError(w, http.StatusBadRequest, "invalid_request", "query must be a string or a list of strings")
 		return
 	}
-	var tools []SearchTool
-	for _, tool := range s.config.SearchTools {
-		if tool.Name == name {
-			tools = append(tools, tool)
-		}
-	}
+	tools := s.searchCandidates(name, scope)
 	if len(tools) == 0 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Search tool not found")
 		return
@@ -112,9 +107,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		defer func() { <-s.sem }()
 	case <-r.Context().Done():
 		return
-	}
-	if len(tools) > 1 {
-		rand.Shuffle(len(tools), func(i, j int) { tools[i], tools[j] = tools[j], tools[i] })
 	}
 	plan := s.attemptPlan(name)
 	var recorder *callbackResponse
@@ -164,6 +156,30 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 			return
 		}
 	}
+}
+
+func (s *Server) searchCandidates(name string, scope []string) []SearchTool {
+	s.mu.RLock()
+	fallbacks := s.searchFallbacks[name]
+	s.mu.RUnlock()
+	var tools []SearchTool
+	for _, group := range append([]string{name}, fallbacks...) {
+		if scope != nil && !slices.Contains(scope, group) {
+			continue
+		}
+		start := len(tools)
+		for _, tool := range s.config.SearchTools {
+			if tool.Name == group {
+				tools = append(tools, tool)
+			}
+		}
+		if group == name && len(tools) == 0 {
+			return nil
+		}
+		candidates := tools[start:]
+		rand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+	}
+	return tools
 }
 
 func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte) (int, http.Header, []byte) {

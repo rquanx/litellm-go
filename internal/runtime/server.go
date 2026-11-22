@@ -33,6 +33,7 @@ type Config struct {
 	AuthorizeKey       func(string) ([]string, bool)
 	AuthorizeSearch    func(string) ([]string, bool)
 	SearchTools        []SearchTool
+	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
 	LatencyBuffer      float64
 	LatencySamples     int
@@ -49,6 +50,7 @@ type Server struct {
 	mu     sync.RWMutex
 	routes map[string]Route
 	configuredRoutes map[string]Route
+	searchFallbacks map[string][]string
 	sem    chan struct{}
 	trafficMu sync.Mutex
 	deploymentTraffic map[string]int
@@ -74,17 +76,19 @@ func NewServer(config Config) *Server {
 	for _, route := range config.Routes {
 		routes[route.Alias] = route
 	}
-	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes, sem: make(chan struct{}, config.MaxConcurrent)}
+	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
+		searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 
-// ReplaceConfiguredRoutes publishes a complete standalone configuration.
-func (s *Server) ReplaceConfiguredRoutes(routes []Route) {
+// ReplaceConfiguredRouting publishes the model routes and search fallback rules together.
+func (s *Server) ReplaceConfiguredRouting(routes []Route, searchFallbacks map[string][]string) {
 	next := make(map[string]Route, len(routes))
 	for _, route := range routes {
 		next[route.Alias] = route
 	}
 	s.mu.Lock()
 	s.configuredRoutes = next
+	s.searchFallbacks = searchFallbacks
 	s.mu.Unlock()
 }
 

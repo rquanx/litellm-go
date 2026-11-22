@@ -27,6 +27,36 @@ type searchToolConfig struct {
 	} `yaml:"search_tool_info"`
 }
 
+func (config Config) searchFallbacks() map[string][]string {
+	names := make(map[string]bool, len(config.SearchTools))
+	for _, tool := range config.SearchTools {
+		names[tool.Name] = true
+	}
+	configured := make(map[string][]string)
+	for _, rule := range config.fallbacks {
+		for name, targets := range rule {
+			configured[name] = targets
+		}
+	}
+	fallbacks := make(map[string][]string, len(names))
+	for name := range names {
+		targets, explicit := configured[name]
+		if !explicit {
+			targets = configured["*"]
+		}
+		seen := map[string]bool{name: true}
+		for _, group := range [][]string{targets, config.defaultFallbacks} {
+			for _, target := range group {
+				if names[target] && !seen[target] {
+					fallbacks[name] = append(fallbacks[name], target)
+					seen[target] = true
+				}
+			}
+		}
+	}
+	return fallbacks
+}
+
 func prepareSearchTools(entries []searchToolConfig) ([]runtime.SearchTool, error) {
 	tools := make([]runtime.SearchTool, 0, len(entries))
 	for _, entry := range entries {

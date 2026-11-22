@@ -53,7 +53,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	if err != nil {
 		return nil, err
 	}
-	server.ReplaceConfiguredRoutes(routes)
+	server.ReplaceConfiguredRouting(routes, registry.router.apply(registry.base).searchFallbacks())
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /model/info", registry.info)
@@ -273,7 +273,7 @@ func (registry *modelRegistry) publish(w http.ResponseWriter, models []deploymen
 		}
 	}
 	registry.models, registry.credentials, registry.router = models, credentials, router
-	registry.server.ReplaceConfiguredRoutes(routes)
+	registry.server.ReplaceConfiguredRouting(routes, router.apply(registry.base).searchFallbacks())
 	return true
 }
 

@@ -81,6 +81,7 @@ type deployment struct {
 type Config struct {
 	Routes    []runtime.Route
 	SearchTools []runtime.SearchTool
+	SearchFallbacks map[string][]string
 	MasterKey string
 	Timeout   time.Duration
 	NumRetries int
@@ -201,6 +202,7 @@ func Load(reader io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	config.SearchFallbacks = config.searchFallbacks()
 	return config, nil
 }
 
@@ -237,23 +239,30 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		byAlias[alias] = candidates
 		aliases = append(aliases, alias)
 	}
+	searchNames := make(map[string]bool, len(config.SearchTools))
+	for _, tool := range config.SearchTools {
+		searchNames[tool.Name] = true
+	}
 	fallbacks := make(map[string][]string)
 	for _, entry := range config.fallbacks {
 		for alias, targets := range entry {
 			_, exists := fallbacks[alias]
-			if (alias != "*" && len(byAlias[alias]) == 0) || exists {
+			if (alias != "*" && len(byAlias[alias]) == 0 && !searchNames[alias]) || exists {
 				return nil, fmt.Errorf("unknown or repeated fallback alias %q", alias)
 			}
 			fallbacks[alias] = targets
 			for _, target := range targets {
-				if byAlias[target] == nil {
+				if byAlias[target] == nil && !searchNames[target] {
 					return nil, fmt.Errorf("unknown fallback target %q", target)
+				}
+				if alias != "*" && byAlias[alias] == nil && (!searchNames[target] || target == alias) {
+					return nil, fmt.Errorf("search tool %q has an incompatible fallback %q", alias, target)
 				}
 			}
 		}
 	}
 	for _, alias := range config.defaultFallbacks {
-		if len(byAlias[alias]) == 0 {
+		if len(byAlias[alias]) == 0 && !searchNames[alias] {
 			return nil, fmt.Errorf("unknown default fallback %q", alias)
 		}
 	}
@@ -269,6 +278,9 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 			targets = fallbacks["*"]
 		}
 		for _, target := range targets {
+			if explicit && searchNames[alias] && searchNames[target] && byAlias[target] == nil {
+				continue
+			}
 			if !explicit && (target == alias || target == config.modelGroupAliases[alias].Model ||
 				!hasCompatibleDeployment(byAlias[alias], byAlias[target])) {
 				continue
