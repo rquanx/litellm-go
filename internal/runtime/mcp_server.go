@@ -128,7 +128,7 @@ func (s *Server) listProtocolTools(r *http.Request, access MCPAccess) []map[stri
 		if !access(server, "") {
 			continue
 		}
-		entries, err := s.mcpTools(r.Context(), server)
+		entries, err := s.mcpTools(r.Context(), s.mcpRequestServer(r, server))
 		if err != nil {
 			continue
 		}
@@ -166,7 +166,7 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRP
 		writeMCPError(w, http.StatusOK, req.ID, -32602, "Tool is unavailable")
 		return
 	}
-	session, err := s.openMCP(r.Context(), selected)
+	session, err := s.openMCP(r.Context(), s.mcpRequestServer(r, selected))
 	if err != nil {
 		writeMCPError(w, http.StatusOK, req.ID, -32603, "Could not open MCP session")
 		return

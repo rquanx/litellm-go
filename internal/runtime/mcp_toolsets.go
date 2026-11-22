@@ -48,7 +48,7 @@ func (s *Server) serveMCPForToolset(w http.ResponseWriter, r *http.Request, sele
 			}
 			return false
 		}
-		s.dispatchMCP(w, r, filter, true)
+		s.dispatchMCP(w, r, filterMCPAccess(r, filter), true)
 		return
 	}
 	writeError(w, http.StatusNotFound, "toolset_not_found", "MCP toolset not found")

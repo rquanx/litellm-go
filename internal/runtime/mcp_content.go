@@ -20,7 +20,7 @@ func (s *Server) handleMCPContent(w http.ResponseWriter, r *http.Request, req mc
 		items := make([]map[string]any, 0)
 		for _, server := range servers {
 			if access(server, "") {
-				items = append(items, s.listMCPContent(r.Context(), server, req.Method, field)...)
+				items = append(items, s.listMCPContent(r.Context(), s.mcpRequestServer(r, server), req.Method, field)...)
 			}
 		}
 		writeMCPResult(w, req.ID, map[string]any{field: items})
@@ -44,7 +44,8 @@ func (s *Server) handleMCPContent(w http.ResponseWriter, r *http.Request, req mc
 			writeMCPError(w, http.StatusOK, req.ID, -32602, "Prompt is unavailable")
 			return
 		}
-		result, err := s.requestMCPContent(r.Context(), selected, req.Method, map[string]any{"name": name, "arguments": params.Arguments})
+		result, err := s.requestMCPContent(r.Context(), s.mcpRequestServer(r, selected), req.Method,
+			map[string]any{"name": name, "arguments": params.Arguments})
 		if err != nil {
 			writeMCPError(w, http.StatusOK, req.ID, -32603, "MCP prompt request failed")
 			return
@@ -60,7 +61,7 @@ func (s *Server) handleMCPContent(w http.ResponseWriter, r *http.Request, req mc
 			if !access(server, "") {
 				continue
 			}
-			result, err := s.requestMCPContent(r.Context(), server, req.Method, map[string]string{"uri": params.URI})
+			result, err := s.requestMCPContent(r.Context(), s.mcpRequestServer(r, server), req.Method, map[string]string{"uri": params.URI})
 			if err == nil {
 				writeMCPResult(w, req.ID, result)
 				return

@@ -24,19 +24,42 @@ func (s *Server) currentMCPServers() []MCPServer {
 
 func (s *Server) mcpAccess(r *http.Request) (MCPAccess, bool) {
 	if s.authorized(r) {
-		return func(MCPServer, string) bool { return true }, true
+		return filterMCPAccess(r, func(MCPServer, string) bool { return true }), true
 	}
 	token := ProxyCredential(r)
 	if s.config.AuthorizeMCP != nil {
-		return s.config.AuthorizeMCP(token)
+		access, valid := s.config.AuthorizeMCP(token)
+		if valid {
+			return filterMCPAccess(r, access), true
+		}
+		return nil, false
 	}
 	if s.config.AuthorizeKey != nil {
 		_, valid := s.config.AuthorizeKey(token)
 		if valid {
-			return func(server MCPServer, _ string) bool { return server.AllowAllKeys }, true
+			return filterMCPAccess(r, func(server MCPServer, _ string) bool { return server.AllowAllKeys }), true
 		}
 	}
 	return nil, false
+}
+
+func filterMCPAccess(r *http.Request, access MCPAccess) MCPAccess {
+	raw := strings.Join(r.Header.Values("X-MCP-Servers"), ",")
+	if strings.TrimSpace(raw) == "" {
+		return access
+	}
+	selectors := strings.Split(raw, ",")
+	for i := range selectors {
+		selectors[i] = strings.TrimSpace(selectors[i])
+	}
+	return func(server MCPServer, tool string) bool {
+		for _, selector := range selectors {
+			if selector != "" && (server.matches(selector) || slices.Contains(server.AccessGroups, selector)) {
+				return access(server, tool)
+			}
+		}
+		return false
+	}
 }
 
 func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
@@ -88,7 +111,7 @@ func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, access MCP
 			continue
 		}
 		listed = true
-		results, err := s.mcpTools(r.Context(), server)
+		results, err := s.mcpTools(r.Context(), s.mcpRequestServer(r, server))
 		if err != nil {
 			if selector != "" {
 				writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": "server_error", "message": "Could not list MCP tools"})
@@ -135,7 +158,7 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPA
 			writeError(w, http.StatusForbidden, "tool_not_allowed", "MCP tool access denied")
 			return
 		}
-		session, err := s.openMCP(r.Context(), server)
+		session, err := s.openMCP(r.Context(), s.mcpRequestServer(r, server))
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "upstream_error", "Could not open MCP session")
 			return
@@ -153,6 +176,47 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPA
 		return
 	}
 	writeError(w, http.StatusNotFound, "server_not_found", "MCP server not found")
+}
+
+func (s *Server) mcpRequestServer(r *http.Request, server MCPServer) MCPServer {
+	if server.Command != "" {
+		return server
+	}
+	headers := server.Headers.Clone()
+	if headers == nil {
+		headers = make(http.Header)
+	}
+	servers := s.currentMCPServers()
+	for field, values := range r.Header {
+		raw, prefixed := strings.CutPrefix(strings.ToLower(field), "x-mcp-")
+		if !prefixed {
+			continue
+		}
+		var best, serverID string
+		for _, candidate := range servers {
+			for _, selector := range []string{candidate.Name, candidate.Alias} {
+				selector = strings.ToLower(selector)
+				if selector != "" && strings.HasPrefix(raw, selector+"-") && len(selector) > len(best) {
+					best, serverID = selector, candidate.ID
+				}
+			}
+		}
+		if serverID != server.ID || best == "" {
+			continue
+		}
+		name := http.CanonicalHeaderKey(strings.TrimPrefix(raw, best+"-"))
+		switch name {
+		case "Authorization", "Api-Key", "X-Api-Key":
+			if headers.Get(name) == "" {
+				headers[name] = slices.Clone(values)
+			}
+		}
+	}
+	if value := r.Header.Get("X-MCP-Auth"); value != "" && headers.Get("Authorization") == "" {
+		headers.Set("Authorization", value)
+	}
+	server.Headers = headers
+	return server
 }
 
 func (server MCPServer) matches(id string) bool {
