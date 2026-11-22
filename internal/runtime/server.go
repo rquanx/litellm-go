@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -571,6 +572,13 @@ func streamConverter(endpoint, upstream, alias string, input map[string]any, lim
 }
 
 func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
+	if candidate.Endpoint == "bedrock-embeddings" {
+		return s.bedrockEmbeddings(ctx, request, candidate, payload)
+	}
+	return s.callProviderJSON(ctx, request, endpoint, candidate, payload)
+}
+
+func (s *Server) callProviderJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
 	response, err := s.send(ctx, request, endpoint, candidate, payload, false)
 	if err != nil {
 		return 0, nil, nil, true, err
@@ -601,6 +609,10 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+	if candidate.Endpoint == "bedrock-embeddings" {
+		body, err := json.Marshal(input.fields)
+		return body, "application/json", err
+	}
 	if input.form != nil {
 		return input.encodeMultipart(candidate.ModelID, stream)
 	}
@@ -706,6 +718,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = rerankTarget(candidate.APIBase, candidate.Provider)
 	} else if candidate.Endpoint == "bedrock-converse" {
 		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
+	} else if candidate.Endpoint == "bedrock-embeddings" {
+		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
 	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(encoded))
 	if err != nil {
@@ -734,7 +748,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 	} else if candidate.Provider == "azure" && apiKey != "" {
 		upstream.Header.Set("api-key", apiKey)
-	} else if apiKey != "" && candidate.Endpoint != "bedrock-converse" {
+	} else if apiKey != "" && candidate.Bedrock == nil {
 		upstream.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for key, value := range candidate.Headers {
@@ -743,7 +757,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if session := request.Header.Get("x-opencode-session"); session != "" {
 		upstream.Header.Set("x-opencode-session", session)
 	}
-	if candidate.Endpoint == "bedrock-converse" {
+	if candidate.Bedrock != nil {
 		if err := authorizeBedrock(ctx, upstream, candidate, encoded, apiKey); err != nil {
 			release()
 			return nil, err

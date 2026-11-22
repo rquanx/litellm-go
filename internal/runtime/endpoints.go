@@ -25,6 +25,7 @@ var endpoints = map[string]endpointSpec{
 	"gemini-generate":    {"", "gemini", false},
 	"gemini-stream":      {"", "gemini", true},
 	"bedrock-converse":   {"", "bedrock", true},
+	"bedrock-embeddings": {"", "embeddings", false},
 }
 
 // EndpointFromPath resolves the public path used in LiteLLM model_info.

@@ -360,6 +360,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if provider == "bedrock" {
 		endpoint = "bedrock-converse"
+		if strings.Contains(model, "amazon.titan-embed-text") {
+			endpoint = "bedrock-embeddings"
+		}
 	}
 	if rerankProvider(provider) {
 		endpoint = "rerank"
@@ -372,11 +375,14 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if len(entry.Info.Endpoints) == 1 {
 		configured := runtime.EndpointFromPath(entry.Info.Endpoints[0])
-		if provider == "bedrock" && (configured == "chat-completions" || configured == "responses") {
+		if endpoint == "bedrock-converse" && (configured == "chat-completions" || configured == "responses") {
+			configured = endpoint
+		}
+		if configured == "embeddings" && endpoint == "bedrock-embeddings" {
 			configured = endpoint
 		}
 		if configured == "" || provider == "gemini" || provider == "vertex_ai" || (configured == "anthropic-messages") != (provider == "anthropic") ||
-			(configured == "bedrock-converse") != (provider == "bedrock") {
+			(provider == "bedrock" && configured != endpoint) {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
 		}
 		endpoint = configured
