@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -66,7 +67,7 @@ func TestFilesAndBatchesShareUpstreamDeployment(t *testing.T) {
 	defer upstream.Close()
 	server := NewServer(Config{AuthorizeInference: true, Token: "master", Routes: []Route{
 		{Alias: "demo", Candidates: []Candidate{{Provider: "openai", DeploymentID: "dep",
-			ModelID: "fixture", APIBase: upstream.URL, APIKey: "fixture-provider", Endpoint: "chat-completions"}}},
+			ModelID: "fixture", APIBase: upstream.URL, APIKey: "fixture-provider", Endpoint: "chat-completions", RoutingGroup: "demo"}}},
 	}})
 	send := func(method, path, contentType string, body io.Reader) string {
 		t.Helper()
@@ -106,5 +107,17 @@ func TestFilesAndBatchesShareUpstreamDeployment(t *testing.T) {
 	send("POST", "/v1/batches/"+batch+"/cancel", "", nil)
 	if body := send("GET", "/v1/files/"+output+"/content", "", nil); body != "\xff\x00\x02" {
 		t.Fatal("file content was modified")
+	}
+	liteLLMID := func(prefix, original string) string {
+		return prefix + base64.RawURLEncoding.EncodeToString([]byte("litellm:" + original + ";model,demo"))
+	}
+	legacyInput := liteLLMID("file-", "file-in")
+	if body := send("GET", "/v1/files?after="+url.QueryEscape(legacyInput), "", nil); !strings.Contains(body, output) {
+		t.Fatal("LiteLLM cursor did not select the expected file deployment")
+	}
+	send("POST", "/v1/batches", "application/json", strings.NewReader(`{"input_file_id":"`+legacyInput+`"}`))
+	send("POST", "/v1/batches/"+liteLLMID("batch_", "batch-job")+"/cancel", "", nil)
+	if body := send("GET", "/v1/files/"+liteLLMID("file-", "file-out")+"/content", "", nil); body != "\xff\x00\x02" {
+		t.Fatal("LiteLLM file ID did not resolve to the expected content")
 	}
 }

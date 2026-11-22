@@ -52,6 +52,28 @@ func validResourceSegment(id string) bool {
 	return id != "" && id != "." && id != ".." && !strings.ContainsAny(id, "/\\")
 }
 
+func decodeLiteLLMResourceID(id, family string) (alias, original string, ok bool) {
+	prefix := "file-"
+	if family == "batches" {
+		prefix = "batch_"
+	}
+	encoded, ok := strings.CutPrefix(id, prefix)
+	if !ok || len(encoded) > 8192 {
+		return "", "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(encoded, "="))
+	if err != nil {
+		return "", "", false
+	}
+	value, ok := strings.CutPrefix(string(raw), "litellm:")
+	if !ok {
+		return "", "", false
+	}
+	original, alias, ok = strings.Cut(value, ";model,")
+	alias = strings.TrimSpace(alias)
+	return alias, original, ok && validResourceSegment(original) && alias != "" && !strings.Contains(alias, ";")
+}
+
 func (s *Server) resourceCandidate(alias, deployment string, scope []string) (Candidate, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -90,9 +112,25 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if alias == "" {
 		alias = strings.TrimSpace(request.URL.Query().Get("target_model_names"))
 	}
+	if alias == "" {
+		alias = strings.TrimSpace(request.Header.Get("X-LiteLLM-Model"))
+	}
 	var deployment string
-	if cursor, ok := decodeResourceID(request.URL.Query().Get("after"), family); ok {
-		deployment = cursor.Deployment
+	for _, field := range []string{"after", "before"} {
+		cursor := request.URL.Query().Get(field)
+		if ref, ok := decodeResourceID(cursor, family); ok {
+			if deployment != "" && deployment != ref.Deployment {
+				writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursors select different deployments")
+				return
+			}
+			deployment = ref.Deployment
+		} else if cursorAlias, _, ok := decodeLiteLLMResourceID(cursor, family); ok {
+			if alias != "" && alias != cursorAlias {
+				writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor selects a different model")
+				return
+			}
+			alias = cursorAlias
+		}
 	}
 	var body []byte
 	contentType := request.Header.Get("Content-Type")
@@ -134,6 +172,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 					if file, ok := decodeResourceID(fileID, "files"); ok {
 						deployment = file.Deployment
 						payload.fields["input_file_id"] = file.Original
+					} else if fileAlias, original, ok := decodeLiteLLMResourceID(fileID, "files"); ok {
+						alias = fileAlias
+						payload.fields["input_file_id"] = original
 					} else if strings.HasPrefix(fileID, "minato_") {
 						err = errors.New("invalid input file ID")
 					}
@@ -163,6 +204,8 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		if resource, ok := decodeResourceID(decoded, family); ok {
 			deployment = resource.Deployment
 			decoded = resource.Original
+		} else if embeddedAlias, original, ok := decodeLiteLLMResourceID(decoded, family); ok {
+			alias, decoded = embeddedAlias, original
 		} else if strings.HasPrefix(decoded, "minato_") {
 			decoded = ""
 		}
@@ -218,13 +261,23 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 	query := upstream.URL.Query()
 	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter", "variant"} {
 		for _, value := range request.URL.Query()[key] {
-			if (key == "after" || key == "before") && strings.HasPrefix(value, "minato_") {
-				id, ok := decodeResourceID(value, resourceResultKind(family))
-				if !ok || id.Deployment != candidate.DeploymentID {
-					writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor belongs to a different deployment")
-					return
+			if key == "after" || key == "before" {
+				if strings.HasPrefix(value, "minato_") {
+					id, ok := decodeResourceID(value, resourceResultKind(family))
+					if !ok || id.Deployment != candidate.DeploymentID {
+						writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor belongs to a different deployment")
+						return
+					}
+					value = id.Original
+				} else if family == "files" || family == "batches" {
+					if alias, original, ok := decodeLiteLLMResourceID(value, family); ok {
+						if alias != candidate.RoutingGroup {
+							writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor belongs to a different model")
+							return
+						}
+						value = original
+					}
 				}
-				value = id.Original
 			}
 			query.Add(key, value)
 		}
