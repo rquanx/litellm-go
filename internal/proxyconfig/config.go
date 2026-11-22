@@ -43,6 +43,8 @@ type configFile struct {
 		AllowedFails *int `yaml:"allowed_fails"`
 		CooldownTime *float64 `yaml:"cooldown_time"`
 		DisableCooldowns bool `yaml:"disable_cooldowns"`
+		RetryPolicy runtime.RetryPolicy `yaml:"retry_policy"`
+		ModelRetryPolicies map[string]runtime.RetryPolicy `yaml:"model_group_retry_policy"`
 	} `yaml:"router_settings"`
 }
 
@@ -85,6 +87,8 @@ type Config struct {
 	LatencySamples int
 	AllowedFails int
 	Cooldown time.Duration
+	RetryPolicy runtime.RetryPolicy
+	ModelRetryPolicies map[string]runtime.RetryPolicy
 	DatabaseURL string
 	DisableSpendLogs bool
 	models    []deployment
@@ -138,12 +142,21 @@ func Load(reader io.Reader) (Config, error) {
 	if file.Router.DisableCooldowns || (file.Router.AllowedFails == nil && file.Router.CooldownTime == nil) {
 		cooldownSeconds = 0
 	}
+	if !file.Router.RetryPolicy.Valid() {
+		return Config{}, errors.New("invalid retry_policy")
+	}
+	for _, policy := range file.Router.ModelRetryPolicies {
+		if !policy.Valid() {
+			return Config{}, errors.New("invalid model_group_retry_policy")
+		}
+	}
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
 		DisableSpendLogs: file.General.DisableSpendLogs, AllowedFails: allowedFails,
-		Cooldown: time.Duration(cooldownSeconds * float64(time.Second))}
+		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
+		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
 	for _, credential := range file.Credentials {
 		if err := credential.validate(); err != nil {

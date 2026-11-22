@@ -49,6 +49,8 @@ func main() {
 		config.LatencySamples = proxy.LatencySamples
 		config.AllowedFails = proxy.AllowedFails
 		config.Cooldown = proxy.Cooldown
+		config.RetryPolicy = proxy.RetryPolicy
+		config.ModelRetryPolicies = proxy.ModelRetryPolicies
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}

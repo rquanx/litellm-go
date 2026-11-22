@@ -10,17 +10,63 @@ import (
 	"time"
 )
 
+type RetryPolicy map[string]int
+
+func (policy RetryPolicy) Valid() bool {
+	for name, count := range policy {
+		if count < 0 || count > 8 {
+			return false
+		}
+		switch name {
+		case "BadRequestErrorRetries", "AuthenticationErrorRetries", "TimeoutErrorRetries",
+			"RateLimitErrorRetries", "ContentPolicyViolationErrorRetries", "InternalServerErrorRetries":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func retryCategory(status int, kind string) string {
+	switch {
+	case kind == "policy":
+		return "ContentPolicyViolationErrorRetries"
+	case status == http.StatusBadRequest:
+		return "BadRequestErrorRetries"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return "AuthenticationErrorRetries"
+	case status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
+		return "TimeoutErrorRetries"
+	case status == http.StatusTooManyRequests:
+		return "RateLimitErrorRetries"
+	case status >= 500:
+		return "InternalServerErrorRetries"
+	}
+	return ""
+}
+
 type attemptPlan struct {
 	index     int
 	retries   int
 	used      int
 	remaining int
 	specialized bool
+	policy RetryPolicy
+	modelPolicy RetryPolicy
 }
 
-func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Header, retryable bool, body []byte, route *Route) bool {
+func (s *Server) attemptPlan(alias string) attemptPlan {
+	return attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries,
+		policy: s.config.RetryPolicy, modelPolicy: s.config.ModelRetryPolicies[alias]}
+}
+
+func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Header, retryable bool, body []byte, route *Route, admitted bool) bool {
+	if !admitted {
+		return plan.advance(ctx, status, headers, retryable, len(route.Candidates))
+	}
+	kind := ""
 	if len(body) > 0 && !plan.specialized && route.Candidates[plan.index].RoutingGroup != "" {
-		kind := specializedFailure(status, body)
+		kind = specializedFailure(status, body)
 		var candidates []Candidate
 		switch kind {
 		case "context":
@@ -39,6 +85,24 @@ func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Head
 			return true
 		}
 		retryable = retryable || kind != ""
+	}
+	if name := retryCategory(status, kind); name != "" && plan.used <= 8 {
+		limit, set := plan.modelPolicy[name]
+		if !set {
+			limit, set = plan.policy[name]
+		}
+		if set {
+			if plan.used < limit && ctx.Err() == nil && waitForRetry(ctx, headers, plan.used) {
+				plan.used++
+				return true
+			}
+			if ctx.Err() != nil || plan.index+1 >= len(route.Candidates) {
+				return false
+			}
+			plan.index++
+			plan.used = 0
+			return true
+		}
 	}
 	return plan.advance(ctx, status, headers, retryable, len(route.Candidates))
 }
@@ -96,18 +160,13 @@ func (plan *attemptPlan) advance(ctx context.Context, status int, headers http.H
 	hasBackup := plan.index+1 < size
 	if plan.remaining > 0 && plan.used < plan.retries && (status == 0 || retryableStatus(status)) &&
 		(status != http.StatusTooManyRequests || !hasBackup) {
-		wait := retryDelay(headers, plan.used)
-		if wait <= 8*time.Second {
-			timer := time.NewTimer(wait)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-				plan.used++
-				plan.remaining--
-				return true
-			case <-ctx.Done():
-				return false
-			}
+		if waitForRetry(ctx, headers, plan.used) {
+			plan.used++
+			plan.remaining--
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
 		}
 	}
 	if !hasBackup {
@@ -116,6 +175,21 @@ func (plan *attemptPlan) advance(ctx context.Context, status int, headers http.H
 	plan.index++
 	plan.used = 0
 	return true
+}
+
+func waitForRetry(ctx context.Context, headers http.Header, used int) bool {
+	wait := retryDelay(headers, used)
+	if wait > 8*time.Second {
+		return false
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func retryDelay(headers http.Header, used int) time.Duration {

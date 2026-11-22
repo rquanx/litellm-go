@@ -38,6 +38,8 @@ type Config struct {
 	LogMessages        bool
 	Cooldown           time.Duration
 	AllowedFails       int
+	RetryPolicy        RetryPolicy
+	ModelRetryPolicies map[string]RetryPolicy
 }
 
 type Server struct {
@@ -423,7 +425,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	plan := attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries}
+	plan := s.attemptPlan(route.Alias)
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
@@ -475,7 +477,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeResponse(writer, status, responseHeaders, body)
 			return
 		}
-		if !plan.next(request.Context(), status, responseHeaders, retryable, responseBody, &route) {
+		if !plan.next(request.Context(), status, responseHeaders, retryable, responseBody, &route, admitted) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if callErr != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", callErr.Error())
@@ -489,7 +491,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload) {
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	plan := attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries}
+	plan := s.attemptPlan(route.Alias)
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
@@ -594,7 +596,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		if response != nil {
 			headers = response.Header
 		}
-		if !plan.next(request.Context(), status, headers, retryable, errorBody, &route) {
+		if !plan.next(request.Context(), status, headers, retryable, errorBody, &route, admitted) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if streamFailure {
 				writeError(writer, http.StatusBadGateway, "upstream_stream_failure", "Upstream stream failed before data")
