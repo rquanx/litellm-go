@@ -23,6 +23,7 @@ var providerPassThroughRoutes = map[string]providerPassThrough{
 	"cursor":        {"https://api.cursor.com", "CURSOR_API_BASE", []string{"CURSOR_API_KEY"}},
 	"openai":        {"https://api.openai.com", "OPENAI_API_BASE", []string{"OPENAI_API_KEY"}},
 	"anthropic":     {"https://api.anthropic.com", "ANTHROPIC_API_BASE", []string{"ANTHROPIC_API_KEY"}},
+	"azure":         {"", "AZURE_API_BASE", []string{"AZURE_API_KEY"}},
 }
 
 func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request) bool {
@@ -30,6 +31,9 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 	prefix := "/" + provider
 	if provider == "openai_passthrough" {
 		provider = "openai"
+	}
+	if provider == "azure_ai" {
+		provider = "azure"
 	}
 	config, ok := providerPassThroughRoutes[provider]
 	if !ok || suffix == "" || !slices.Contains([]string{"GET", "POST", "PUT", "DELETE", "PATCH"}, r.Method) {
@@ -90,6 +94,9 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		if r.Header.Get("Anthropic-Version") == "" {
 			route.Headers.Set("Anthropic-Version", "2023-06-01")
 		}
+	case "azure":
+		route.Headers.Set("Api-Key", key)
+		route.Headers.Set("Authorization", "Bearer "+key)
 	case "openai":
 		route.Headers.Set("Authorization", "Bearer "+key)
 		route.Headers.Set("Api-Key", key)
