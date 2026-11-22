@@ -59,16 +59,27 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		}
 	}
 	var key string
-	for _, variable := range config.keys {
-		if key = os.Getenv(variable); key != "" {
-			break
+	deployment, configured := s.passThroughDeployment(provider)
+	if configured {
+		key = deployment.APIKey
+		if key == "" {
+			key = os.Getenv(deployment.CredentialRef)
 		}
 	}
-	if key == "" {
+	for _, variable := range config.keys {
+		if key != "" {
+			break
+		}
+		key = os.Getenv(variable)
+	}
+	if key == "" && deployment.AzureADToken == "" {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Provider credentials are missing")
 		return true
 	}
 	base := os.Getenv(config.baseEnv)
+	if configured {
+		base = deployment.APIBase
+	}
 	if base == "" && provider == "anthropic" {
 		base = os.Getenv("ANTHROPIC_BASE_URL")
 	}
@@ -95,8 +106,12 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 			route.Headers.Set("Anthropic-Version", "2023-06-01")
 		}
 	case "azure":
-		route.Headers.Set("Api-Key", key)
-		route.Headers.Set("Authorization", "Bearer "+key)
+		if deployment.AzureADToken != "" {
+			route.Headers.Set("Authorization", "Bearer "+deployment.AzureADToken)
+		} else {
+			route.Headers.Set("Api-Key", key)
+			route.Headers.Set("Authorization", "Bearer "+key)
+		}
 	case "openai":
 		route.Headers.Set("Authorization", "Bearer "+key)
 		route.Headers.Set("Api-Key", key)
@@ -114,4 +129,22 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 	}
 	s.forwardPassThrough(w, r, route)
 	return true
+}
+
+func (s *Server) passThroughDeployment(provider string) (Candidate, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var selected Candidate
+	for alias, route := range s.configuredRoutes {
+		for _, candidate := range route.Candidates {
+			if !candidate.UseInPassThrough || (candidate.RoutingGroup != "" && candidate.RoutingGroup != alias) ||
+				(candidate.Provider != provider && (provider != "cohere" || candidate.Provider != "cohere_chat")) {
+				continue
+			}
+			if selected.DeploymentID == "" || candidate.DeploymentID < selected.DeploymentID {
+				selected = candidate
+			}
+		}
+	}
+	return selected, selected.DeploymentID != ""
 }

@@ -72,4 +72,17 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 			t.Fatalf("%s returned %d, want %d", tc.path, w.Code, tc.status)
 		}
 	}
+	server.ReplaceConfiguredRouting([]Route{{Alias: "fixture", Candidates: []Candidate{
+		{Provider: "cohere", DeploymentID: "fixture-cohere", RoutingGroup: "fixture", APIBase: origin.URL + "/fixture",
+			APIKey: "provider-fixture", UseInPassThrough: true},
+	}}}, nil, nil)
+	t.Setenv("COHERE_API_KEY", "fallback-key")
+	t.Setenv("COHERE_API_BASE", "http://127.0.0.1:1")
+	r := httptest.NewRequest(http.MethodGet, "/cohere/v2/models", nil)
+	r.Header.Set("Authorization", "Bearer fixture-master")
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("configured deployment did not take precedence: %d", w.Code)
+	}
 }

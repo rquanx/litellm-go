@@ -33,6 +33,7 @@ type Candidate struct {
 	Bedrock          *BedrockConfig    `json:"bedrock,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 	DisableBackgroundHealthCheck bool `json:"-"`
+	UseInPassThrough bool `json:"-"`
 }
 
 type responseError struct {

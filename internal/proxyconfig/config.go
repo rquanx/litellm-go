@@ -65,6 +65,7 @@ type deployment struct {
 		Model   string `yaml:"model" json:"model"`
 		APIBase string `yaml:"api_base" json:"api_base,omitempty"`
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
+		UseInPassThrough bool `yaml:"use_in_pass_through" json:"use_in_pass_through,omitempty"`
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
 		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
@@ -633,6 +634,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
 		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
+		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex, AzureADToken: azureADToken}, nil
 }
 
