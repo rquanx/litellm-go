@@ -15,3 +15,14 @@ func TestCallbackPricesOnlyUncachedInputAtFullPrice(t *testing.T) {
 		t.Fatalf("unexpected callback spend and usage: %+v", recorder.event)
 	}
 }
+
+func TestCallbackPricesNativeCacheCreation(t *testing.T) {
+	input, output, cache, creation := 0.01, 0.03, 0.002, 0.02
+	recorder := &callbackResponse{ResponseWriter: httptest.NewRecorder(), price: [2]*float64{&input, &output},
+		cachePrice: &cache, cacheCreationPrice: &creation}
+	recorder.recordJSON([]byte(`{"usage":{"input_tokens":5,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens":3}}`))
+	recorder.finish()
+	if recorder.event.Spend == nil || math.Abs(*recorder.event.Spend-0.26) > 1e-12 || recorder.event.Total != 23 {
+		t.Fatalf("unexpected callback spend and usage: %+v", recorder.event)
+	}
+}

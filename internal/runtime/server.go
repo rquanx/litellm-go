@@ -1160,6 +1160,7 @@ func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts 
 	if recorder, ok := writer.(*callbackResponse); ok {
 		recorder.price = candidate.UsagePrice
 		recorder.cachePrice = candidate.CacheReadPrice
+		recorder.cacheCreationPrice = candidate.CacheCreationPrice
 		recorder.event.ModelID = candidate.DeploymentID
 	}
 	writer.Header().Set("X-Minato-Runtime-Source", candidate.SourceID)

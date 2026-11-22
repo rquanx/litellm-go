@@ -47,7 +47,9 @@ type callbackResponse struct {
 	capture bool
 	price [2]*float64
 	cachePrice *float64
+	cacheCreationPrice *float64
 	cachedTokens int
+	cacheCreationTokens int
 }
 
 func (recorder *callbackResponse) WriteHeader(status int) {
@@ -82,6 +84,7 @@ func (recorder *callbackResponse) Write(data []byte) (int, error) {
 func (recorder *callbackResponse) recordJSON(data []byte) {
 	type tokenDetails struct {
 		Cached int `json:"cached_tokens"`
+		Creation int `json:"cache_creation_tokens"`
 	}
 	type usage struct {
 		Prompt int `json:"prompt_tokens"`
@@ -91,6 +94,8 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		Total int `json:"total_tokens"`
 		PromptDetails tokenDetails `json:"prompt_tokens_details"`
 		InputDetails tokenDetails `json:"input_tokens_details"`
+		NativeCacheRead int `json:"cache_read_input_tokens"`
+		NativeCacheCreation int `json:"cache_creation_input_tokens"`
 	}
 	var payload struct {
 		Usage usage `json:"usage"`
@@ -105,10 +110,13 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		payload.Usage = payload.Response.Usage
 	}
 	if payload.Usage != (usage{}) {
-		recorder.event.Prompt = max(payload.Usage.Prompt, payload.Usage.Input)
+		recorder.event.Prompt = max(0, payload.Usage.Prompt, payload.Usage.Input +
+			max(0, payload.Usage.NativeCacheRead) + max(0, payload.Usage.NativeCacheCreation))
 		recorder.event.Completion = max(payload.Usage.Completion, payload.Usage.Output)
 		recorder.event.Total = max(payload.Usage.Total, recorder.event.Prompt+recorder.event.Completion)
-		recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached))
+		recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached, payload.Usage.NativeCacheRead))
+		recorder.cacheCreationTokens = min(recorder.event.Prompt-recorder.cachedTokens, max(0,
+			payload.Usage.PromptDetails.Creation, payload.Usage.InputDetails.Creation, payload.Usage.NativeCacheCreation))
 	}
 	if recorder.capture && len(data) <= maxCallbackMessageBytes &&
 		(!recorder.event.Stream || recorder.status >= 400 || bytes.Contains(data, []byte("response.completed"))) {
@@ -128,6 +136,9 @@ func (recorder *callbackResponse) finish() {
 	if recorder.cachePrice != nil {
 		uncached -= recorder.cachedTokens
 	}
+	if recorder.cacheCreationPrice != nil {
+		uncached -= recorder.cacheCreationTokens
+	}
 	if (recorder.event.Prompt != 0 || recorder.event.Completion != 0) &&
 		(uncached == 0 || recorder.price[0] != nil) &&
 		(recorder.event.Completion == 0 || recorder.price[1] != nil) {
@@ -137,6 +148,9 @@ func (recorder *callbackResponse) finish() {
 		}
 		if recorder.cachePrice != nil {
 			cost += float64(recorder.cachedTokens) * *recorder.cachePrice
+		}
+		if recorder.cacheCreationPrice != nil {
+			cost += float64(recorder.cacheCreationTokens) * *recorder.cacheCreationPrice
 		}
 		if recorder.price[1] != nil {
 			cost += float64(recorder.event.Completion) * *recorder.price[1]

@@ -1,548 +1,2198 @@
 {
-  "amazon.nova-2-lite-v1:0": 7.5e-08,
-  "amazon.nova-2-pro-preview-20251202-v1:0": 5.46875e-07,
-  "anthropic.claude-3-5-haiku-20241022-v1:0": 8e-08,
-  "anthropic.claude-3-5-sonnet-20240620-v1:0": 3e-07,
-  "anthropic.claude-3-5-sonnet-20241022-v2:0": 3e-07,
-  "anthropic.claude-3-7-sonnet-20240620-v1:0": 3.6e-07,
-  "anthropic.claude-3-7-sonnet-20250219-v1:0": 3e-07,
-  "anthropic.claude-3-haiku-20240307-v1:0": 2.5e-08,
-  "anthropic.claude-3-opus-20240229-v1:0": 1.5e-06,
-  "anthropic.claude-3-sonnet-20240229-v1:0": 3e-07,
-  "anthropic.claude-haiku-4-5-20251001-v1:0": 1e-07,
-  "anthropic.claude-haiku-4-5@20251001": 1e-07,
-  "anthropic.claude-opus-4-1-20250805-v1:0": 1.5e-06,
-  "anthropic.claude-opus-4-20250514-v1:0": 1.5e-06,
-  "anthropic.claude-opus-4-5-20251101-v1:0": 5e-07,
-  "anthropic.claude-opus-4-6-v1": 5e-07,
-  "anthropic.claude-opus-4-7": 5e-07,
-  "anthropic.claude-sonnet-4-20250514-v1:0": 3e-07,
-  "anthropic.claude-sonnet-4-5-20250929-v1:0": 3e-07,
-  "anthropic.claude-sonnet-4-6": 3e-07,
-  "apac.amazon.nova-2-lite-v1:0": 8.25e-08,
-  "apac.amazon.nova-2-pro-preview-20251202-v1:0": 5.46875e-07,
-  "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": 3e-07,
-  "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": 3e-07,
-  "apac.anthropic.claude-3-haiku-20240307-v1:0": 2.5e-08,
-  "apac.anthropic.claude-3-sonnet-20240229-v1:0": 3e-07,
-  "apac.anthropic.claude-haiku-4-5-20251001-v1:0": 1.1e-07,
-  "apac.anthropic.claude-sonnet-4-20250514-v1:0": 3e-07,
-  "au.anthropic.claude-haiku-4-5-20251001-v1:0": 1.1e-07,
-  "au.anthropic.claude-opus-4-6-v1": 5.5e-07,
-  "au.anthropic.claude-opus-4-7": 5.5e-07,
-  "au.anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "au.anthropic.claude-sonnet-4-6": 3.3e-07,
-  "azure/codex-mini": 3.75e-07,
-  "azure/eu/gpt-4o-2024-08-06": 1.375e-06,
-  "azure/eu/gpt-4o-mini-2024-07-18": 8.3e-08,
-  "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17": 3.3e-07,
-  "azure/eu/gpt-4o-realtime-preview-2024-10-01": 2.75e-06,
-  "azure/eu/gpt-4o-realtime-preview-2024-12-17": 2.75e-06,
-  "azure/eu/gpt-5-2025-08-07": 1.375e-07,
-  "azure/eu/gpt-5-mini-2025-08-07": 2.75e-08,
-  "azure/eu/gpt-5-nano-2025-08-07": 5.5e-09,
-  "azure/eu/gpt-5.1": 1.4e-07,
-  "azure/eu/gpt-5.1-chat": 1.4e-07,
-  "azure/eu/gpt-5.1-codex": 1.4e-07,
-  "azure/eu/gpt-5.1-codex-mini": 2.8e-08,
-  "azure/eu/o1-2024-12-17": 8.25e-06,
-  "azure/eu/o1-mini-2024-09-12": 6.05e-07,
-  "azure/eu/o1-preview-2024-09-12": 8.25e-06,
-  "azure/eu/o3-mini-2025-01-31": 6.05e-07,
-  "azure/global-standard/gpt-4o-2024-08-06": 1.25e-06,
-  "azure/global-standard/gpt-4o-2024-11-20": 1.25e-06,
-  "azure/global/gpt-4o-2024-08-06": 1.25e-06,
-  "azure/global/gpt-4o-2024-11-20": 1.25e-06,
-  "azure/global/gpt-5.1": 1.25e-07,
-  "azure/global/gpt-5.1-chat": 1.25e-07,
-  "azure/global/gpt-5.1-codex": 1.25e-07,
-  "azure/global/gpt-5.1-codex-mini": 2.5e-08,
-  "azure/gpt-4.1": 5e-07,
-  "azure/gpt-4.1-2025-04-14": 5e-07,
-  "azure/gpt-4.1-mini": 1e-07,
-  "azure/gpt-4.1-mini-2025-04-14": 1e-07,
-  "azure/gpt-4.1-nano": 2.5e-08,
-  "azure/gpt-4.1-nano-2025-04-14": 2.5e-08,
-  "azure/gpt-4.5-preview": 3.75e-05,
-  "azure/gpt-4o": 1.25e-06,
-  "azure/gpt-4o-2024-08-06": 1.25e-06,
-  "azure/gpt-4o-2024-11-20": 1.25e-06,
-  "azure/gpt-4o-mini": 7.5e-08,
-  "azure/gpt-4o-mini-2024-07-18": 7.5e-08,
-  "azure/gpt-4o-mini-realtime-preview-2024-12-17": 3e-07,
-  "azure/gpt-4o-realtime-preview-2024-10-01": 2.5e-06,
-  "azure/gpt-4o-realtime-preview-2024-12-17": 2.5e-06,
-  "azure/gpt-5": 1.25e-07,
-  "azure/gpt-5-2025-08-07": 1.25e-07,
-  "azure/gpt-5-chat": 1.25e-07,
-  "azure/gpt-5-chat-latest": 1.25e-07,
-  "azure/gpt-5-codex": 1.25e-07,
-  "azure/gpt-5-mini": 2.5e-08,
-  "azure/gpt-5-mini-2025-08-07": 2.5e-08,
-  "azure/gpt-5-nano": 5e-09,
-  "azure/gpt-5-nano-2025-08-07": 5e-09,
-  "azure/gpt-5.1": 1.25e-07,
-  "azure/gpt-5.1-2025-11-13": 1.25e-07,
-  "azure/gpt-5.1-chat": 1.25e-07,
-  "azure/gpt-5.1-chat-2025-11-13": 1.25e-07,
-  "azure/gpt-5.1-codex": 1.25e-07,
-  "azure/gpt-5.1-codex-2025-11-13": 1.25e-07,
-  "azure/gpt-5.1-codex-max": 1.25e-07,
-  "azure/gpt-5.1-codex-mini": 2.5e-08,
-  "azure/gpt-5.1-codex-mini-2025-11-13": 2.5e-08,
-  "azure/gpt-5.2": 1.75e-07,
-  "azure/gpt-5.2-2025-12-11": 1.75e-07,
-  "azure/gpt-5.2-chat": 1.75e-07,
-  "azure/gpt-5.2-chat-2025-12-11": 1.75e-07,
-  "azure/gpt-5.2-codex": 1.75e-07,
-  "azure/gpt-5.3-chat": 1.75e-07,
-  "azure/gpt-5.3-codex": 1.75e-07,
-  "azure/gpt-5.4": 2.5e-07,
-  "azure/gpt-5.4-2026-03-05": 2.5e-07,
-  "azure/gpt-5.4-mini": 7.5e-08,
-  "azure/gpt-5.4-mini-2026-03-17": 7.5e-08,
-  "azure/gpt-5.4-nano": 2e-08,
-  "azure/gpt-5.4-nano-2026-03-17": 2e-08,
-  "azure/gpt-5.4-pro": 3e-06,
-  "azure/gpt-5.4-pro-2026-03-05": 3e-06,
-  "azure/gpt-5.5": 5e-07,
-  "azure/gpt-5.5-2026-04-23": 5e-07,
-  "azure/gpt-5.5-pro": 3e-06,
-  "azure/gpt-5.5-pro-2026-04-23": 3e-06,
-  "azure/gpt-image-1": 1.25e-06,
-  "azure/gpt-image-1-mini": 2e-07,
-  "azure/gpt-image-1.5": 1.25e-06,
-  "azure/gpt-image-1.5-2025-12-16": 1.25e-06,
-  "azure/gpt-image-2": 1.25e-06,
-  "azure/gpt-image-2-2026-04-21": 1.25e-06,
-  "azure/gpt-realtime-1.5-2026-02-23": 4e-06,
-  "azure/gpt-realtime-2025-08-28": 4e-06,
-  "azure/gpt-realtime-mini-2025-10-06": 6e-08,
-  "azure/o1": 7.5e-06,
-  "azure/o1-2024-12-17": 7.5e-06,
-  "azure/o1-mini": 6.05e-07,
-  "azure/o1-mini-2024-09-12": 5.5e-07,
-  "azure/o1-preview": 7.5e-06,
-  "azure/o1-preview-2024-09-12": 7.5e-06,
-  "azure/o3": 5e-07,
-  "azure/o3-2025-04-16": 5e-07,
-  "azure/o3-deep-research": 2.5e-06,
-  "azure/o3-mini": 5.5e-07,
-  "azure/o3-mini-2025-01-31": 5.5e-07,
-  "azure/o4-mini": 2.75e-07,
-  "azure/o4-mini-2025-04-16": 2.75e-07,
-  "azure/us/gpt-4.1-2025-04-14": 5.5e-07,
-  "azure/us/gpt-4.1-mini-2025-04-14": 1.1e-07,
-  "azure/us/gpt-4.1-nano-2025-04-14": 2.5e-08,
-  "azure/us/gpt-4o-2024-08-06": 1.375e-06,
-  "azure/us/gpt-4o-mini-2024-07-18": 8.3e-08,
-  "azure/us/gpt-4o-mini-realtime-preview-2024-12-17": 3.3e-07,
-  "azure/us/gpt-4o-realtime-preview-2024-10-01": 2.75e-06,
-  "azure/us/gpt-4o-realtime-preview-2024-12-17": 2.75e-06,
-  "azure/us/gpt-5-2025-08-07": 1.375e-07,
-  "azure/us/gpt-5-mini-2025-08-07": 2.75e-08,
-  "azure/us/gpt-5-nano-2025-08-07": 5.5e-09,
-  "azure/us/gpt-5.1": 1.4e-07,
-  "azure/us/gpt-5.1-chat": 1.4e-07,
-  "azure/us/gpt-5.1-codex": 1.4e-07,
-  "azure/us/gpt-5.1-codex-mini": 2.8e-08,
-  "azure/us/o1-2024-12-17": 8.25e-06,
-  "azure/us/o1-mini-2024-09-12": 6.05e-07,
-  "azure/us/o1-preview-2024-09-12": 8.25e-06,
-  "azure/us/o3-2025-04-16": 5.5e-07,
-  "azure/us/o3-mini-2025-01-31": 6.05e-07,
-  "azure/us/o4-mini-2025-04-16": 3.1e-07,
-  "azure_ai/claude-haiku-4-5": 1e-07,
-  "azure_ai/claude-opus-4-1": 1.5e-06,
-  "azure_ai/claude-opus-4-5": 5e-07,
-  "azure_ai/claude-opus-4-6": 5e-07,
-  "azure_ai/claude-opus-4-7": 5e-07,
-  "azure_ai/claude-sonnet-4-5": 3e-07,
-  "azure_ai/claude-sonnet-4-6": 3e-07,
-  "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": 3e-07,
-  "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": 3.6e-07,
-  "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": 3e-08,
-  "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": 1.2e-07,
-  "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": 3.6e-07,
-  "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": 3.6e-07,
-  "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": 3e-08,
-  "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": 1.2e-07,
-  "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": 8e-08,
-  "chatgpt-image-latest": 1.25e-06,
-  "claude-3-7-sonnet-20250219": 3e-07,
-  "claude-3-haiku-20240307": 3e-08,
-  "claude-3-opus-20240229": 1.5e-06,
-  "claude-4-opus-20250514": 1.5e-06,
-  "claude-4-sonnet-20250514": 3e-07,
-  "claude-haiku-4-5": 1e-07,
-  "claude-haiku-4-5-20251001": 1e-07,
-  "claude-opus-4-1": 1.5e-06,
-  "claude-opus-4-1-20250805": 1.5e-06,
-  "claude-opus-4-20250514": 1.5e-06,
-  "claude-opus-4-5": 5e-07,
-  "claude-opus-4-5-20251101": 5e-07,
-  "claude-opus-4-6": 5e-07,
-  "claude-opus-4-6-20260205": 5e-07,
-  "claude-opus-4-7": 5e-07,
-  "claude-opus-4-7-20260416": 5e-07,
-  "claude-sonnet-4-20250514": 3e-07,
-  "claude-sonnet-4-5": 3e-07,
-  "claude-sonnet-4-5-20250929": 3e-07,
-  "claude-sonnet-4-5-20250929-v1:0": 3e-07,
-  "claude-sonnet-4-6": 3e-07,
-  "codex-mini-latest": 3.75e-07,
-  "deepinfra/anthropic/claude-3-7-sonnet-latest": 3.3e-07,
-  "deepinfra/deepseek-ai/DeepSeek-R1-0528": 4e-07,
-  "deepinfra/deepseek-ai/DeepSeek-V3.1": 2.16e-07,
-  "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": 2.16e-07,
-  "deepinfra/moonshotai/Kimi-K2-Instruct-0905": 4e-07,
-  "deepseek-chat": 2.8e-08,
-  "deepseek-reasoner": 2.8e-08,
-  "deepseek/deepseek-chat": 2.8e-08,
-  "deepseek/deepseek-reasoner": 2.8e-08,
-  "deepseek/deepseek-v3": 7e-08,
-  "eu.amazon.nova-2-lite-v1:0": 8.25e-08,
-  "eu.amazon.nova-2-pro-preview-20251202-v1:0": 5.46875e-07,
-  "eu.anthropic.claude-3-5-haiku-20241022-v1:0": 2.5e-08,
-  "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": 3e-07,
-  "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": 3e-07,
-  "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": 3e-07,
-  "eu.anthropic.claude-3-haiku-20240307-v1:0": 2.5e-08,
-  "eu.anthropic.claude-3-opus-20240229-v1:0": 1.5e-06,
-  "eu.anthropic.claude-3-sonnet-20240229-v1:0": 3e-07,
-  "eu.anthropic.claude-haiku-4-5-20251001-v1:0": 1.1e-07,
-  "eu.anthropic.claude-opus-4-1-20250805-v1:0": 1.5e-06,
-  "eu.anthropic.claude-opus-4-20250514-v1:0": 1.5e-06,
-  "eu.anthropic.claude-opus-4-5-20251101-v1:0": 5e-07,
-  "eu.anthropic.claude-opus-4-6-v1": 5.5e-07,
-  "eu.anthropic.claude-opus-4-7": 5.5e-07,
-  "eu.anthropic.claude-sonnet-4-20250514-v1:0": 3e-07,
-  "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "eu.anthropic.claude-sonnet-4-6": 3.3e-07,
-  "fireworks_ai/accounts/fireworks/models/glm-4p7": 3e-07,
-  "fireworks_ai/accounts/fireworks/models/kimi-k2p5": 1e-07,
-  "fireworks_ai/accounts/fireworks/models/minimax-m2p1": 3e-08,
-  "fireworks_ai/glm-4p7": 3e-07,
-  "fireworks_ai/kimi-k2p5": 1e-07,
-  "fireworks_ai/minimax-m2p1": 3e-08,
-  "ft:gpt-4.1-2025-04-14": 7.5e-07,
-  "ft:gpt-4.1-mini-2025-04-14": 2e-07,
-  "ft:gpt-4.1-nano-2025-04-14": 5e-08,
-  "ft:gpt-4o-2024-08-06": 1.875e-06,
-  "ft:gpt-4o-mini-2024-07-18": 1.5e-07,
-  "ft:o4-mini-2025-04-16": 1e-06,
-  "gemini-2.0-flash": 2.5e-08,
-  "gemini-2.0-flash-001": 3.75e-08,
-  "gemini-2.0-flash-lite": 1.875e-08,
-  "gemini-2.0-flash-lite-001": 1.875e-08,
-  "gemini-2.5-flash": 3e-08,
-  "gemini-2.5-flash-image": 3e-08,
-  "gemini-2.5-flash-lite": 1e-08,
-  "gemini-2.5-flash-lite-preview-06-17": 2.5e-08,
-  "gemini-2.5-flash-lite-preview-09-2025": 1e-08,
-  "gemini-2.5-flash-preview-09-2025": 7.5e-08,
-  "gemini-2.5-pro": 1.25e-07,
-  "gemini-2.5-pro-preview-tts": 1.25e-07,
-  "gemini-3-flash-preview": 5e-08,
-  "gemini-3-pro-preview": 2e-07,
-  "gemini-3.1-flash-lite-preview": 2.5e-08,
-  "gemini-3.1-pro-preview": 2e-07,
-  "gemini-3.1-pro-preview-customtools": 2e-07,
-  "gemini-exp-1206": 3e-08,
-  "gemini-flash-latest": 3e-08,
-  "gemini-flash-lite-latest": 1e-08,
-  "gemini-live-2.5-flash-preview-native-audio-09-2025": 7.5e-08,
-  "gemini-pro-latest": 1.25e-07,
-  "gemini-robotics-er-1.5-preview": 0,
-  "gemini/gemini-2.0-flash": 2.5e-08,
-  "gemini/gemini-2.0-flash-001": 2.5e-08,
-  "gemini/gemini-2.0-flash-lite": 1.875e-08,
-  "gemini/gemini-2.0-flash-lite-001": 1.875e-08,
-  "gemini/gemini-2.5-flash": 3e-08,
-  "gemini/gemini-2.5-flash-image": 3e-08,
-  "gemini/gemini-2.5-flash-lite": 1e-08,
-  "gemini/gemini-2.5-flash-lite-preview-06-17": 2.5e-08,
-  "gemini/gemini-2.5-flash-lite-preview-09-2025": 1e-08,
-  "gemini/gemini-2.5-flash-preview-09-2025": 7.5e-08,
-  "gemini/gemini-2.5-pro": 1.25e-07,
-  "gemini/gemini-2.5-pro-preview-tts": 1.25e-07,
-  "gemini/gemini-3-flash-preview": 5e-08,
-  "gemini/gemini-3-pro-preview": 2e-07,
-  "gemini/gemini-3.1-flash-lite-preview": 2.5e-08,
-  "gemini/gemini-3.1-pro-preview": 2e-07,
-  "gemini/gemini-3.1-pro-preview-customtools": 2e-07,
-  "gemini/gemini-flash-latest": 7.5e-08,
-  "gemini/gemini-flash-lite-latest": 2.5e-08,
-  "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": 7.5e-08,
-  "gemini/gemini-pro-latest": 1.25e-07,
-  "gemini/gemini-robotics-er-1.5-preview": 0,
-  "global.amazon.nova-2-lite-v1:0": 7.5e-08,
-  "global.anthropic.claude-haiku-4-5-20251001-v1:0": 1e-07,
-  "global.anthropic.claude-opus-4-5-20251101-v1:0": 5e-07,
-  "global.anthropic.claude-opus-4-6-v1": 5e-07,
-  "global.anthropic.claude-opus-4-7": 5e-07,
-  "global.anthropic.claude-sonnet-4-20250514-v1:0": 3e-07,
-  "global.anthropic.claude-sonnet-4-5-20250929-v1:0": 3e-07,
-  "global.anthropic.claude-sonnet-4-6": 3e-07,
-  "gpt-4.1": 5e-07,
-  "gpt-4.1-2025-04-14": 5e-07,
-  "gpt-4.1-mini": 1e-07,
-  "gpt-4.1-mini-2025-04-14": 1e-07,
-  "gpt-4.1-nano": 2.5e-08,
-  "gpt-4.1-nano-2025-04-14": 2.5e-08,
-  "gpt-4o": 1.25e-06,
-  "gpt-4o-2024-08-06": 1.25e-06,
-  "gpt-4o-2024-11-20": 1.25e-06,
-  "gpt-4o-mini": 7.5e-08,
-  "gpt-4o-mini-2024-07-18": 7.5e-08,
-  "gpt-4o-mini-realtime-preview": 3e-07,
-  "gpt-4o-mini-realtime-preview-2024-12-17": 3e-07,
-  "gpt-4o-mini-search-preview": 7.5e-08,
-  "gpt-4o-mini-search-preview-2025-03-11": 7.5e-08,
-  "gpt-4o-realtime-preview": 2.5e-06,
-  "gpt-4o-realtime-preview-2024-12-17": 2.5e-06,
-  "gpt-4o-realtime-preview-2025-06-03": 2.5e-06,
-  "gpt-4o-search-preview": 1.25e-06,
-  "gpt-4o-search-preview-2025-03-11": 1.25e-06,
-  "gpt-5": 1.25e-07,
-  "gpt-5-2025-08-07": 1.25e-07,
-  "gpt-5-chat": 1.25e-07,
-  "gpt-5-chat-latest": 1.25e-07,
-  "gpt-5-codex": 1.25e-07,
-  "gpt-5-mini": 2.5e-08,
-  "gpt-5-mini-2025-08-07": 2.5e-08,
-  "gpt-5-nano": 5e-09,
-  "gpt-5-nano-2025-08-07": 5e-09,
-  "gpt-5-search-api": 1.25e-07,
-  "gpt-5-search-api-2025-10-14": 1.25e-07,
-  "gpt-5.1": 1.25e-07,
-  "gpt-5.1-2025-11-13": 1.25e-07,
-  "gpt-5.1-chat-latest": 1.25e-07,
-  "gpt-5.1-codex": 1.25e-07,
-  "gpt-5.1-codex-max": 1.25e-07,
-  "gpt-5.1-codex-mini": 2.5e-08,
-  "gpt-5.2": 1.75e-07,
-  "gpt-5.2-2025-12-11": 1.75e-07,
-  "gpt-5.2-chat-latest": 1.75e-07,
-  "gpt-5.2-codex": 1.75e-07,
-  "gpt-5.3-chat-latest": 1.75e-07,
-  "gpt-5.3-codex": 1.75e-07,
-  "gpt-5.4": 2.5e-07,
-  "gpt-5.4-2026-03-05": 2.5e-07,
-  "gpt-5.4-mini": 7.5e-08,
-  "gpt-5.4-mini-2026-03-17": 7.5e-08,
-  "gpt-5.4-nano": 2e-08,
-  "gpt-5.4-nano-2026-03-17": 2e-08,
-  "gpt-5.4-pro": 3e-06,
-  "gpt-5.4-pro-2026-03-05": 3e-06,
-  "gpt-5.5": 5e-07,
-  "gpt-5.5-2026-04-23": 5e-07,
-  "gpt-5.5-pro": 3e-06,
-  "gpt-5.5-pro-2026-04-23": 3e-06,
-  "gpt-image-1": 1.25e-06,
-  "gpt-image-1-mini": 2e-07,
-  "gpt-image-1.5": 1.25e-06,
-  "gpt-image-1.5-2025-12-16": 1.25e-06,
-  "gpt-image-2": 1.25e-06,
-  "gpt-image-2-2026-04-21": 1.25e-06,
-  "gpt-realtime": 4e-07,
-  "gpt-realtime-1.5": 4e-07,
-  "gpt-realtime-2": 4e-07,
-  "gpt-realtime-2025-08-28": 4e-07,
-  "gpt-realtime-mini-2025-10-06": 6e-08,
-  "gpt-realtime-mini-2025-12-15": 6e-08,
-  "groq/moonshotai/kimi-k2-instruct-0905": 5e-07,
-  "groq/openai/gpt-oss-120b": 7.5e-08,
-  "groq/openai/gpt-oss-20b": 3.75e-08,
-  "groq/openai/gpt-oss-safeguard-20b": 3.7e-08,
-  "jp.anthropic.claude-haiku-4-5-20251001-v1:0": 1.1e-07,
-  "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "minimax/MiniMax-M2": 3e-08,
-  "minimax/MiniMax-M2.1": 3e-08,
-  "minimax/MiniMax-M2.1-lightning": 3e-08,
-  "minimax/MiniMax-M2.5": 3e-08,
-  "minimax/MiniMax-M2.5-lightning": 3e-08,
-  "moonshot/kimi-k2-0711-preview": 1.5e-07,
-  "moonshot/kimi-k2-0905-preview": 1.5e-07,
-  "moonshot/kimi-k2-thinking": 1.5e-07,
-  "moonshot/kimi-k2-thinking-turbo": 1.5e-07,
-  "moonshot/kimi-k2-turbo-preview": 1.5e-07,
-  "moonshot/kimi-k2.5": 1e-07,
-  "moonshot/kimi-k2.6": 1.6e-07,
-  "moonshot/kimi-latest": 1.5e-07,
-  "moonshot/kimi-latest-128k": 1.5e-07,
-  "moonshot/kimi-latest-32k": 1.5e-07,
-  "moonshot/kimi-latest-8k": 1.5e-07,
-  "moonshot/kimi-thinking-preview": 1.5e-07,
-  "novita/deepseek/deepseek-r1-0528": 3.5e-07,
-  "novita/deepseek/deepseek-v3-0324": 1.35e-07,
-  "novita/deepseek/deepseek-v3.1": 1.35e-07,
-  "novita/deepseek/deepseek-v3.1-terminus": 1.35e-07,
-  "novita/deepseek/deepseek-v3.2": 1.345e-07,
-  "novita/kwaipilot/kat-coder-pro": 6e-08,
-  "novita/minimax/minimax-m2": 3e-08,
-  "novita/minimax/minimax-m2.1": 3e-08,
-  "novita/xiaomimimo/mimo-v2-flash": 2e-08,
-  "novita/zai-org/glm-4.5": 1.1e-07,
-  "novita/zai-org/glm-4.5v": 1.1e-07,
-  "novita/zai-org/glm-4.6": 1.1e-07,
-  "novita/zai-org/glm-4.6v": 5.5e-08,
-  "novita/zai-org/glm-4.7": 1.1e-07,
-  "o1": 7.5e-06,
-  "o1-2024-12-17": 7.5e-06,
-  "o3": 5e-07,
-  "o3-2025-04-16": 5e-07,
-  "o3-deep-research": 2.5e-06,
-  "o3-deep-research-2025-06-26": 2.5e-06,
-  "o3-mini": 5.5e-07,
-  "o3-mini-2025-01-31": 5.5e-07,
-  "o4-mini": 2.75e-07,
-  "o4-mini-2025-04-16": 2.75e-07,
-  "o4-mini-deep-research": 5e-07,
-  "o4-mini-deep-research-2025-06-26": 5e-07,
-  "openrouter/anthropic/claude-haiku-4.5": 1e-07,
-  "openrouter/anthropic/claude-opus-4": 1.5e-06,
-  "openrouter/anthropic/claude-opus-4.1": 1.5e-06,
-  "openrouter/anthropic/claude-opus-4.5": 5e-07,
-  "openrouter/anthropic/claude-opus-4.6": 5e-07,
-  "openrouter/anthropic/claude-opus-4.7": 5e-07,
-  "openrouter/anthropic/claude-sonnet-4": 3e-07,
-  "openrouter/anthropic/claude-sonnet-4.5": 3e-07,
-  "openrouter/anthropic/claude-sonnet-4.6": 3e-07,
-  "openrouter/google/gemini-3-flash-preview": 5e-08,
-  "openrouter/google/gemini-3-pro-preview": 2e-07,
-  "openrouter/google/gemini-3.1-flash-lite-preview": 2.5e-08,
-  "openrouter/google/gemini-3.1-pro-preview": 2e-07,
-  "openrouter/minimax/minimax-m2.1": 0.0,
-  "openrouter/minimax/minimax-m2.5": 1.5e-07,
-  "openrouter/moonshotai/kimi-k2.5": 1e-07,
-  "openrouter/openai/gpt-4.1": 5e-07,
-  "openrouter/openai/gpt-4.1-mini": 1e-07,
-  "openrouter/openai/gpt-4.1-nano": 2.5e-08,
-  "openrouter/openai/gpt-5": 1.25e-07,
-  "openrouter/openai/gpt-5-chat": 1.25e-07,
-  "openrouter/openai/gpt-5-codex": 1.25e-07,
-  "openrouter/openai/gpt-5-mini": 2.5e-08,
-  "openrouter/openai/gpt-5-nano": 5e-09,
-  "openrouter/openai/gpt-5.1-codex-max": 1.25e-07,
-  "openrouter/openai/gpt-5.2": 1.75e-07,
-  "openrouter/openai/gpt-5.2-chat": 1.75e-07,
-  "openrouter/openai/gpt-5.2-codex": 1.75e-07,
-  "openrouter/openai/o1": 7.5e-06,
-  "openrouter/xiaomi/mimo-v2-flash": 0.0,
-  "openrouter/z-ai/glm-4.7": 0.0,
-  "openrouter/z-ai/glm-4.7-flash": 0.0,
-  "sarvam/sarvam-m": 0,
-  "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "us.amazon.nova-2-lite-v1:0": 8.25e-08,
-  "us.amazon.nova-2-pro-preview-20251202-v1:0": 5.46875e-07,
-  "us.anthropic.claude-3-5-haiku-20241022-v1:0": 8e-08,
-  "us.anthropic.claude-3-5-sonnet-20240620-v1:0": 3e-07,
-  "us.anthropic.claude-3-5-sonnet-20241022-v2:0": 3e-07,
-  "us.anthropic.claude-3-7-sonnet-20250219-v1:0": 3e-07,
-  "us.anthropic.claude-3-haiku-20240307-v1:0": 2.5e-08,
-  "us.anthropic.claude-3-opus-20240229-v1:0": 1.5e-06,
-  "us.anthropic.claude-3-sonnet-20240229-v1:0": 3e-07,
-  "us.anthropic.claude-haiku-4-5-20251001-v1:0": 1.1e-07,
-  "us.anthropic.claude-opus-4-1-20250805-v1:0": 1.5e-06,
-  "us.anthropic.claude-opus-4-20250514-v1:0": 1.5e-06,
-  "us.anthropic.claude-opus-4-5-20251101-v1:0": 5.5e-07,
-  "us.anthropic.claude-opus-4-6-v1": 5.5e-07,
-  "us.anthropic.claude-opus-4-7": 5.5e-07,
-  "us.anthropic.claude-sonnet-4-20250514-v1:0": 3e-07,
-  "us.anthropic.claude-sonnet-4-5-20250929-v1:0": 3.3e-07,
-  "us.anthropic.claude-sonnet-4-6": 3.3e-07,
-  "vercel_ai_gateway/anthropic/claude-3-5-sonnet": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-3-5-sonnet-20241022": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-3-7-sonnet": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-3-haiku": 3e-08,
-  "vercel_ai_gateway/anthropic/claude-3-opus": 1.5e-06,
-  "vercel_ai_gateway/anthropic/claude-3.5-haiku": 8e-08,
-  "vercel_ai_gateway/anthropic/claude-3.5-sonnet": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-3.7-sonnet": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-4-opus": 1.5e-06,
-  "vercel_ai_gateway/anthropic/claude-4-sonnet": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-haiku-4.5": 1e-07,
-  "vercel_ai_gateway/anthropic/claude-opus-4": 1.5e-06,
-  "vercel_ai_gateway/anthropic/claude-opus-4.1": 1.5e-06,
-  "vercel_ai_gateway/anthropic/claude-opus-4.5": 5e-07,
-  "vercel_ai_gateway/anthropic/claude-opus-4.6": 5e-07,
-  "vercel_ai_gateway/anthropic/claude-sonnet-4": 3e-07,
-  "vercel_ai_gateway/anthropic/claude-sonnet-4.5": 3e-07,
-  "vercel_ai_gateway/openai/gpt-4.1": 5e-07,
-  "vercel_ai_gateway/openai/gpt-4.1-mini": 1e-07,
-  "vercel_ai_gateway/openai/gpt-4.1-nano": 2.5e-08,
-  "vercel_ai_gateway/openai/gpt-4o": 1.25e-06,
-  "vercel_ai_gateway/openai/gpt-4o-mini": 7.5e-08,
-  "vercel_ai_gateway/openai/o1": 7.5e-06,
-  "vercel_ai_gateway/openai/o3": 5e-07,
-  "vercel_ai_gateway/openai/o3-mini": 5.5e-07,
-  "vercel_ai_gateway/openai/o4-mini": 2.75e-07,
-  "vercel_ai_gateway/zai/glm-4.6": 1.1e-07,
-  "vertex_ai/claude-3-7-sonnet@20250219": 3e-07,
-  "vertex_ai/claude-haiku-4-5": 1e-07,
-  "vertex_ai/claude-haiku-4-5@20251001": 1e-07,
-  "vertex_ai/claude-opus-4": 1.5e-06,
-  "vertex_ai/claude-opus-4-1": 1.5e-06,
-  "vertex_ai/claude-opus-4-1@20250805": 1.5e-06,
-  "vertex_ai/claude-opus-4-5": 5e-07,
-  "vertex_ai/claude-opus-4-5@20251101": 5e-07,
-  "vertex_ai/claude-opus-4-6": 5e-07,
-  "vertex_ai/claude-opus-4-6@default": 5e-07,
-  "vertex_ai/claude-opus-4-7": 5e-07,
-  "vertex_ai/claude-opus-4-7@default": 5e-07,
-  "vertex_ai/claude-opus-4@20250514": 1.5e-06,
-  "vertex_ai/claude-sonnet-4": 3e-07,
-  "vertex_ai/claude-sonnet-4-5": 3e-07,
-  "vertex_ai/claude-sonnet-4-5@20250929": 3e-07,
-  "vertex_ai/claude-sonnet-4-6": 3e-07,
-  "vertex_ai/claude-sonnet-4-6@default": 3e-07,
-  "vertex_ai/claude-sonnet-4@20250514": 3e-07,
-  "vertex_ai/gemini-2.5-flash-image": 3e-08,
-  "vertex_ai/gemini-3-flash-preview": 5e-08,
-  "vertex_ai/gemini-3-pro-preview": 2e-07,
-  "vertex_ai/gemini-3.1-flash-lite-preview": 2.5e-08,
-  "vertex_ai/gemini-3.1-pro-preview": 2e-07,
-  "vertex_ai/gemini-3.1-pro-preview-customtools": 2e-07,
-  "vertex_ai/xai/grok-4.1-fast-non-reasoning": 5e-08,
-  "vertex_ai/xai/grok-4.1-fast-reasoning": 5e-08,
-  "vertex_ai/xai/grok-4.20-non-reasoning": 2e-07,
-  "vertex_ai/xai/grok-4.20-reasoning": 2e-07,
-  "vertex_ai/zai-org/glm-5-maas": 1e-07,
-  "wandb/moonshotai/Kimi-K2.5": 1e-07,
-  "xai/grok-3": 7.5e-07,
-  "xai/grok-3-beta": 7.5e-07,
-  "xai/grok-3-fast-beta": 1.25e-06,
-  "xai/grok-3-fast-latest": 1.25e-06,
-  "xai/grok-3-latest": 7.5e-07,
-  "xai/grok-3-mini": 7.5e-08,
-  "xai/grok-3-mini-beta": 7.5e-08,
-  "xai/grok-3-mini-fast": 1.5e-07,
-  "xai/grok-3-mini-fast-beta": 1.5e-07,
-  "xai/grok-3-mini-fast-latest": 1.5e-07,
-  "xai/grok-3-mini-latest": 7.5e-08,
-  "xai/grok-4-1-fast": 5e-08,
-  "xai/grok-4-1-fast-non-reasoning": 5e-08,
-  "xai/grok-4-1-fast-non-reasoning-latest": 5e-08,
-  "xai/grok-4-1-fast-reasoning": 5e-08,
-  "xai/grok-4-1-fast-reasoning-latest": 5e-08,
-  "xai/grok-4-fast-non-reasoning": 5e-08,
-  "xai/grok-4-fast-reasoning": 5e-08,
-  "xai/grok-4.20-0309-reasoning": 2e-07,
-  "xai/grok-4.20-beta-0309-non-reasoning": 2e-07,
-  "xai/grok-4.20-beta-0309-reasoning": 2e-07,
-  "xai/grok-4.20-multi-agent-beta-0309": 2e-07,
-  "xai/grok-4.3": 2e-07,
-  "xai/grok-4.3-latest": 2e-07,
-  "xai/grok-code-fast": 2e-08,
-  "xai/grok-code-fast-1": 2e-08,
-  "xai/grok-code-fast-1-0825": 2e-08,
-  "zai/glm-4.6": 1.1e-07,
-  "zai/glm-4.7": 1.1e-07,
-  "zai/glm-5": 2e-07,
-  "zai/glm-5-code": 3e-07
+  "amazon.nova-2-lite-v1:0": [
+    7.5e-08,
+    null
+  ],
+  "amazon.nova-2-pro-preview-20251202-v1:0": [
+    5.46875e-07,
+    null
+  ],
+  "anthropic.claude-3-5-haiku-20241022-v1:0": [
+    8e-08,
+    1e-06
+  ],
+  "anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-3-5-sonnet-20241022-v2:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-3-7-sonnet-20240620-v1:0": [
+    3.6e-07,
+    4.5e-06
+  ],
+  "anthropic.claude-3-7-sonnet-20250219-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-3-haiku-20240307-v1:0": [
+    2.5e-08,
+    3.125e-07
+  ],
+  "anthropic.claude-3-opus-20240229-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "anthropic.claude-3-sonnet-20240229-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1e-07,
+    1.25e-06
+  ],
+  "anthropic.claude-haiku-4-5@20251001": [
+    1e-07,
+    1.25e-06
+  ],
+  "anthropic.claude-opus-4-1-20250805-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "anthropic.claude-opus-4-20250514-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "anthropic.claude-opus-4-5-20251101-v1:0": [
+    5e-07,
+    6.25e-06
+  ],
+  "anthropic.claude-opus-4-6-v1": [
+    5e-07,
+    6.25e-06
+  ],
+  "anthropic.claude-opus-4-7": [
+    5e-07,
+    6.25e-06
+  ],
+  "anthropic.claude-sonnet-4-20250514-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "anthropic.claude-sonnet-4-6": [
+    3e-07,
+    3.75e-06
+  ],
+  "apac.amazon.nova-2-lite-v1:0": [
+    8.25e-08,
+    null
+  ],
+  "apac.amazon.nova-2-pro-preview-20251202-v1:0": [
+    5.46875e-07,
+    null
+  ],
+  "apac.anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "apac.anthropic.claude-3-5-sonnet-20241022-v2:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "apac.anthropic.claude-3-haiku-20240307-v1:0": [
+    2.5e-08,
+    3.125e-07
+  ],
+  "apac.anthropic.claude-3-sonnet-20240229-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "apac.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.1e-07,
+    1.375e-06
+  ],
+  "apac.anthropic.claude-sonnet-4-20250514-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "au.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.1e-07,
+    1.375e-06
+  ],
+  "au.anthropic.claude-opus-4-6-v1": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "au.anthropic.claude-opus-4-7": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "au.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "au.anthropic.claude-sonnet-4-6": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "azure/codex-mini": [
+    3.75e-07,
+    null
+  ],
+  "azure/eu/gpt-4o-2024-08-06": [
+    1.375e-06,
+    null
+  ],
+  "azure/eu/gpt-4o-2024-11-20": [
+    null,
+    1.38e-06
+  ],
+  "azure/eu/gpt-4o-mini-2024-07-18": [
+    8.3e-08,
+    null
+  ],
+  "azure/eu/gpt-4o-mini-realtime-preview-2024-12-17": [
+    3.3e-07,
+    null
+  ],
+  "azure/eu/gpt-4o-realtime-preview-2024-10-01": [
+    2.75e-06,
+    null
+  ],
+  "azure/eu/gpt-4o-realtime-preview-2024-12-17": [
+    2.75e-06,
+    null
+  ],
+  "azure/eu/gpt-5-2025-08-07": [
+    1.375e-07,
+    null
+  ],
+  "azure/eu/gpt-5-mini-2025-08-07": [
+    2.75e-08,
+    null
+  ],
+  "azure/eu/gpt-5-nano-2025-08-07": [
+    5.5e-09,
+    null
+  ],
+  "azure/eu/gpt-5.1": [
+    1.4e-07,
+    null
+  ],
+  "azure/eu/gpt-5.1-chat": [
+    1.4e-07,
+    null
+  ],
+  "azure/eu/gpt-5.1-codex": [
+    1.4e-07,
+    null
+  ],
+  "azure/eu/gpt-5.1-codex-mini": [
+    2.8e-08,
+    null
+  ],
+  "azure/eu/o1-2024-12-17": [
+    8.25e-06,
+    null
+  ],
+  "azure/eu/o1-mini-2024-09-12": [
+    6.05e-07,
+    null
+  ],
+  "azure/eu/o1-preview-2024-09-12": [
+    8.25e-06,
+    null
+  ],
+  "azure/eu/o3-mini-2025-01-31": [
+    6.05e-07,
+    null
+  ],
+  "azure/global-standard/gpt-4o-2024-08-06": [
+    1.25e-06,
+    null
+  ],
+  "azure/global-standard/gpt-4o-2024-11-20": [
+    1.25e-06,
+    null
+  ],
+  "azure/global/gpt-4o-2024-08-06": [
+    1.25e-06,
+    null
+  ],
+  "azure/global/gpt-4o-2024-11-20": [
+    1.25e-06,
+    null
+  ],
+  "azure/global/gpt-5.1": [
+    1.25e-07,
+    null
+  ],
+  "azure/global/gpt-5.1-chat": [
+    1.25e-07,
+    null
+  ],
+  "azure/global/gpt-5.1-codex": [
+    1.25e-07,
+    null
+  ],
+  "azure/global/gpt-5.1-codex-mini": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-4.1": [
+    5e-07,
+    null
+  ],
+  "azure/gpt-4.1-2025-04-14": [
+    5e-07,
+    null
+  ],
+  "azure/gpt-4.1-mini": [
+    1e-07,
+    null
+  ],
+  "azure/gpt-4.1-mini-2025-04-14": [
+    1e-07,
+    null
+  ],
+  "azure/gpt-4.1-nano": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-4.1-nano-2025-04-14": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-4.5-preview": [
+    3.75e-05,
+    null
+  ],
+  "azure/gpt-4o": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-4o-2024-08-06": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-4o-2024-11-20": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-4o-mini": [
+    7.5e-08,
+    null
+  ],
+  "azure/gpt-4o-mini-2024-07-18": [
+    7.5e-08,
+    null
+  ],
+  "azure/gpt-4o-mini-realtime-preview-2024-12-17": [
+    3e-07,
+    null
+  ],
+  "azure/gpt-4o-realtime-preview-2024-10-01": [
+    2.5e-06,
+    null
+  ],
+  "azure/gpt-4o-realtime-preview-2024-12-17": [
+    2.5e-06,
+    null
+  ],
+  "azure/gpt-5": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5-2025-08-07": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5-chat": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5-chat-latest": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5-codex": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5-mini": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-5-mini-2025-08-07": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-5-nano": [
+    5e-09,
+    null
+  ],
+  "azure/gpt-5-nano-2025-08-07": [
+    5e-09,
+    null
+  ],
+  "azure/gpt-5.1": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-2025-11-13": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-chat": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-chat-2025-11-13": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-codex": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-codex-2025-11-13": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-codex-max": [
+    1.25e-07,
+    null
+  ],
+  "azure/gpt-5.1-codex-mini": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-5.1-codex-mini-2025-11-13": [
+    2.5e-08,
+    null
+  ],
+  "azure/gpt-5.2": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.2-2025-12-11": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.2-chat": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.2-chat-2025-12-11": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.2-codex": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.3-chat": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.3-codex": [
+    1.75e-07,
+    null
+  ],
+  "azure/gpt-5.4": [
+    2.5e-07,
+    null
+  ],
+  "azure/gpt-5.4-2026-03-05": [
+    2.5e-07,
+    null
+  ],
+  "azure/gpt-5.4-mini": [
+    7.5e-08,
+    null
+  ],
+  "azure/gpt-5.4-mini-2026-03-17": [
+    7.5e-08,
+    null
+  ],
+  "azure/gpt-5.4-nano": [
+    2e-08,
+    null
+  ],
+  "azure/gpt-5.4-nano-2026-03-17": [
+    2e-08,
+    null
+  ],
+  "azure/gpt-5.4-pro": [
+    3e-06,
+    null
+  ],
+  "azure/gpt-5.4-pro-2026-03-05": [
+    3e-06,
+    null
+  ],
+  "azure/gpt-5.5": [
+    5e-07,
+    null
+  ],
+  "azure/gpt-5.5-2026-04-23": [
+    5e-07,
+    null
+  ],
+  "azure/gpt-5.5-pro": [
+    3e-06,
+    null
+  ],
+  "azure/gpt-5.5-pro-2026-04-23": [
+    3e-06,
+    null
+  ],
+  "azure/gpt-image-1": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-image-1-mini": [
+    2e-07,
+    null
+  ],
+  "azure/gpt-image-1.5": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-image-1.5-2025-12-16": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-image-2": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-image-2-2026-04-21": [
+    1.25e-06,
+    null
+  ],
+  "azure/gpt-realtime-1.5-2026-02-23": [
+    4e-06,
+    null
+  ],
+  "azure/gpt-realtime-2025-08-28": [
+    4e-06,
+    null
+  ],
+  "azure/gpt-realtime-mini-2025-10-06": [
+    6e-08,
+    null
+  ],
+  "azure/o1": [
+    7.5e-06,
+    null
+  ],
+  "azure/o1-2024-12-17": [
+    7.5e-06,
+    null
+  ],
+  "azure/o1-mini": [
+    6.05e-07,
+    null
+  ],
+  "azure/o1-mini-2024-09-12": [
+    5.5e-07,
+    null
+  ],
+  "azure/o1-preview": [
+    7.5e-06,
+    null
+  ],
+  "azure/o1-preview-2024-09-12": [
+    7.5e-06,
+    null
+  ],
+  "azure/o3": [
+    5e-07,
+    null
+  ],
+  "azure/o3-2025-04-16": [
+    5e-07,
+    null
+  ],
+  "azure/o3-deep-research": [
+    2.5e-06,
+    null
+  ],
+  "azure/o3-mini": [
+    5.5e-07,
+    null
+  ],
+  "azure/o3-mini-2025-01-31": [
+    5.5e-07,
+    null
+  ],
+  "azure/o4-mini": [
+    2.75e-07,
+    null
+  ],
+  "azure/o4-mini-2025-04-16": [
+    2.75e-07,
+    null
+  ],
+  "azure/us/gpt-4.1-2025-04-14": [
+    5.5e-07,
+    null
+  ],
+  "azure/us/gpt-4.1-mini-2025-04-14": [
+    1.1e-07,
+    null
+  ],
+  "azure/us/gpt-4.1-nano-2025-04-14": [
+    2.5e-08,
+    null
+  ],
+  "azure/us/gpt-4o-2024-08-06": [
+    1.375e-06,
+    null
+  ],
+  "azure/us/gpt-4o-2024-11-20": [
+    null,
+    1.38e-06
+  ],
+  "azure/us/gpt-4o-mini-2024-07-18": [
+    8.3e-08,
+    null
+  ],
+  "azure/us/gpt-4o-mini-realtime-preview-2024-12-17": [
+    3.3e-07,
+    null
+  ],
+  "azure/us/gpt-4o-realtime-preview-2024-10-01": [
+    2.75e-06,
+    null
+  ],
+  "azure/us/gpt-4o-realtime-preview-2024-12-17": [
+    2.75e-06,
+    null
+  ],
+  "azure/us/gpt-5-2025-08-07": [
+    1.375e-07,
+    null
+  ],
+  "azure/us/gpt-5-mini-2025-08-07": [
+    2.75e-08,
+    null
+  ],
+  "azure/us/gpt-5-nano-2025-08-07": [
+    5.5e-09,
+    null
+  ],
+  "azure/us/gpt-5.1": [
+    1.4e-07,
+    null
+  ],
+  "azure/us/gpt-5.1-chat": [
+    1.4e-07,
+    null
+  ],
+  "azure/us/gpt-5.1-codex": [
+    1.4e-07,
+    null
+  ],
+  "azure/us/gpt-5.1-codex-mini": [
+    2.8e-08,
+    null
+  ],
+  "azure/us/o1-2024-12-17": [
+    8.25e-06,
+    null
+  ],
+  "azure/us/o1-mini-2024-09-12": [
+    6.05e-07,
+    null
+  ],
+  "azure/us/o1-preview-2024-09-12": [
+    8.25e-06,
+    null
+  ],
+  "azure/us/o3-2025-04-16": [
+    5.5e-07,
+    null
+  ],
+  "azure/us/o3-mini-2025-01-31": [
+    6.05e-07,
+    null
+  ],
+  "azure/us/o4-mini-2025-04-16": [
+    3.1e-07,
+    null
+  ],
+  "azure_ai/claude-haiku-4-5": [
+    1e-07,
+    1.25e-06
+  ],
+  "azure_ai/claude-opus-4-1": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "azure_ai/claude-opus-4-5": [
+    5e-07,
+    6.25e-06
+  ],
+  "azure_ai/claude-opus-4-6": [
+    5e-07,
+    6.25e-06
+  ],
+  "azure_ai/claude-opus-4-7": [
+    5e-07,
+    6.25e-06
+  ],
+  "azure_ai/claude-sonnet-4-5": [
+    3e-07,
+    3.75e-06
+  ],
+  "azure_ai/claude-sonnet-4-6": [
+    3e-07,
+    3.75e-06
+  ],
+  "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "bedrock/us-gov-east-1/anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3.6e-07,
+    4.5e-06
+  ],
+  "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0": [
+    3e-08,
+    3.75e-07
+  ],
+  "bedrock/us-gov-east-1/anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.2e-07,
+    1.5e-06
+  ],
+  "bedrock/us-gov-east-1/anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3.6e-07,
+    4.5e-06
+  ],
+  "bedrock/us-gov-west-1/anthropic.claude-3-7-sonnet-20250219-v1:0": [
+    3.6e-07,
+    4.5e-06
+  ],
+  "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0": [
+    3e-08,
+    3.75e-07
+  ],
+  "bedrock/us-gov-west-1/anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.2e-07,
+    1.5e-06
+  ],
+  "bedrock/us-gov-west-1/anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0": [
+    8e-08,
+    1e-06
+  ],
+  "chatgpt-image-latest": [
+    1.25e-06,
+    null
+  ],
+  "claude-3-7-sonnet-20250219": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-3-haiku-20240307": [
+    3e-08,
+    3e-07
+  ],
+  "claude-3-opus-20240229": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "claude-4-opus-20250514": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "claude-4-sonnet-20250514": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-haiku-4-5": [
+    1e-07,
+    1.25e-06
+  ],
+  "claude-haiku-4-5-20251001": [
+    1e-07,
+    1.25e-06
+  ],
+  "claude-opus-4-1": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "claude-opus-4-1-20250805": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "claude-opus-4-20250514": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "claude-opus-4-5": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-opus-4-5-20251101": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-opus-4-6": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-opus-4-6-20260205": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-opus-4-7": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-opus-4-7-20260416": [
+    5e-07,
+    6.25e-06
+  ],
+  "claude-sonnet-4-20250514": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-sonnet-4-5": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-sonnet-4-5-20250929": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-sonnet-4-5-20250929-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "claude-sonnet-4-6": [
+    3e-07,
+    3.75e-06
+  ],
+  "codex-mini-latest": [
+    3.75e-07,
+    null
+  ],
+  "deepinfra/anthropic/claude-3-7-sonnet-latest": [
+    3.3e-07,
+    null
+  ],
+  "deepinfra/deepseek-ai/DeepSeek-R1-0528": [
+    4e-07,
+    null
+  ],
+  "deepinfra/deepseek-ai/DeepSeek-V3.1": [
+    2.16e-07,
+    null
+  ],
+  "deepinfra/deepseek-ai/DeepSeek-V3.1-Terminus": [
+    2.16e-07,
+    null
+  ],
+  "deepinfra/moonshotai/Kimi-K2-Instruct-0905": [
+    4e-07,
+    null
+  ],
+  "deepseek-chat": [
+    2.8e-08,
+    null
+  ],
+  "deepseek-reasoner": [
+    2.8e-08,
+    null
+  ],
+  "deepseek/deepseek-chat": [
+    2.8e-08,
+    0.0
+  ],
+  "deepseek/deepseek-reasoner": [
+    2.8e-08,
+    null
+  ],
+  "deepseek/deepseek-v3": [
+    7e-08,
+    0.0
+  ],
+  "eu.amazon.nova-2-lite-v1:0": [
+    8.25e-08,
+    null
+  ],
+  "eu.amazon.nova-2-pro-preview-20251202-v1:0": [
+    5.46875e-07,
+    null
+  ],
+  "eu.anthropic.claude-3-5-haiku-20241022-v1:0": [
+    2.5e-08,
+    3.125e-07
+  ],
+  "eu.anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "eu.anthropic.claude-3-5-sonnet-20241022-v2:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "eu.anthropic.claude-3-7-sonnet-20250219-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "eu.anthropic.claude-3-haiku-20240307-v1:0": [
+    2.5e-08,
+    3.125e-07
+  ],
+  "eu.anthropic.claude-3-opus-20240229-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "eu.anthropic.claude-3-sonnet-20240229-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "eu.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.1e-07,
+    1.375e-06
+  ],
+  "eu.anthropic.claude-opus-4-1-20250805-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "eu.anthropic.claude-opus-4-20250514-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "eu.anthropic.claude-opus-4-5-20251101-v1:0": [
+    5e-07,
+    6.25e-06
+  ],
+  "eu.anthropic.claude-opus-4-6-v1": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "eu.anthropic.claude-opus-4-7": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "eu.anthropic.claude-sonnet-4-20250514-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "eu.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "eu.anthropic.claude-sonnet-4-6": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "fireworks_ai/accounts/fireworks/models/glm-4p7": [
+    3e-07,
+    null
+  ],
+  "fireworks_ai/accounts/fireworks/models/kimi-k2p5": [
+    1e-07,
+    null
+  ],
+  "fireworks_ai/accounts/fireworks/models/minimax-m2p1": [
+    3e-08,
+    null
+  ],
+  "fireworks_ai/glm-4p7": [
+    3e-07,
+    null
+  ],
+  "fireworks_ai/kimi-k2p5": [
+    1e-07,
+    null
+  ],
+  "fireworks_ai/minimax-m2p1": [
+    3e-08,
+    null
+  ],
+  "ft:gpt-4.1-2025-04-14": [
+    7.5e-07,
+    null
+  ],
+  "ft:gpt-4.1-mini-2025-04-14": [
+    2e-07,
+    null
+  ],
+  "ft:gpt-4.1-nano-2025-04-14": [
+    5e-08,
+    null
+  ],
+  "ft:gpt-4o-2024-08-06": [
+    1.875e-06,
+    null
+  ],
+  "ft:gpt-4o-2024-11-20": [
+    null,
+    1.875e-06
+  ],
+  "ft:gpt-4o-mini-2024-07-18": [
+    1.5e-07,
+    null
+  ],
+  "ft:o4-mini-2025-04-16": [
+    1e-06,
+    null
+  ],
+  "gemini-2.0-flash": [
+    2.5e-08,
+    null
+  ],
+  "gemini-2.0-flash-001": [
+    3.75e-08,
+    null
+  ],
+  "gemini-2.0-flash-lite": [
+    1.875e-08,
+    null
+  ],
+  "gemini-2.0-flash-lite-001": [
+    1.875e-08,
+    null
+  ],
+  "gemini-2.5-flash": [
+    3e-08,
+    null
+  ],
+  "gemini-2.5-flash-image": [
+    3e-08,
+    null
+  ],
+  "gemini-2.5-flash-lite": [
+    1e-08,
+    null
+  ],
+  "gemini-2.5-flash-lite-preview-06-17": [
+    2.5e-08,
+    null
+  ],
+  "gemini-2.5-flash-lite-preview-09-2025": [
+    1e-08,
+    null
+  ],
+  "gemini-2.5-flash-preview-09-2025": [
+    7.5e-08,
+    null
+  ],
+  "gemini-2.5-pro": [
+    1.25e-07,
+    null
+  ],
+  "gemini-2.5-pro-preview-tts": [
+    1.25e-07,
+    null
+  ],
+  "gemini-3-flash-preview": [
+    5e-08,
+    null
+  ],
+  "gemini-3-pro-preview": [
+    2e-07,
+    null
+  ],
+  "gemini-3.1-flash-lite-preview": [
+    2.5e-08,
+    null
+  ],
+  "gemini-3.1-pro-preview": [
+    2e-07,
+    null
+  ],
+  "gemini-3.1-pro-preview-customtools": [
+    2e-07,
+    null
+  ],
+  "gemini-exp-1206": [
+    3e-08,
+    null
+  ],
+  "gemini-flash-latest": [
+    3e-08,
+    null
+  ],
+  "gemini-flash-lite-latest": [
+    1e-08,
+    null
+  ],
+  "gemini-live-2.5-flash-preview-native-audio-09-2025": [
+    7.5e-08,
+    null
+  ],
+  "gemini-pro-latest": [
+    1.25e-07,
+    null
+  ],
+  "gemini-robotics-er-1.5-preview": [
+    0,
+    null
+  ],
+  "gemini/gemini-2.0-flash": [
+    2.5e-08,
+    null
+  ],
+  "gemini/gemini-2.0-flash-001": [
+    2.5e-08,
+    null
+  ],
+  "gemini/gemini-2.0-flash-lite": [
+    1.875e-08,
+    null
+  ],
+  "gemini/gemini-2.0-flash-lite-001": [
+    1.875e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash": [
+    3e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash-image": [
+    3e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash-lite": [
+    1e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash-lite-preview-06-17": [
+    2.5e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash-lite-preview-09-2025": [
+    1e-08,
+    null
+  ],
+  "gemini/gemini-2.5-flash-preview-09-2025": [
+    7.5e-08,
+    null
+  ],
+  "gemini/gemini-2.5-pro": [
+    1.25e-07,
+    null
+  ],
+  "gemini/gemini-2.5-pro-preview-tts": [
+    1.25e-07,
+    null
+  ],
+  "gemini/gemini-3-flash-preview": [
+    5e-08,
+    null
+  ],
+  "gemini/gemini-3-pro-preview": [
+    2e-07,
+    null
+  ],
+  "gemini/gemini-3.1-flash-lite-preview": [
+    2.5e-08,
+    null
+  ],
+  "gemini/gemini-3.1-pro-preview": [
+    2e-07,
+    null
+  ],
+  "gemini/gemini-3.1-pro-preview-customtools": [
+    2e-07,
+    null
+  ],
+  "gemini/gemini-flash-latest": [
+    7.5e-08,
+    null
+  ],
+  "gemini/gemini-flash-lite-latest": [
+    2.5e-08,
+    null
+  ],
+  "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": [
+    7.5e-08,
+    null
+  ],
+  "gemini/gemini-pro-latest": [
+    1.25e-07,
+    null
+  ],
+  "gemini/gemini-robotics-er-1.5-preview": [
+    0,
+    null
+  ],
+  "global.amazon.nova-2-lite-v1:0": [
+    7.5e-08,
+    null
+  ],
+  "global.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1e-07,
+    1.25e-06
+  ],
+  "global.anthropic.claude-opus-4-5-20251101-v1:0": [
+    5e-07,
+    6.25e-06
+  ],
+  "global.anthropic.claude-opus-4-6-v1": [
+    5e-07,
+    6.25e-06
+  ],
+  "global.anthropic.claude-opus-4-7": [
+    5e-07,
+    6.25e-06
+  ],
+  "global.anthropic.claude-sonnet-4-20250514-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "global.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "global.anthropic.claude-sonnet-4-6": [
+    3e-07,
+    3.75e-06
+  ],
+  "gpt-4.1": [
+    5e-07,
+    null
+  ],
+  "gpt-4.1-2025-04-14": [
+    5e-07,
+    null
+  ],
+  "gpt-4.1-mini": [
+    1e-07,
+    null
+  ],
+  "gpt-4.1-mini-2025-04-14": [
+    1e-07,
+    null
+  ],
+  "gpt-4.1-nano": [
+    2.5e-08,
+    null
+  ],
+  "gpt-4.1-nano-2025-04-14": [
+    2.5e-08,
+    null
+  ],
+  "gpt-4o": [
+    1.25e-06,
+    null
+  ],
+  "gpt-4o-2024-08-06": [
+    1.25e-06,
+    null
+  ],
+  "gpt-4o-2024-11-20": [
+    1.25e-06,
+    null
+  ],
+  "gpt-4o-mini": [
+    7.5e-08,
+    null
+  ],
+  "gpt-4o-mini-2024-07-18": [
+    7.5e-08,
+    null
+  ],
+  "gpt-4o-mini-realtime-preview": [
+    3e-07,
+    null
+  ],
+  "gpt-4o-mini-realtime-preview-2024-12-17": [
+    3e-07,
+    null
+  ],
+  "gpt-4o-mini-search-preview": [
+    7.5e-08,
+    null
+  ],
+  "gpt-4o-mini-search-preview-2025-03-11": [
+    7.5e-08,
+    null
+  ],
+  "gpt-4o-realtime-preview": [
+    2.5e-06,
+    null
+  ],
+  "gpt-4o-realtime-preview-2024-12-17": [
+    2.5e-06,
+    null
+  ],
+  "gpt-4o-realtime-preview-2025-06-03": [
+    2.5e-06,
+    null
+  ],
+  "gpt-4o-search-preview": [
+    1.25e-06,
+    null
+  ],
+  "gpt-4o-search-preview-2025-03-11": [
+    1.25e-06,
+    null
+  ],
+  "gpt-5": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-2025-08-07": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-chat": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-chat-latest": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-codex": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-mini": [
+    2.5e-08,
+    null
+  ],
+  "gpt-5-mini-2025-08-07": [
+    2.5e-08,
+    null
+  ],
+  "gpt-5-nano": [
+    5e-09,
+    null
+  ],
+  "gpt-5-nano-2025-08-07": [
+    5e-09,
+    null
+  ],
+  "gpt-5-search-api": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5-search-api-2025-10-14": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1-2025-11-13": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1-chat-latest": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1-codex": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1-codex-max": [
+    1.25e-07,
+    null
+  ],
+  "gpt-5.1-codex-mini": [
+    2.5e-08,
+    null
+  ],
+  "gpt-5.2": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.2-2025-12-11": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.2-chat-latest": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.2-codex": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.3-chat-latest": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.3-codex": [
+    1.75e-07,
+    null
+  ],
+  "gpt-5.4": [
+    2.5e-07,
+    null
+  ],
+  "gpt-5.4-2026-03-05": [
+    2.5e-07,
+    null
+  ],
+  "gpt-5.4-mini": [
+    7.5e-08,
+    null
+  ],
+  "gpt-5.4-mini-2026-03-17": [
+    7.5e-08,
+    null
+  ],
+  "gpt-5.4-nano": [
+    2e-08,
+    null
+  ],
+  "gpt-5.4-nano-2026-03-17": [
+    2e-08,
+    null
+  ],
+  "gpt-5.4-pro": [
+    3e-06,
+    null
+  ],
+  "gpt-5.4-pro-2026-03-05": [
+    3e-06,
+    null
+  ],
+  "gpt-5.5": [
+    5e-07,
+    null
+  ],
+  "gpt-5.5-2026-04-23": [
+    5e-07,
+    null
+  ],
+  "gpt-5.5-pro": [
+    3e-06,
+    null
+  ],
+  "gpt-5.5-pro-2026-04-23": [
+    3e-06,
+    null
+  ],
+  "gpt-image-1": [
+    1.25e-06,
+    null
+  ],
+  "gpt-image-1-mini": [
+    2e-07,
+    null
+  ],
+  "gpt-image-1.5": [
+    1.25e-06,
+    null
+  ],
+  "gpt-image-1.5-2025-12-16": [
+    1.25e-06,
+    null
+  ],
+  "gpt-image-2": [
+    1.25e-06,
+    null
+  ],
+  "gpt-image-2-2026-04-21": [
+    1.25e-06,
+    null
+  ],
+  "gpt-realtime": [
+    4e-07,
+    null
+  ],
+  "gpt-realtime-1.5": [
+    4e-07,
+    null
+  ],
+  "gpt-realtime-2": [
+    4e-07,
+    null
+  ],
+  "gpt-realtime-2025-08-28": [
+    4e-07,
+    null
+  ],
+  "gpt-realtime-mini-2025-10-06": [
+    6e-08,
+    null
+  ],
+  "gpt-realtime-mini-2025-12-15": [
+    6e-08,
+    null
+  ],
+  "groq/moonshotai/kimi-k2-instruct-0905": [
+    5e-07,
+    null
+  ],
+  "groq/openai/gpt-oss-120b": [
+    7.5e-08,
+    null
+  ],
+  "groq/openai/gpt-oss-20b": [
+    3.75e-08,
+    null
+  ],
+  "groq/openai/gpt-oss-safeguard-20b": [
+    3.7e-08,
+    null
+  ],
+  "jp.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.1e-07,
+    1.375e-06
+  ],
+  "jp.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "minimax/MiniMax-M2": [
+    3e-08,
+    3.75e-07
+  ],
+  "minimax/MiniMax-M2.1": [
+    3e-08,
+    3.75e-07
+  ],
+  "minimax/MiniMax-M2.1-lightning": [
+    3e-08,
+    3.75e-07
+  ],
+  "minimax/MiniMax-M2.5": [
+    3e-08,
+    3.75e-07
+  ],
+  "minimax/MiniMax-M2.5-lightning": [
+    3e-08,
+    3.75e-07
+  ],
+  "moonshot/kimi-k2-0711-preview": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-k2-0905-preview": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-k2-thinking": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-k2-thinking-turbo": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-k2-turbo-preview": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-k2.5": [
+    1e-07,
+    null
+  ],
+  "moonshot/kimi-k2.6": [
+    1.6e-07,
+    null
+  ],
+  "moonshot/kimi-latest": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-latest-128k": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-latest-32k": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-latest-8k": [
+    1.5e-07,
+    null
+  ],
+  "moonshot/kimi-thinking-preview": [
+    1.5e-07,
+    null
+  ],
+  "novita/deepseek/deepseek-r1-0528": [
+    3.5e-07,
+    null
+  ],
+  "novita/deepseek/deepseek-v3-0324": [
+    1.35e-07,
+    null
+  ],
+  "novita/deepseek/deepseek-v3.1": [
+    1.35e-07,
+    null
+  ],
+  "novita/deepseek/deepseek-v3.1-terminus": [
+    1.35e-07,
+    null
+  ],
+  "novita/deepseek/deepseek-v3.2": [
+    1.345e-07,
+    null
+  ],
+  "novita/kwaipilot/kat-coder-pro": [
+    6e-08,
+    null
+  ],
+  "novita/minimax/minimax-m2": [
+    3e-08,
+    null
+  ],
+  "novita/minimax/minimax-m2.1": [
+    3e-08,
+    null
+  ],
+  "novita/xiaomimimo/mimo-v2-flash": [
+    2e-08,
+    null
+  ],
+  "novita/zai-org/glm-4.5": [
+    1.1e-07,
+    null
+  ],
+  "novita/zai-org/glm-4.5v": [
+    1.1e-07,
+    null
+  ],
+  "novita/zai-org/glm-4.6": [
+    1.1e-07,
+    null
+  ],
+  "novita/zai-org/glm-4.6v": [
+    5.5e-08,
+    null
+  ],
+  "novita/zai-org/glm-4.7": [
+    1.1e-07,
+    null
+  ],
+  "o1": [
+    7.5e-06,
+    null
+  ],
+  "o1-2024-12-17": [
+    7.5e-06,
+    null
+  ],
+  "o3": [
+    5e-07,
+    null
+  ],
+  "o3-2025-04-16": [
+    5e-07,
+    null
+  ],
+  "o3-deep-research": [
+    2.5e-06,
+    null
+  ],
+  "o3-deep-research-2025-06-26": [
+    2.5e-06,
+    null
+  ],
+  "o3-mini": [
+    5.5e-07,
+    null
+  ],
+  "o3-mini-2025-01-31": [
+    5.5e-07,
+    null
+  ],
+  "o4-mini": [
+    2.75e-07,
+    null
+  ],
+  "o4-mini-2025-04-16": [
+    2.75e-07,
+    null
+  ],
+  "o4-mini-deep-research": [
+    5e-07,
+    null
+  ],
+  "o4-mini-deep-research-2025-06-26": [
+    5e-07,
+    null
+  ],
+  "openrouter/anthropic/claude-haiku-4.5": [
+    1e-07,
+    1.25e-06
+  ],
+  "openrouter/anthropic/claude-opus-4": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "openrouter/anthropic/claude-opus-4.1": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "openrouter/anthropic/claude-opus-4.5": [
+    5e-07,
+    6.25e-06
+  ],
+  "openrouter/anthropic/claude-opus-4.6": [
+    5e-07,
+    6.25e-06
+  ],
+  "openrouter/anthropic/claude-opus-4.7": [
+    5e-07,
+    6.25e-06
+  ],
+  "openrouter/anthropic/claude-sonnet-4": [
+    3e-07,
+    3.75e-06
+  ],
+  "openrouter/anthropic/claude-sonnet-4.5": [
+    3e-07,
+    3.75e-06
+  ],
+  "openrouter/anthropic/claude-sonnet-4.6": [
+    3e-07,
+    3.75e-06
+  ],
+  "openrouter/google/gemini-3-flash-preview": [
+    5e-08,
+    null
+  ],
+  "openrouter/google/gemini-3-pro-preview": [
+    2e-07,
+    null
+  ],
+  "openrouter/google/gemini-3.1-flash-lite-preview": [
+    2.5e-08,
+    null
+  ],
+  "openrouter/google/gemini-3.1-pro-preview": [
+    2e-07,
+    null
+  ],
+  "openrouter/minimax/minimax-m2.1": [
+    0.0,
+    0.0
+  ],
+  "openrouter/minimax/minimax-m2.5": [
+    1.5e-07,
+    null
+  ],
+  "openrouter/moonshotai/kimi-k2.5": [
+    1e-07,
+    null
+  ],
+  "openrouter/openai/gpt-4.1": [
+    5e-07,
+    null
+  ],
+  "openrouter/openai/gpt-4.1-mini": [
+    1e-07,
+    null
+  ],
+  "openrouter/openai/gpt-4.1-nano": [
+    2.5e-08,
+    null
+  ],
+  "openrouter/openai/gpt-5": [
+    1.25e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5-chat": [
+    1.25e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5-codex": [
+    1.25e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5-mini": [
+    2.5e-08,
+    null
+  ],
+  "openrouter/openai/gpt-5-nano": [
+    5e-09,
+    null
+  ],
+  "openrouter/openai/gpt-5.1-codex-max": [
+    1.25e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5.2": [
+    1.75e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5.2-chat": [
+    1.75e-07,
+    null
+  ],
+  "openrouter/openai/gpt-5.2-codex": [
+    1.75e-07,
+    null
+  ],
+  "openrouter/openai/o1": [
+    7.5e-06,
+    null
+  ],
+  "openrouter/xiaomi/mimo-v2-flash": [
+    0.0,
+    0.0
+  ],
+  "openrouter/z-ai/glm-4.7": [
+    0.0,
+    0.0
+  ],
+  "openrouter/z-ai/glm-4.7-flash": [
+    0.0,
+    0.0
+  ],
+  "sarvam/sarvam-m": [
+    0,
+    0
+  ],
+  "us-gov.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "us.amazon.nova-2-lite-v1:0": [
+    8.25e-08,
+    null
+  ],
+  "us.amazon.nova-2-pro-preview-20251202-v1:0": [
+    5.46875e-07,
+    null
+  ],
+  "us.anthropic.claude-3-5-haiku-20241022-v1:0": [
+    8e-08,
+    1e-06
+  ],
+  "us.anthropic.claude-3-5-sonnet-20240620-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "us.anthropic.claude-3-5-sonnet-20241022-v2:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "us.anthropic.claude-3-7-sonnet-20250219-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "us.anthropic.claude-3-haiku-20240307-v1:0": [
+    2.5e-08,
+    3.125e-07
+  ],
+  "us.anthropic.claude-3-opus-20240229-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "us.anthropic.claude-3-sonnet-20240229-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "us.anthropic.claude-haiku-4-5-20251001-v1:0": [
+    1.1e-07,
+    1.375e-06
+  ],
+  "us.anthropic.claude-opus-4-1-20250805-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "us.anthropic.claude-opus-4-20250514-v1:0": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "us.anthropic.claude-opus-4-5-20251101-v1:0": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "us.anthropic.claude-opus-4-6-v1": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "us.anthropic.claude-opus-4-7": [
+    5.5e-07,
+    6.875e-06
+  ],
+  "us.anthropic.claude-sonnet-4-20250514-v1:0": [
+    3e-07,
+    3.75e-06
+  ],
+  "us.anthropic.claude-sonnet-4-5-20250929-v1:0": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "us.anthropic.claude-sonnet-4-6": [
+    3.3e-07,
+    4.125e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3-5-sonnet": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3-5-sonnet-20241022": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3-7-sonnet": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3-haiku": [
+    3e-08,
+    3e-07
+  ],
+  "vercel_ai_gateway/anthropic/claude-3-opus": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vercel_ai_gateway/anthropic/claude-3.5-haiku": [
+    8e-08,
+    1e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3.5-sonnet": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-3.7-sonnet": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-4-opus": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vercel_ai_gateway/anthropic/claude-4-sonnet": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-haiku-4.5": [
+    1e-07,
+    1.25e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-opus-4": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vercel_ai_gateway/anthropic/claude-opus-4.1": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vercel_ai_gateway/anthropic/claude-opus-4.5": [
+    5e-07,
+    6.25e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-opus-4.6": [
+    5e-07,
+    6.25e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-sonnet-4": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/anthropic/claude-sonnet-4.5": [
+    3e-07,
+    3.75e-06
+  ],
+  "vercel_ai_gateway/openai/gpt-4.1": [
+    5e-07,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/gpt-4.1-mini": [
+    1e-07,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/gpt-4.1-nano": [
+    2.5e-08,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/gpt-4o": [
+    1.25e-06,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/gpt-4o-mini": [
+    7.5e-08,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/o1": [
+    7.5e-06,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/o3": [
+    5e-07,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/o3-mini": [
+    5.5e-07,
+    0.0
+  ],
+  "vercel_ai_gateway/openai/o4-mini": [
+    2.75e-07,
+    0.0
+  ],
+  "vercel_ai_gateway/zai/glm-4.6": [
+    1.1e-07,
+    null
+  ],
+  "vertex_ai/claude-3-7-sonnet@20250219": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-haiku-4-5": [
+    1e-07,
+    1.25e-06
+  ],
+  "vertex_ai/claude-haiku-4-5@20251001": [
+    1e-07,
+    1.25e-06
+  ],
+  "vertex_ai/claude-opus-4": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vertex_ai/claude-opus-4-1": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vertex_ai/claude-opus-4-1@20250805": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vertex_ai/claude-opus-4-5": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4-5@20251101": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4-6": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4-6@default": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4-7": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4-7@default": [
+    5e-07,
+    6.25e-06
+  ],
+  "vertex_ai/claude-opus-4@20250514": [
+    1.5e-06,
+    1.875e-05
+  ],
+  "vertex_ai/claude-sonnet-4": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-sonnet-4-5": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-sonnet-4-5@20250929": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-sonnet-4-6": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-sonnet-4-6@default": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/claude-sonnet-4@20250514": [
+    3e-07,
+    3.75e-06
+  ],
+  "vertex_ai/gemini-2.5-flash-image": [
+    3e-08,
+    null
+  ],
+  "vertex_ai/gemini-3-flash-preview": [
+    5e-08,
+    null
+  ],
+  "vertex_ai/gemini-3-pro-preview": [
+    2e-07,
+    null
+  ],
+  "vertex_ai/gemini-3.1-flash-lite-preview": [
+    2.5e-08,
+    null
+  ],
+  "vertex_ai/gemini-3.1-pro-preview": [
+    2e-07,
+    null
+  ],
+  "vertex_ai/gemini-3.1-pro-preview-customtools": [
+    2e-07,
+    null
+  ],
+  "vertex_ai/xai/grok-4.1-fast-non-reasoning": [
+    5e-08,
+    null
+  ],
+  "vertex_ai/xai/grok-4.1-fast-reasoning": [
+    5e-08,
+    null
+  ],
+  "vertex_ai/xai/grok-4.20-non-reasoning": [
+    2e-07,
+    null
+  ],
+  "vertex_ai/xai/grok-4.20-reasoning": [
+    2e-07,
+    null
+  ],
+  "vertex_ai/zai-org/glm-5-maas": [
+    1e-07,
+    null
+  ],
+  "wandb/moonshotai/Kimi-K2.5": [
+    1e-07,
+    null
+  ],
+  "xai/grok-3": [
+    7.5e-07,
+    null
+  ],
+  "xai/grok-3-beta": [
+    7.5e-07,
+    null
+  ],
+  "xai/grok-3-fast-beta": [
+    1.25e-06,
+    null
+  ],
+  "xai/grok-3-fast-latest": [
+    1.25e-06,
+    null
+  ],
+  "xai/grok-3-latest": [
+    7.5e-07,
+    null
+  ],
+  "xai/grok-3-mini": [
+    7.5e-08,
+    null
+  ],
+  "xai/grok-3-mini-beta": [
+    7.5e-08,
+    null
+  ],
+  "xai/grok-3-mini-fast": [
+    1.5e-07,
+    null
+  ],
+  "xai/grok-3-mini-fast-beta": [
+    1.5e-07,
+    null
+  ],
+  "xai/grok-3-mini-fast-latest": [
+    1.5e-07,
+    null
+  ],
+  "xai/grok-3-mini-latest": [
+    7.5e-08,
+    null
+  ],
+  "xai/grok-4-1-fast": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-1-fast-non-reasoning": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-1-fast-non-reasoning-latest": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-1-fast-reasoning": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-1-fast-reasoning-latest": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-fast-non-reasoning": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4-fast-reasoning": [
+    5e-08,
+    null
+  ],
+  "xai/grok-4.20-0309-reasoning": [
+    2e-07,
+    null
+  ],
+  "xai/grok-4.20-beta-0309-non-reasoning": [
+    2e-07,
+    null
+  ],
+  "xai/grok-4.20-beta-0309-reasoning": [
+    2e-07,
+    null
+  ],
+  "xai/grok-4.20-multi-agent-beta-0309": [
+    2e-07,
+    null
+  ],
+  "xai/grok-4.3": [
+    2e-07,
+    null
+  ],
+  "xai/grok-4.3-latest": [
+    2e-07,
+    null
+  ],
+  "xai/grok-code-fast": [
+    2e-08,
+    null
+  ],
+  "xai/grok-code-fast-1": [
+    2e-08,
+    null
+  ],
+  "xai/grok-code-fast-1-0825": [
+    2e-08,
+    null
+  ],
+  "zai/glm-4.6": [
+    1.1e-07,
+    0
+  ],
+  "zai/glm-4.7": [
+    1.1e-07,
+    0
+  ],
+  "zai/glm-5": [
+    2e-07,
+    0
+  ],
+  "zai/glm-5-code": [
+    3e-07,
+    0
+  ]
 }

@@ -14,29 +14,28 @@ var priceSnapshot []byte
 //go:embed model-cache-prices.json
 var cachePriceSnapshot []byte
 
-var modelCachePrices = func() map[string]float64 {
-	var prices map[string]float64
+var modelCachePrices = func() map[string][2]*float64 {
+	var prices map[string][2]*float64
 	if err := json.Unmarshal(cachePriceSnapshot, &prices); err != nil {
 		panic("invalid embedded LiteLLM cache prices")
 	}
 	return prices
 }()
 
-func cacheTokenPrice(model string, override *float64) (*float64, error) {
-	price, exists := modelCachePrices[model]
+func cacheTokenPrices(model string, readOverride, createOverride *float64) ([2]*float64, error) {
+	prices, exists := modelCachePrices[model]
 	if !exists && strings.HasPrefix(model, "openai/") {
-		price, exists = modelCachePrices[strings.TrimPrefix(model, "openai/")]
+		prices = modelCachePrices[strings.TrimPrefix(model, "openai/")]
 	}
-	if override != nil {
-		price, exists = *override, true
+	for index, override := range []*float64{readOverride, createOverride} {
+		if override != nil {
+			prices[index] = override
+		}
+		if price := prices[index]; price != nil && (*price < 0 || math.IsNaN(*price) || math.IsInf(*price, 0)) {
+			return prices, errors.New("cache token prices must be finite and non-negative")
+		}
 	}
-	if !exists {
-		return nil, nil
-	}
-	if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
-		return nil, errors.New("cache token price must be finite and non-negative")
-	}
-	return &price, nil
+	return prices, nil
 }
 
 var modelTokenPrices = func() map[string][2]*float64 {

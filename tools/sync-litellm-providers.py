@@ -49,9 +49,9 @@ def main():
     ) + "\n}\n"
     cache_prices = {}
     for model, metadata in upstream_prices.items():
-        price = metadata.get("cache_read_input_token_cost")
-        if model != "sample_spec" and type(price) in (int, float):
-            cache_prices[model] = price
+        rates = [metadata.get(field) for field in ("cache_read_input_token_cost", "cache_creation_input_token_cost")]
+        if model != "sample_spec" and any(type(rate) in (int, float) for rate in rates):
+            cache_prices[model] = [rate if type(rate) in (int, float) else None for rate in rates]
     cache_output = json.dumps(cache_prices, sort_keys=True, indent=2) + "\n"
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
