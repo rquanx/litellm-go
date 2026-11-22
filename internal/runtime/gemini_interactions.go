@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -26,6 +27,10 @@ func interactionSuffix(path string) (string, bool) {
 }
 
 func (s *Server) geminiResourceCandidate(alias, deployment string, scope []string) (Candidate, bool) {
+	return s.selectGoogleResourceCandidate(alias, deployment, "gemini", scope, false)
+}
+
+func (s *Server) selectGoogleResourceCandidate(alias, deployment, provider string, scope []string, video bool) (Candidate, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var selected Candidate
@@ -34,7 +39,12 @@ func (s *Server) geminiResourceCandidate(alias, deployment string, scope []strin
 			continue
 		}
 		for _, candidate := range route.Candidates {
-			if candidate.Provider != "gemini" || !isGeminiEndpoint(candidate.Endpoint) || candidate.DeploymentID == "" ||
+			google := slices.Contains([]string{"gemini", "vertex_ai"}, candidate.Provider)
+			compatible := isGeminiEndpoint(candidate.Endpoint)
+			if video {
+				compatible = strings.HasPrefix(candidate.ModelID, "veo-")
+			}
+			if !google || (provider != "" && provider != candidate.Provider) || !compatible || candidate.DeploymentID == "" ||
 				!candidateAllowed(scope, candidate) {
 				continue
 			}

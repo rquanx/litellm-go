@@ -20,6 +20,7 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 	var body []byte
 	contentType := request.Header.Get("Content-Type")
 	alias := request.URL.Query().Get("model")
+	provider := request.URL.Query().Get("custom_llm_provider")
 	path := strings.TrimPrefix(request.URL.EscapedPath(), videoPath)
 	switch path {
 	case "":
@@ -83,6 +84,10 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid video request body")
 			return
 		}
+		if requested, _ := payload.fields["custom_llm_provider"].(string); requested != "" {
+			provider = requested
+		}
+		delete(payload.fields, "custom_llm_provider")
 		if model, _ := payload.fields["model"].(string); model != "" {
 			if alias != "" && alias != model {
 				writeError(w, http.StatusBadRequest, "invalid_request", "Conflicting video models")
@@ -91,7 +96,13 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 			alias = model
 		}
 	}
-	candidate, ok := s.resourceCandidate(alias, deployment, scope)
+	candidate, ok := s.selectResourceCandidate(alias, deployment, provider, scope)
+	if !ok && ((provider == "" && (alias != "" || deployment != "")) || provider == "gemini" || provider == "vertex_ai") {
+		if veo, found := s.selectGoogleResourceCandidate(alias, deployment, provider, scope, true); found {
+			s.googleVideoResource(w, request, veo, target, payload)
+			return
+		}
+	}
 	if !ok {
 		writeError(w, http.StatusBadRequest, "model_required", "Select one configured video deployment")
 		return

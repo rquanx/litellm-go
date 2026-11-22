@@ -32,7 +32,7 @@ func (s *Server) geminiFile(w http.ResponseWriter, r *http.Request, candidate Ca
 		writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Gemini files support upload, retrieval and deletion")
 		return
 	}
-	upstream, err := newGeminiFileRequest(r, candidate, base+"/v1beta/files/"+id, nil)
+	upstream, err := newGoogleResourceRequest(r, candidate, base+"/v1beta/files/"+id, nil)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Gemini file URL")
 		return
@@ -72,7 +72,7 @@ func (s *Server) uploadGeminiFile(w http.ResponseWriter, r *http.Request, client
 		media = http.DetectContentType(fileData)
 	}
 	metadata, _ := json.Marshal(map[string]any{"file": map[string]string{"display_name": filename}})
-	start, err := newGeminiFileRequest(r, candidate, base+"/upload/v1beta/files", metadata)
+	start, err := newGoogleResourceRequest(r, candidate, base+"/upload/v1beta/files", metadata)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Gemini file upload URL")
 		return
@@ -106,7 +106,7 @@ func (s *Server) uploadGeminiFile(w http.ResponseWriter, r *http.Request, client
 	writeGeminiFile(w, data, candidate, true)
 }
 
-func newGeminiFileRequest(r *http.Request, candidate Candidate, target string, body []byte) (*http.Request, error) {
+func newGoogleResourceRequest(r *http.Request, candidate Candidate, target string, body []byte) (*http.Request, error) {
 	upstream, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

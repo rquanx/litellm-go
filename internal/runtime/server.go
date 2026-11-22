@@ -80,6 +80,7 @@ type Server struct {
 	healthResults map[string]ModelHealthRecord
 	configGeneration uint64
 	sem    chan struct{}
+	veoReads chan struct{}
 	trafficMu sync.Mutex
 	deploymentTraffic map[string]int
 	deploymentLatency map[latencyKey]*latencyWindow
@@ -117,7 +118,7 @@ func NewServer(config Config) *Server {
 	server := &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
 		passThrough: config.PassThrough,
 		mcpServers: config.MCPServers,
-		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
+		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent), veoReads: make(chan struct{}, 1)}
 	if config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0 {
 		server.polling = &responsePolling{entries: make(map[string]*pollingEntry)}
 	}
