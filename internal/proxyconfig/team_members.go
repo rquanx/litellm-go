@@ -17,6 +17,22 @@ type teamMembership struct {
 	Models []string `json:"allowed_models"`
 }
 
+type memberChange struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"user_email"`
+	Role   string `json:"role"`
+}
+
+func readMembershipChanges(raw json.RawMessage) ([]memberChange, error) {
+	raw = bytes.TrimSpace(raw)
+	if bytes.HasPrefix(raw, []byte("{")) {
+		raw = append(append([]byte{'['}, raw...), ']')
+	}
+	var changes []memberChange
+	err := decodeModelJSON(bytes.NewReader(raw), &changes)
+	return changes, err
+}
+
 func memberIndex(owner team, userID string) int {
 	return slices.IndexFunc(owner.Members, func(m teamMembership) bool { return m.UserID == userID })
 }
@@ -38,18 +54,16 @@ func (registry *KeyRegistry) writeTeamMembership(w http.ResponseWriter, r *http.
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported membership configuration")
 		return
 	}
-	var changes []teamMembership
+	var changes []memberChange
 	if operation == "add" {
-		raw := bytes.TrimSpace(input.Member)
-		if bytes.HasPrefix(raw, []byte("{")) {
-			raw = append(append([]byte{'['}, raw...), ']')
-		}
-		if err := decodeModelJSON(bytes.NewReader(raw), &changes); err != nil || len(changes) == 0 {
+		var err error
+		changes, err = readMembershipChanges(input.Member)
+		if err != nil || len(changes) == 0 {
 			modelError(w, http.StatusBadRequest, "Supply members to add")
 			return
 		}
 	} else {
-		changes = []teamMembership{{UserID: input.UserID, Email: input.Email, Role: input.Role}}
+		changes = []memberChange{{UserID: input.UserID, Email: input.Email, Role: input.Role}}
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()

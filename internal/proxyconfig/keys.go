@@ -115,6 +115,10 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 		if !exists {
 			return nil, false
 		}
+		if index := organizationMemberIndex(owner, key.UserID); index >= 0 &&
+			owner.Members[index].Role == "internal_user_viewer" {
+			return nil, false
+		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 	}
 	return scope, true

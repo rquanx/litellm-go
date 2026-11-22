@@ -154,4 +154,16 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	send("POST", "/team/member_delete", master, `{"team_id":"fixture","user_id":"user"}`, 200)
 	handler = newHandler()
 	send("GET", "/v1/models", user.Key, "", 401)
+	send("POST", "/organization/new", master, `{"organization_id":"new-org","organization_alias":"New Org","models":["second"]}`, 200)
+	send("POST", "/organization/member_add", master, `{"organization_id":"new-org","member":{"user_id":"user","role":"internal_user"}}`, 200)
+	bound = send("POST", "/key/generate", master, `{"organization_id":"new-org","user_id":"user"}`, 200)
+	if err := json.Unmarshal([]byte(bound), &user); err != nil || user.Key == "" {
+		t.Fatal("could not issue an organization member key")
+	}
+	send("GET", "/v1/models", user.Key, "", 200)
+	send("PATCH", "/organization/member_update", master, `{"organization_id":"new-org","user_id":"user","role":"internal_user_viewer"}`, 200)
+	send("GET", "/v1/models", user.Key, "", 401)
+	send("DELETE", "/organization/member_delete", master, `{"organization_id":"new-org","user_id":"user"}`, 200)
+	send("POST", "/organization/member_add", master, `{"organization_id":"new-org","member":{"user_id":"user","role":"internal_user"}}`, 200)
+	send("GET", "/v1/models", user.Key, "", 401)
 }

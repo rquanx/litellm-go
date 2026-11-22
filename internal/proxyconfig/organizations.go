@@ -12,11 +12,11 @@ type organization struct {
 	Alias    string         `json:"organization_alias"`
 	Models   []string       `json:"models"`
 	Metadata map[string]any `json:"metadata"`
+	Members []organizationMember `json:"members"`
 }
 
 type organizationView struct {
 	organization
-	Members []any  `json:"members"`
 	Teams   []team `json:"teams"`
 }
 
@@ -26,6 +26,9 @@ func (registry *KeyRegistry) registerOrganizationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /organization/info", registry.organizationInfo)
 	mux.HandleFunc("GET /organization/list", registry.listOrganizations)
 	mux.HandleFunc("DELETE /organization/delete", registry.deleteOrganizations)
+	mux.HandleFunc("POST /organization/member_add", registry.writeOrganizationMember)
+	mux.HandleFunc("PATCH /organization/member_update", registry.writeOrganizationMember)
+	mux.HandleFunc("DELETE /organization/member_delete", registry.writeOrganizationMember)
 }
 
 func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +94,8 @@ func (registry *KeyRegistry) organizationView(org organization) organizationView
 		}
 	}
 	slices.SortFunc(teams, func(a, b team) int { return strings.Compare(a.ID, b.ID) })
-	return organizationView{organization: org, Members: []any{}, Teams: teams}
+	org.Members = append([]organizationMember{}, org.Members...)
+	return organizationView{organization: org, Teams: teams}
 }
 
 func (registry *KeyRegistry) organizationInfo(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +160,8 @@ func (registry *KeyRegistry) deleteOrganizations(w http.ResponseWriter, r *http.
 			modelError(w, http.StatusNotFound, "Organization not found")
 			return
 		}
-		deleted = append(deleted, organizationView{organization: org, Teams: []team{}, Members: []any{}})
+		org.Members = []organizationMember{}
+		deleted = append(deleted, organizationView{organization: org, Teams: []team{}})
 		delete(next.Organizations, id)
 	}
 	for id, entry := range next.Teams {

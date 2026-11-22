@@ -157,7 +157,7 @@ func (registry *KeyRegistry) listUsers(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	for field := range query {
 		switch field {
-		case "role", "user_ids", "user_email", "page", "page_size", "sort_by", "sort_order":
+		case "role", "user_ids", "user_email", "page", "page_size", "sort_by", "sort_order", "team", "organization_ids":
 		default:
 			modelError(w, http.StatusBadRequest, "Unsupported user list filter")
 			return
@@ -175,11 +175,22 @@ func (registry *KeyRegistry) listUsers(w http.ResponseWriter, r *http.Request) {
 	role, email := query.Get("role"), strings.ToLower(query.Get("user_email"))
 	rawIDs := query.Get("user_ids")
 	ids := strings.Split(rawIDs, ",")
+	teamID, orgIDs := query.Get("team"), query.Get("organization_ids")
 	registry.mu.RLock()
+	orgUsers := make(map[string]bool)
+	if orgIDs != "" {
+		for _, orgID := range strings.Split(orgIDs, ",") {
+			for _, member := range registry.state.Organizations[strings.TrimSpace(orgID)].Members {
+				orgUsers[member.UserID] = true
+			}
+		}
+	}
+	selectedTeam := registry.state.Teams[teamID]
 	users := make([]internalUser, 0, len(registry.state.Users))
 	for _, user := range registry.state.Users {
 		if (role == "" || role == user.Role) && (rawIDs == "" || slices.Contains(ids, user.ID)) &&
-			strings.Contains(strings.ToLower(user.Email), email) {
+			strings.Contains(strings.ToLower(user.Email), email) &&
+			(teamID == "" || memberIndex(selectedTeam, user.ID) >= 0) && (orgIDs == "" || orgUsers[user.ID]) {
 			users = append(users, user)
 		}
 	}
@@ -223,6 +234,7 @@ func (registry *KeyRegistry) deleteUsers(w http.ResponseWriter, r *http.Request)
 	next.Users = maps.Clone(next.Users)
 	next.Keys = maps.Clone(next.Keys)
 	next.Teams = maps.Clone(next.Teams)
+	next.Organizations = maps.Clone(next.Organizations)
 	count := 0
 	for _, id := range input.IDs {
 		if _, exists := next.Users[id]; exists {
@@ -240,6 +252,12 @@ func (registry *KeyRegistry) deleteUsers(w http.ResponseWriter, r *http.Request)
 			return slices.Contains(input.IDs, member.UserID)
 		})
 		next.Teams[id] = owner
+	}
+	for id, org := range next.Organizations {
+		org.Members = slices.DeleteFunc(slices.Clone(org.Members), func(member organizationMember) bool {
+			return slices.Contains(input.IDs, member.UserID)
+		})
+		next.Organizations[id] = org
 	}
 	if registry.apply(w, next) {
 		modelJSON(w, http.StatusOK, map[string]int{"count": count})
