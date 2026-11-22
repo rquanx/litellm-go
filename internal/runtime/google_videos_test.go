@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -74,6 +76,10 @@ func TestGoogleVeoCreatePollAndDownload(t *testing.T) {
 			}
 			path := "/v1/videos/" + reply.ID
 			if status := call("GET", path, ""); !strings.Contains(status.Body.String(), `"status":"completed"`) {
+				t.Fatal(status.Body)
+			}
+			legacy := "video_" + base64.StdEncoding.EncodeToString([]byte("litellm:custom_llm_provider:"+provider+";model_id:"+model+";video_id:"+operation))
+			if status := call("GET", "/v1/videos/"+url.PathEscape(legacy), ""); !strings.Contains(status.Body.String(), `"status":"completed"`) {
 				t.Fatal(status.Body)
 			}
 			content := call("GET", path+"/content", "")

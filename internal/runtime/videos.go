@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"strings"
@@ -48,6 +49,25 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 		id, action, _ := strings.Cut(raw, "/")
 		decoded, err := url.PathUnescape(id)
 		if err == nil {
+			if oldProvider, model, original, managed := decodeLiteLLMVideoID(decoded, family); managed {
+				if provider != "" && provider != oldProvider {
+					writeError(w, http.StatusBadRequest, "invalid_request", "Video ID belongs to a different provider")
+					return
+				}
+				provider = oldProvider
+				if model != "" {
+					resolved, ok := s.videoDeploymentForModel(alias, model, provider, scope)
+					if !ok || (deployment != "" && deployment != resolved) {
+						writeError(w, http.StatusBadRequest, "model_required", "Video ID requires a matching configured deployment")
+						return
+					}
+					deployment = resolved
+				}
+				decoded = original
+				if provider == "gemini" || provider == "vertex_ai" {
+					decoded = base64.RawURLEncoding.EncodeToString([]byte(original))
+				}
+			}
 			decoded, err = nativeResourceID(decoded, family, &deployment)
 		}
 		if err != nil ||
@@ -124,4 +144,50 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 		}
 	}
 	s.forwardOpenAIResource(w, request, candidate, family, target, contentType, body)
+}
+
+func decodeLiteLLMVideoID(id, family string) (provider, model, original string, ok bool) {
+	prefix := "video_"
+	label := "video_id:"
+	if family == "video_characters" {
+		prefix, label = "character_", "character_id:"
+	}
+	encoded, ok := strings.CutPrefix(id, prefix)
+	if !ok || len(encoded) > 8192 {
+		return "", "", "", false
+	}
+	raw, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(encoded, "="))
+	if err != nil {
+		return "", "", "", false
+	}
+	parts := strings.SplitN(string(raw), ";", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	provider, hasProvider := strings.CutPrefix(parts[0], "litellm:custom_llm_provider:")
+	model, hasModel := strings.CutPrefix(parts[1], "model_id:")
+	original, hasID := strings.CutPrefix(parts[2], label)
+	return provider, model, original, hasProvider && hasModel && hasID && provider != "" && original != ""
+}
+
+func (s *Server) videoDeploymentForModel(alias, model, provider string, scope []string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var deployment string
+	for name, route := range s.configuredRoutes {
+		if (alias != "" && name != alias) || !modelAllowed(scope, name) {
+			continue
+		}
+		for _, candidate := range route.Candidates {
+			if candidate.Provider != provider || !candidateAllowed(scope, candidate) || candidate.DeploymentID == "" ||
+				(model != name && model != candidate.ModelID && model != candidate.DeploymentID) {
+				continue
+			}
+			if deployment != "" && deployment != candidate.DeploymentID {
+				return "", false
+			}
+			deployment = candidate.DeploymentID
+		}
+	}
+	return deployment, deployment != ""
 }
