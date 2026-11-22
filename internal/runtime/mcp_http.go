@@ -20,6 +20,8 @@ type MCPServer struct {
 	Headers                          http.Header
 	AllowAllKeys                     bool
 	AllowedTools                     []string
+	DisallowedTools                  []string
+	AllowedParams                    map[string][]string
 	AccessGroups                     []string
 	Command                          string
 	Args, Env                        []string

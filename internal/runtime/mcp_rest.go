@@ -131,7 +131,7 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPA
 				break
 			}
 		}
-		if name == "" || !access(server, name) || !server.allowsTool(name) {
+		if name == "" || !access(server, name) || !server.allowsTool(name) || !server.allowsArguments(name, input.Arguments) {
 			writeError(w, http.StatusForbidden, "tool_not_allowed", "MCP tool access denied")
 			return
 		}
@@ -160,10 +160,27 @@ func (server MCPServer) matches(id string) bool {
 }
 
 func (server MCPServer) allowsTool(name string) bool {
-	if server.AllowedTools == nil {
+	qualified := server.Name + "-" + name
+	if len(server.AllowedTools) != 0 {
+		return MCPToolMatches(server.AllowedTools, name) || MCPToolMatches(server.AllowedTools, qualified)
+	}
+	return !MCPToolMatches(server.DisallowedTools, name) && !MCPToolMatches(server.DisallowedTools, qualified)
+}
+
+func (server MCPServer) allowsArguments(name string, args map[string]json.RawMessage) bool {
+	allowed := server.AllowedParams[server.Name+"-"+name]
+	if len(allowed) == 0 {
+		allowed = server.AllowedParams[name]
+	}
+	if len(allowed) == 0 {
 		return true
 	}
-	return MCPToolMatches(server.AllowedTools, name)
+	for argument := range args {
+		if !slices.Contains(allowed, argument) {
+			return false
+		}
+	}
+	return true
 }
 
 func MCPToolMatches(patterns []string, name string) bool {

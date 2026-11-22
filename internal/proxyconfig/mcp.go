@@ -20,6 +20,10 @@ type mcpServerConfig struct {
 	AllowAllKeys bool `yaml:"allow_all_keys" json:"allow_all_keys"`
 	AllowedTools []string `yaml:"allowed_tools" json:"allowed_tools"`
 	AccessGroups []string `yaml:"mcp_access_groups" json:"mcp_access_groups,omitempty"`
+	YAMLAccessGroups []string `yaml:"access_groups" json:"-"`
+	StaticHeaders map[string]string `yaml:"static_headers" json:"-"`
+	DisallowedTools []string `yaml:"disallowed_tools" json:"disallowed_tools,omitempty"`
+	AllowedParams map[string][]string `yaml:"allowed_params" json:"allowed_params,omitempty"`
 	Headers map[string]string `yaml:"headers" json:"static_headers,omitempty"`
 	Command string `yaml:"command" json:"command,omitempty"`
 	Args []string `yaml:"args" json:"args,omitempty"`
@@ -63,8 +67,13 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 			}
 			identifiers[value] = name
 		}
-		headers := make(http.Header, len(entry.Headers))
-		for key, value := range entry.Headers {
+		configuredHeaders := maps.Clone(entry.Headers)
+		if configuredHeaders == nil {
+			configuredHeaders = make(map[string]string)
+		}
+		maps.Copy(configuredHeaders, entry.StaticHeaders)
+		headers := make(http.Header, len(configuredHeaders))
+		for key, value := range configuredHeaders {
 			resolved, err := resolveEnv(value)
 			if err != nil {
 				return nil, err
@@ -82,7 +91,8 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
 			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools,
-			AccessGroups: entry.AccessGroups, Headers: headers})
+			AccessGroups: append(slices.Clone(entry.AccessGroups), entry.YAMLAccessGroups...), Headers: headers,
+			DisallowedTools: entry.DisallowedTools, AllowedParams: entry.AllowedParams})
 	}
 	return result, nil
 }

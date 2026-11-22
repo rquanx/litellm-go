@@ -117,9 +117,10 @@ mcp_servers:
   fixture:
     url: os.environ/TEST_MCP_URL
     transport: http
-    mcp_access_groups: [fixture-group]
+    access_groups: [fixture-group]
     allowed_tools: [echo]
-    headers: {Authorization: Bearer mcp-fixture}
+    allowed_params: {echo: [message]}
+    static_headers: {Authorization: Bearer mcp-fixture}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +153,7 @@ mcp_servers:
 		t.Fatalf("unexpected MCP access groups %s", result)
 	}
 	call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"private"}`, 403)
+	call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"echo","arguments":{"blocked":"fixture"}}`, 403)
 	if result := call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"echo"}`, 200); !strings.Contains(result, "fixture") {
 		t.Fatalf("unexpected tool response %s", result)
 	}

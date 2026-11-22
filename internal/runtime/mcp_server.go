@@ -115,7 +115,8 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRP
 		}
 	}
 	name := strings.TrimPrefix(params.Name, selected.Name+"-")
-	if selected.Name == "" || name == "" || !access(selected, name) || !selected.allowsTool(name) {
+	if selected.Name == "" || name == "" || !access(selected, name) || !selected.allowsTool(name) ||
+		!selected.allowsArguments(name, params.Arguments) {
 		writeMCPError(w, http.StatusOK, req.ID, -32602, "Tool is unavailable")
 		return
 	}
