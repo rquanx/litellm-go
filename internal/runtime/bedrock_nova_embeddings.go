@@ -49,7 +49,8 @@ func novaEmbeddingRequest(input map[string]any, text string, segmented bool) map
 func (s *Server) bedrockNovaEmbeddings(ctx context.Context, request *http.Request, candidate Candidate,
 	input map[string]any, texts []string) (int, []byte, http.Header, bool, error) {
 	if model, enabled := strings.CutPrefix(candidate.ModelID, "async_invoke/"); enabled {
-		return s.startNovaEmbedding(ctx, request, candidate, model, input, texts)
+		payload := novaEmbeddingRequest(input, texts[0], true)
+		return s.startBedrockEmbedding(ctx, request, candidate, model, input, texts, payload)
 	}
 	data := make([]map[string]any, 0, len(texts))
 	var total, images int
@@ -109,16 +110,16 @@ func (s *Server) bedrockNovaEmbeddings(ctx context.Context, request *http.Reques
 	return http.StatusOK, body, http.Header{"Content-Type": {"application/json"}}, false, err
 }
 
-func (s *Server) startNovaEmbedding(ctx context.Context, request *http.Request, candidate Candidate, model string,
-	input map[string]any, texts []string) (int, []byte, http.Header, bool, error) {
+func (s *Server) startBedrockEmbedding(ctx context.Context, request *http.Request, candidate Candidate, model string,
+	input map[string]any, texts []string, modelInput map[string]any) (int, []byte, http.Header, bool, error) {
 	output, _ := input["output_s3_uri"].(string)
 	bucket, err := url.Parse(output)
 	headers := http.Header{"Content-Type": {"application/json"}}
 	if err != nil || bucket.Scheme != "s3" || bucket.Host == "" || bucket.User != nil || len(texts) != 1 {
-		return http.StatusBadRequest, []byte(`{"error":{"message":"Nova async embedding requires one input and an S3 output URI"}}`), headers, false, nil
+		return http.StatusBadRequest, []byte(`{"error":{"message":"Bedrock async embedding requires one input and an S3 output URI"}}`), headers, false, nil
 	}
 	payload := map[string]any{
-		"modelId": model, "modelInput": novaEmbeddingRequest(input, texts[0], true),
+		"modelId": model, "modelInput": modelInput,
 		"outputDataConfig": map[string]any{"s3OutputDataConfig": map[string]string{"s3Uri": output}},
 	}
 	status, raw, upstreamHeaders, _, err := s.callProviderJSON(ctx, request, "embeddings", candidate, requestPayload{fields: payload})
@@ -127,7 +128,7 @@ func (s *Server) startNovaEmbedding(ctx context.Context, request *http.Request, 
 	}
 	var result struct{ ARN string `json:"invocationArn"` }
 	if json.Unmarshal(raw, &result) != nil || result.ARN == "" {
-		return 0, nil, nil, false, errors.New("missing Bedrock Nova invocation ID")
+		return 0, nil, nil, false, errors.New("missing Bedrock invocation ID")
 	}
 	headers.Set("X-LiteLLM-Invocation-ARN", result.ARN)
 	body, err := json.Marshal(map[string]any{"object": "list", "model": candidate.ModelID,

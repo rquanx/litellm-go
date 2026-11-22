@@ -151,3 +151,31 @@ func TestBedrockNovaEmbeddingsSyncAndAsync(t *testing.T) {
 		}
 	}
 }
+
+func TestBedrockMarengoImageEmbeddings(t *testing.T) {
+	const model = "twelvelabs.marengo-embed-2-7-v1:0"
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Kind   string `json:"inputType"`
+			Source struct {
+				Inline string `json:"base64String"`
+			} `json:"mediaSource"`
+		}
+		if r.URL.Path != "/model/"+model+"/invoke" || json.NewDecoder(r.Body).Decode(&input) != nil ||
+			input.Kind != "image" || input.Source.Inline != "Zml4dHVyZQ==" {
+			t.Errorf("unexpected Marengo request: %s %+v", r.URL, input)
+		}
+		fmt.Fprint(w, `{"data":[{"embedding":[1,2,3,4]}]}`)
+	}))
+	defer provider.Close()
+	candidate := Candidate{APIBase: provider.URL, ModelID: model, Endpoint: "bedrock-embeddings",
+		Provider: "bedrock", APIKey: "fixture", Bedrock: &BedrockConfig{Region: "us-east-1"}}
+	server := NewServer(Config{Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}})
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest("POST", "/v1/embeddings", strings.NewReader(
+		`{"model":"demo","input":"data:image/png;base64,Zml4dHVyZQ==","input_type":"image"}`)))
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"embedding":[1,2,3,4]`) ||
+		!strings.Contains(response.Body.String(), `"total_tokens":1`) {
+		t.Fatalf("unexpected Marengo result %d %s", response.Code, response.Body)
+	}
+}
