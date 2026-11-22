@@ -121,9 +121,9 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 		strings.Contains(state, "provider-secret") || strings.Contains(state, "upstream-deployment") {
 		t.Fatal("imported deployment state was not encrypted")
 	}
-	var models []deployment
-	if err := postgresModels(db, master).load(&models); err != nil || len(models) != 1 ||
-		models[0].Params.APIKey != "provider-secret" || models[0].Info.ID != "upstream-deployment" {
+	var models modelState
+	if err := postgresModels(db, master).load(&models); err != nil || len(models.Models) != 1 ||
+		models.Models[0].Params.APIKey != "provider-secret" || models.Models[0].Info.ID != "upstream-deployment" {
 		t.Fatalf("imported configuration could not be restored: %v", err)
 	}
 	registry, err := LoadPostgresKeys(master, db)

@@ -20,11 +20,11 @@ import (
 // ImportLiteLLMModels copies supported LiteLLM deployments into empty Go proxy state.
 func ImportLiteLLMModels(db *sql.DB, config Config) (int, error) {
 	store := postgresModels(db, config.MasterKey)
-	var existing []deployment
+	var existing modelState
 	if err := store.load(&existing); err != nil {
 		return 0, errors.New("could not read Go model state")
 	}
-	if len(existing) != 0 {
+	if len(existing.Models) != 0 {
 		return 0, errors.New("Go model state already contains deployments")
 	}
 	salt := os.Getenv("LITELLM_SALT_KEY")
@@ -41,11 +41,12 @@ func ImportLiteLLMModels(db *sql.DB, config Config) (int, error) {
 	if len(models) == 0 {
 		return 0, nil
 	}
-	registry := modelRegistry{base: config}
+	registry := modelRegistry{base: config, credentials: existing.Credentials}
 	if _, err := registry.compile(models); err != nil {
 		return 0, err
 	}
-	if err := store.save(models); err != nil {
+	existing.Models = models
+	if err := store.save(existing); err != nil {
 		return 0, errors.New("could not commit imported model state")
 	}
 	return len(models), nil

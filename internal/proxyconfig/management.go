@@ -24,6 +24,7 @@ type modelRegistry struct {
 	store  stateStore
 	mu     sync.Mutex
 	models []deployment
+	credentials map[string]providerCredential
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -41,9 +42,11 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		if token == "" {
 			return nil, errors.New("model state requires a proxy master key")
 		}
-		if err := store.load(&registry.models); err != nil {
+		var state modelState
+		if err := store.load(&state); err != nil {
 			return nil, errors.New("could not load dynamic model state")
 		}
+		registry.models, registry.credentials = state.Models, state.Credentials
 	}
 	routes, err := registry.compile(registry.models)
 	if err != nil {
@@ -58,11 +61,16 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("POST /model/delete", registry.remove)
 	mux.HandleFunc("POST /model/update", registry.update)
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)
+	registry.registerCredentialRoutes(mux)
 	mux.Handle("/", server)
 	return mux, nil
 }
 
 func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, error) {
+	return registry.compileState(models, registry.credentials)
+}
+
+func (registry *modelRegistry) compileState(models []deployment, credentials map[string]providerCredential) ([]runtime.Route, error) {
 	all := append(slices.Clone(registry.base.models), models...)
 	seen := make(map[string]bool, len(all))
 	for _, model := range all {
@@ -71,7 +79,9 @@ func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, er
 		}
 		seen[model.Info.ID] = true
 	}
-	return registry.base.buildRoutes(all)
+	config := registry.base
+	config.credentials = combinedCredentials(config.credentials, credentials)
+	return config.buildRoutes(all)
 }
 
 func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) bool {
@@ -151,6 +161,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.APIKey == "" {
 			model.Params.APIKey = existing.Params.APIKey
 		}
+		if model.Params.CredentialName == "" {
+			model.Params.CredentialName = existing.Params.CredentialName
+		}
 		if model.Params.APIVersion == "" {
 			model.Params.APIVersion = existing.Params.APIVersion
 		}
@@ -227,18 +240,22 @@ func (registry *modelRegistry) remove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (registry *modelRegistry) apply(w http.ResponseWriter, next []deployment) bool {
-	routes, err := registry.compile(next)
+	return registry.applyState(w, next, registry.credentials)
+}
+
+func (registry *modelRegistry) applyState(w http.ResponseWriter, models []deployment, credentials map[string]providerCredential) bool {
+	routes, err := registry.compileState(models, credentials)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(next); err != nil {
+		if err := registry.store.save(modelState{Models: models, Credentials: credentials}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
 	}
-	registry.models = next
+	registry.models, registry.credentials = models, credentials
 	registry.server.ReplaceConfiguredRoutes(routes)
 	return true
 }

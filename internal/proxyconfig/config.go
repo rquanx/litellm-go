@@ -19,6 +19,7 @@ import (
 
 type configFile struct {
 	Models  []deployment `yaml:"model_list"`
+	Credentials []providerCredential `yaml:"credential_list"`
 	Callbacks callbackSettings `yaml:"litellm_settings"`
 	General struct {
 		MasterKey string `yaml:"master_key"`
@@ -51,6 +52,7 @@ type deployment struct {
 		Model   string `yaml:"model" json:"model"`
 		APIBase string `yaml:"api_base" json:"api_base,omitempty"`
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
+		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
@@ -89,6 +91,7 @@ type Config struct {
 	contextFallbacks []map[string][]string
 	policyFallbacks []map[string][]string
 	modelGroupAliases map[string]modelGroupAlias
+	credentials map[string]providerCredential
 	Callback *GenericCallback
 	LogMessages bool
 }
@@ -139,6 +142,16 @@ func Load(reader io.Reader) (Config, error) {
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
 		DisableSpendLogs: file.General.DisableSpendLogs, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second))}
+	config.credentials = make(map[string]providerCredential, len(file.Credentials))
+	for _, credential := range file.Credentials {
+		if err := credential.validate(); err != nil {
+			return Config{}, err
+		}
+		if _, exists := config.credentials[credential.Name]; exists {
+			return Config{}, errors.New("duplicate credential name")
+		}
+		config.credentials[credential.Name] = credential
+	}
 	var err error
 	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
 	if err != nil {
@@ -174,7 +187,11 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 	byAlias := make(map[string][]runtime.Candidate)
 	var aliases []string
 	for _, model := range models {
-		candidate, err := model.candidate()
+		effective, err := model.withCredential(config.credentials)
+		if err != nil {
+			return nil, fmt.Errorf("model %q: %w", model.Alias, err)
+		}
+		candidate, err := effective.candidate()
 		if err != nil {
 			return nil, fmt.Errorf("model %q: %w", model.Alias, err)
 		}
