@@ -79,11 +79,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	var deployment, deploymentOperation string
 	if s.config.AuthorizeInference {
 		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
-		if proxyAlias(request.URL.Path) {
+		path := request.URL.Path
+		if unversioned := proxyAlias(path); unversioned || path == "/openai/v1/responses/compact" {
 			normalized := *request.URL
-			normalized.Path = "/v1" + normalized.Path
-			if normalized.RawPath != "" {
-				normalized.RawPath = "/v1" + normalized.RawPath
+			if unversioned {
+				normalized.Path = "/v1" + path
+				if normalized.RawPath != "" {
+					normalized.RawPath = "/v1" + normalized.RawPath
+				}
+			} else {
+				normalized.Path = strings.TrimPrefix(path, "/openai")
+				normalized.RawPath = ""
 			}
 			copy := request.WithContext(request.Context())
 			copy.URL = &normalized
@@ -102,7 +108,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) {
+	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) &&
+		request.URL.Path != endpoints["responses-compact"].path {
 		s.responseResource(writer, request, modelScope)
 		return
 	}
@@ -530,6 +537,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	if endpoints[targetEndpoint].streaming && endpoint != "anthropic-count-tokens" && !isGeminiEndpoint(targetEndpoint) {
 		payload["stream"] = stream
 	}
+	if endpoint == "responses-compact" {
+		delete(payload, "stream")
+	}
 	if endpoint == "responses" && targetEndpoint == "chat-completions" {
 		payload = responsesToChat(payload)
 		if stream {
@@ -588,7 +598,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		release()
 		return nil, err
 	}
-	path := endpoints[candidate.Endpoint].path
+	pathEndpoint := candidate.Endpoint
+	if endpoint == "responses-compact" {
+		pathEndpoint = endpoint
+	}
+	path := endpoints[pathEndpoint].path
 	if endpoint == "anthropic-count-tokens" {
 		path = "/v1/messages/count_tokens"
 	}
@@ -609,7 +623,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 		target = geminiURL(candidate.APIBase, candidate.ModelID, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
-		target = azureTarget(candidate.APIBase, candidate.ModelID, candidate.Endpoint, candidate.APIVersion)
+		target = azureTarget(candidate.APIBase, candidate.ModelID, pathEndpoint, candidate.APIVersion)
 	} else if candidate.Endpoint == "rerank" {
 		target = rerankTarget(candidate.APIBase, candidate.Provider)
 	} else if candidate.Endpoint == "bedrock-converse" {

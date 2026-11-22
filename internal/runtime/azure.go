@@ -13,7 +13,7 @@ func azureTarget(base, model, endpoint, version string) string {
 	}
 	base = strings.TrimSuffix(base, "/openai")
 	target := base + "/openai"
-	if endpoint != "responses" {
+	if endpoint != "responses" && endpoint != "responses-compact" {
 		target += "/deployments/" + url.PathEscape(model)
 	}
 	return target + suffix + "?api-version=" + url.QueryEscape(version)

@@ -10,6 +10,7 @@ type endpointSpec struct {
 
 var endpoints = map[string]endpointSpec{
 	"responses":          {"/v1/responses", "text", true},
+	"responses-compact":  {"/v1/responses/compact", "responses-compact", false},
 	"chat-completions":   {"/v1/chat/completions", "text", true},
 	"embeddings":         {"/v1/embeddings", "embeddings", false},
 	"completions":        {"/v1/completions", "completions", true},
@@ -78,6 +79,9 @@ func isConversationEndpoint(endpoint string) bool {
 }
 
 func servesEndpoint(request, provider string) bool {
+	if request == "responses-compact" {
+		return provider == "responses" || provider == "responses-compact"
+	}
 	if request == "anthropic-count-tokens" {
 		return provider == "anthropic-messages"
 	}

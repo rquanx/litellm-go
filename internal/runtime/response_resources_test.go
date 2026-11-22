@@ -31,6 +31,15 @@ func TestResponseResourcesKeepDeploymentAffinity(t *testing.T) {
 				t.Error("pagination parameters were lost")
 			}
 			_, _ = io.WriteString(w, `{"data":[]}`)
+		case "/v1/responses/compact":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["model"] != "fixture" || body["input"] != "conversation" || body["stream"] != nil {
+				t.Errorf("unexpected native compaction request: %v", body)
+			}
+			_, _ = io.WriteString(w, `{"object":"response.compaction","output":[{"type":"compaction","encrypted_content":"opaque"}]}`)
 		case "/v1/responses/resp_remote", "/v1/responses/resp_remote/cancel":
 			_, _ = io.WriteString(w, `{"id":"resp_remote","object":"response"}`)
 		default:
@@ -70,4 +79,12 @@ func TestResponseResourcesKeepDeploymentAffinity(t *testing.T) {
 	assertRequest("DELETE", resource, "", "fixture-master", 200)
 	followUp := `{"model":"demo","input":"follow-up","previous_response_id":"` + id + `"}`
 	assertRequest("POST", "/v1/responses", followUp, "fixture-master", 200)
+	compact := `{"model":"demo","input":"conversation"}`
+	assertRequest("POST", "/openai/v1/responses/compact", compact, "unknown", 401)
+	assertRequest("POST", "/responses/compact", compact, "restricted", 403)
+	for _, path := range []string{"/v1/responses/compact", "/responses/compact", "/openai/v1/responses/compact"} {
+		if result := assertRequest("POST", path, compact, "fixture-master", 200); !strings.Contains(result, `"encrypted_content":"opaque"`) {
+			t.Fatalf("compaction did not preserve the opaque conversation item: %s", result)
+		}
+	}
 }
