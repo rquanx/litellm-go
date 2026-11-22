@@ -51,7 +51,7 @@ func proxyAlias(path string) bool {
 		return true
 	}
 	return strings.HasPrefix(path, "/responses/") || strings.HasPrefix(path, "/models/") ||
-		isVectorStorePath("/v1"+path) || isVideoPath("/v1"+path) || isContainerPath("/v1"+path) || resourceFamily("/v1"+path) != ""
+		isFineTuningPath("/v1"+path) || isVectorStorePath("/v1"+path) || isVideoPath("/v1"+path) || isContainerPath("/v1"+path) || resourceFamily("/v1"+path) != ""
 }
 
 func deploymentEndpoint(path string) (string, string) {

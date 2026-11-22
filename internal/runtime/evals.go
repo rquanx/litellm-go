@@ -21,7 +21,7 @@ func evalOperation(r *http.Request, deployment *string) (string, string, error) 
 		return path, "evals", nil
 	}
 	parts := strings.Split(strings.TrimPrefix(path, evalPath+"/"), "/")
-	eval, err := evalSegment(parts[0], "evals", deployment)
+	eval, err := decodeResourceSegment(parts[0], "evals", deployment)
 	if err != nil {
 		return "", "", err
 	}
@@ -43,7 +43,7 @@ func evalOperation(r *http.Request, deployment *string) (string, string, error) 
 	}
 	if len(parts) == 3 && parts[1] == "runs" &&
 		(method == http.MethodGet || method == http.MethodPost || method == http.MethodDelete) {
-		run, err := evalSegment(parts[2], "eval_runs", deployment)
+		run, err := decodeResourceSegment(parts[2], "eval_runs", deployment)
 		if err != nil {
 			return "", "", err
 		}
@@ -56,7 +56,7 @@ func evalOperation(r *http.Request, deployment *string) (string, string, error) 
 	return "", "", errors.New("unsupported eval operation")
 }
 
-func evalSegment(encoded, family string, deployment *string) (string, error) {
+func decodeResourceSegment(encoded, family string, deployment *string) (string, error) {
 	id, err := url.PathUnescape(encoded)
 	if err != nil {
 		return "", err

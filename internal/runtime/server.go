@@ -241,6 +241,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.containerResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && isFineTuningPath(request.URL.Path) {
+		s.fineTuningResource(writer, request, modelScope)
+		return
+	}
 	if s.config.AuthorizeInference && isEvalPath(request.URL.Path) {
 		s.evalResource(writer, request, modelScope)
 		return
@@ -535,7 +539,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
 			return
 		}
-		s.inferStream(writer, request, endpoint, route, payload)
+		s.inferStream(writer, request, endpoint, route, payload, cache)
 		return
 	}
 	attempts := make([]map[string]any, 0, len(route.Candidates))
@@ -632,7 +636,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 				}
 			}
 			if cacheKey != "" {
-				s.storeInference(request, cache, cacheKey, status, body)
+				s.storeInference(request, cache, cacheKey, status, responseHeaders.Get("Content-Type"), body)
 			}
 			writeResponse(writer, status, responseHeaders, body)
 			return
@@ -649,11 +653,15 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 }
 
-func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload) {
+func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload, cache inferenceCacheRequest) {
 	attempts := make([]map[string]any, 0, len(route.Candidates))
 	plan := s.attemptPlan(route.Alias)
 	for {
 		candidate := route.Candidates[plan.index]
+		cacheKey := cache.key(candidate)
+		if cacheKey != "" && s.serveCachedInference(writer, request, cache, cacheKey, candidate, attempts) {
+			return
+		}
 		started := time.Now()
 		reservation, admitted := s.admitDeployment(candidate, payload)
 		var status int
@@ -747,17 +755,28 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 					return baseConvert(frame)
 				}
 			}
-			if len(firstFrame) > 0 && !writeStreamFrame(writer, flush, convert(firstFrame)) {
+			capture := streamCacheCapture{disabled: cacheKey == "" || !cache.write || cache.ttl <= 0}
+			emit := func(frame []byte) bool {
+				output := convert(frame)
+				capture.add(output)
+				return writeStreamFrame(writer, flush, output)
+			}
+			if len(firstFrame) > 0 && !emit(firstFrame) {
 				return
 			}
 			for {
 				frame, readErr := readSSEFrame(reader, s.config.MaxBodyBytes)
-				if len(frame) > 0 && !writeStreamFrame(writer, flush, convert(frame)) {
+				if len(frame) > 0 && !emit(frame) {
 					return
 				}
 				if readErr != nil {
 					if readErr == io.EOF && isGeminiEndpoint(candidate.Endpoint) && isTextEndpoint(endpoint) {
-						writeStreamFrame(writer, flush, convert(nil))
+						if !emit(nil) {
+							return
+						}
+					}
+					if readErr == io.EOF && capture.complete() {
+						s.storeInference(request, cache, cacheKey, status, "text/event-stream", capture.frames)
 					}
 					break
 				}

@@ -263,7 +263,7 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 	target := strings.TrimSuffix(base, "/v1") + path
 	if candidate.Provider == "azure" && !strings.HasSuffix(base, "/openai/v1") {
 		target = strings.TrimSuffix(base, "/openai") + "/openai" + strings.TrimPrefix(path, "/v1") + "?api-version=" + url.QueryEscape(candidate.APIVersion)
-		if isContainerPath(path) && slices.Contains([]string{"", "v1", "latest", "preview"}, candidate.APIVersion) {
+		if (isContainerPath(path) || isFineTuningPath(path)) && slices.Contains([]string{"", "v1", "latest", "preview"}, candidate.APIVersion) {
 			target = strings.TrimSuffix(base, "/openai") + "/openai" + path
 		}
 	}
@@ -364,6 +364,20 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 			for _, field := range []string{"input_file_id", "output_file_id", "error_file_id"} {
 				if id, ok := entry[field].(string); ok && id != "" {
 					entry[field] = encodeResourceID("files", deployment, id)
+				}
+			}
+		}
+		if family == fineTuningFamily {
+			for _, field := range []string{"training_file", "validation_file"} {
+				if id, ok := entry[field].(string); ok && id != "" {
+					entry[field] = encodeResourceID("files", deployment, id)
+				}
+			}
+			if files, ok := entry["result_files"].([]any); ok {
+				for index, value := range files {
+					if id, ok := value.(string); ok && id != "" {
+						files[index] = encodeResourceID("files", deployment, id)
+					}
 				}
 			}
 		}

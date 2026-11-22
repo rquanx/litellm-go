@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"container/list"
 	"context"
 	"crypto/sha256"
@@ -90,6 +91,7 @@ type inferenceCacheRequest struct {
 	ttl         time.Duration
 	maxAge      *time.Duration
 	read, write bool
+	stream      bool
 }
 
 func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, stream bool, payload *requestPayload) inferenceCacheRequest {
@@ -115,10 +117,10 @@ func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, 
 	}
 	delete(payload.fields, "cache")
 	delete(payload.fields, "caching")
-	if stream || payload.form != nil || ((config.OptIn || explicit) && !optIn) || r.Header.Get("X-OpenCode-Session") != "" {
+	if (stream && endpoint != "chat-completions" && endpoint != "completions") || ((config.OptIn || explicit) && !optIn) || r.Header.Get("X-OpenCode-Session") != "" {
 		return inferenceCacheRequest{}
 	}
-	policy := inferenceCacheRequest{ttl: config.TTL, read: directives["no-cache"] != true, write: directives["no-store"] != true}
+	policy := inferenceCacheRequest{ttl: config.TTL, stream: stream, read: directives["no-cache"] != true, write: directives["no-store"] != true}
 	if ttl, ok := cacheSeconds(directives["ttl"]); ok {
 		policy.ttl = ttl
 	}
@@ -130,8 +132,12 @@ func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, 
 	}
 	namespace, _ := directives["namespace"].(string)
 	owner := sha256.Sum256([]byte(ProxyCredential(r)))
-	policy.keyParts, _ = json.Marshal([]any{config.Namespace, namespace, owner, endpoint, alias, r.Header.Values("Anthropic-Beta"),
-		r.Header.Values("Anthropic-Version"), payload.fields})
+	var form []any
+	for _, part := range payload.form {
+		form = append(form, []any{part.header, sha256.Sum256(part.body)})
+	}
+	policy.keyParts, _ = json.Marshal([]any{config.Namespace, namespace, owner, endpoint, alias, stream, r.Header.Values("Anthropic-Beta"),
+		r.Header.Values("Anthropic-Version"), payload.fields, form})
 	return policy
 }
 
@@ -174,9 +180,11 @@ func (policy inferenceCacheRequest) key(candidate Candidate) string {
 }
 
 type cachedInference struct {
-	Created time.Time       `json:"created"`
-	Status  int             `json:"status"`
-	Body    json.RawMessage `json:"body"`
+	Created     time.Time       `json:"created"`
+	Status      int             `json:"status"`
+	Body        json.RawMessage `json:"body,omitempty"`
+	Frames      []byte          `json:"frames,omitempty"`
+	ContentType string          `json:"content_type,omitempty"`
 }
 
 func (s *Server) serveCachedInference(w http.ResponseWriter, r *http.Request, policy inferenceCacheRequest, key string, candidate Candidate, attempts []map[string]any) bool {
@@ -187,8 +195,8 @@ func (s *Server) serveCachedInference(w http.ResponseWriter, r *http.Request, po
 	defer cancel()
 	data, err := s.config.InferenceCacheStore.Get(ctx, key)
 	var entry cachedInference
-	if err != nil || len(data) > maxCacheResponse+1024 || json.Unmarshal(data, &entry) != nil || entry.Status < 200 ||
-		entry.Status >= 300 || entry.Created.IsZero() || len(entry.Body) == 0 ||
+	if err != nil || len(data) > (maxCacheResponse*4/3)+1024 || json.Unmarshal(data, &entry) != nil || entry.Status < 200 ||
+		entry.Status >= 300 || entry.Created.IsZero() || (policy.stream && len(entry.Frames) == 0) || (!policy.stream && len(entry.Body)+len(entry.Frames) == 0) ||
 		(policy.maxAge != nil && time.Since(entry.Created) > *policy.maxAge) {
 		return false
 	}
@@ -197,17 +205,42 @@ func (s *Server) serveCachedInference(w http.ResponseWriter, r *http.Request, po
 		recorder.event.CacheHit = true
 	}
 	w.Header().Set("X-LiteLLM-Cache-Key", key)
-	w.Header().Set("Content-Type", "application/json")
+	if policy.stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache, no-transform")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(entry.Status)
+		flusher, _ := w.(http.Flusher)
+		for block := range bytes.SplitAfterSeq(entry.Frames, []byte("\n\n")) {
+			if !writeStreamFrame(w, flusher, block) {
+				break
+			}
+		}
+		return true
+	}
+	if entry.ContentType != "" {
+		w.Header().Set("Content-Type", entry.ContentType)
+	}
 	w.WriteHeader(entry.Status)
-	_, _ = w.Write(entry.Body)
+	if len(entry.Body) > 0 {
+		_, _ = w.Write(entry.Body)
+	} else {
+		_, _ = w.Write(entry.Frames)
+	}
 	return true
 }
 
-func (s *Server) storeInference(r *http.Request, policy inferenceCacheRequest, key string, status int, body []byte) {
-	if !policy.write || policy.ttl <= 0 || len(body) > maxCacheResponse || !json.Valid(body) {
+func (s *Server) storeInference(r *http.Request, policy inferenceCacheRequest, key string, status int, contentType string, body []byte) {
+	if !policy.write || policy.ttl <= 0 || len(body) > maxCacheResponse || len(body) == 0 {
 		return
 	}
-	data, err := json.Marshal(cachedInference{Created: time.Now(), Status: status, Body: body})
+	entry := cachedInference{Created: time.Now(), Status: status, ContentType: contentType}
+	if policy.stream || !json.Valid(body) {
+		entry.Frames = body
+	} else {
+		entry.Body = body
+	}
+	data, err := json.Marshal(entry)
 	if err != nil {
 		return
 	}
