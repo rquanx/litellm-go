@@ -19,10 +19,19 @@ var publicProviders []byte
 //go:embed public-provider-fields.json.gz
 var publicProviderFields []byte
 
+//go:embed public-endpoints.json.gz
+var publicEndpoints []byte
+
+//go:embed public-agent-fields.json.gz
+var publicAgentFields []byte
+
 func registerPublicCatalogs(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/litellm_model_cost_map", servePublicCatalog(publicPrices))
 	mux.HandleFunc("GET /public/providers", servePublicCatalog(publicProviders))
 	mux.HandleFunc("GET /public/providers/fields", servePublicCatalog(publicProviderFields))
+	mux.HandleFunc("GET /public/endpoints", servePublicCatalog(publicEndpoints))
+	mux.HandleFunc("GET /public/agents/fields", servePublicCatalog(publicAgentFields))
+	mux.Handle("GET /public/litellm_blog_posts", newPublicBlogFeed())
 }
 
 func servePublicCatalog(data []byte) http.HandlerFunc {

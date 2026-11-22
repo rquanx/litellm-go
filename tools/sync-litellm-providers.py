@@ -1,4 +1,4 @@
-"""Read the upstream OpenAI-compatible provider list without importing LiteLLM."""
+"""Generate pinned provider, pricing, and endpoint metadata without importing LiteLLM."""
 
 import argparse
 import ast
@@ -6,6 +6,7 @@ import gzip
 import io
 import json
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,60 @@ def compressed_json(data):
     return output.getvalue()
 
 
+def endpoint_catalog(source):
+    tree = ast.parse(source("litellm/proxy/public_endpoints/public_endpoints.py"))
+    metadata = next(
+        ast.literal_eval(node.value) for node in tree.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        and node.target.id == "_ENDPOINT_METADATA"
+    )
+    providers = json.loads(source("litellm/provider_endpoints_support_backup.json"))["providers"]
+    keys = dict.fromkeys(key for provider in providers.values() for key in provider.get("endpoints", {}))
+    endpoints = []
+    for key in keys:
+        endpoint = metadata.get(key, {
+            "label": key.replace("_", " ").title(),
+            "endpoint": "/" + key.replace("_", "/"),
+        })
+        supporting = [
+            {"slug": slug, "display_name": re.sub(r"\s*\(`[^`]+`\)\s*$", "", provider.get("display_name", slug)).strip()}
+            for slug, provider in providers.items()
+            if provider.get("endpoints", {}).get(key)
+        ]
+        endpoints.append({"key": key, **endpoint, "providers": supporting})
+    return {"endpoints": endpoints}
+
+
+def agent_fields_catalog(source, providers):
+    schema = ast.parse(source("litellm/types/proxy/public_endpoints/public_endpoints.py"))
+    models = {
+        node.name: {
+            field.target.id: field.value for field in node.body
+            if isinstance(field, ast.AnnAssign) and isinstance(field.target, ast.Name)
+        }
+        for node in schema.body if isinstance(node, ast.ClassDef)
+    }
+
+    def with_defaults(model, data):
+        return {
+            key: data[key] if key in data else ast.literal_eval(default)
+            for key, default in models[model].items()
+        }
+
+    agents = json.loads(source("litellm/proxy/public_endpoints/agent_create_fields.json"))
+    provider_fields = {provider["provider"]: provider["credential_fields"] for provider in providers}
+    for agent in agents:
+        inherited_provider = agent.pop("inherit_credentials_from_provider", None)
+        agent["credential_fields"].extend(
+            {**field, "include_in_litellm_params": True}
+            for field in provider_fields.get(inherited_provider, [])
+        )
+        agent["credential_fields"] = [
+            with_defaults("AgentCredentialField", field) for field in agent["credential_fields"]
+        ]
+    return [with_defaults("AgentCreateInfo", agent) for agent in agents]
+
+
 def public_catalogs(checkout, revision, prices):
     def source(path):
         return subprocess.check_output(["git", "-C", checkout, "show", f"{revision}:{path}"])
@@ -33,10 +88,14 @@ def public_catalogs(checkout, revision, prices):
         if isinstance(field, ast.Assign) and isinstance(field.value, ast.Constant) and isinstance(field.value.value, str)
     })
     fields = json.loads(source("litellm/proxy/public_endpoints/provider_create_fields.json"))
+    blog_posts = json.loads(source("litellm/blog_posts.json")).get("posts", [])[:5]
     return {
         "public-model-cost-map.json.gz": compressed_json(prices),
         "public-providers.json.gz": compressed_json(providers),
         "public-provider-fields.json.gz": compressed_json(fields),
+        "public-endpoints.json.gz": compressed_json(endpoint_catalog(source)),
+        "public-agent-fields.json.gz": compressed_json(agent_fields_catalog(source, fields)),
+        "public-blog-posts.json.gz": compressed_json({"posts": blog_posts}),
     }
 
 
