@@ -54,6 +54,18 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 		t.Fatal("virtual key model scope was not restored")
 	}
 	send(handler, "POST", "/v1/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
+	send(handler, "GET", "/models", "unknown", "", 401)
+	send(handler, "GET", "/models", generated.Key, "", 200)
+	send(handler, "POST", "/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
+	send(handler, "POST", "/engines/restricted/chat/completions", generated.Key, `{"model":"permitted","messages":[]}`, 403)
+	azureRequest := httptest.NewRequest("POST", "/openai/deployments/restricted/chat/completions?api-version=2024-10-21",
+		strings.NewReader(`{"model":"permitted","messages":[]}`))
+	azureRequest.Header.Set("api-key", generated.Key)
+	azureResponse := httptest.NewRecorder()
+	handler.ServeHTTP(azureResponse, azureRequest)
+	if azureResponse.Code != http.StatusForbidden {
+		t.Fatalf("Azure API key must authenticate before checking the path model: %d", azureResponse.Code)
+	}
 	send(handler, "POST", "/key/generate", generated.Key, `{}`, 401)
 	digest := keyDigest(generated.Key)
 	reference := `{"key":"` + digest + `"}`

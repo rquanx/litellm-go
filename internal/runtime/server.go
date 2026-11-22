@@ -73,9 +73,23 @@ func (s *Server) ReplaceConfiguredRoutes(routes []Route) {
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	var deployment, deploymentOperation string
+	if s.config.AuthorizeInference {
+		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
+		if proxyAlias(request.URL.Path) {
+			normalized := *request.URL
+			normalized.Path = "/v1" + normalized.Path
+			if normalized.RawPath != "" {
+				normalized.RawPath = "/v1" + normalized.RawPath
+			}
+			copy := request.WithContext(request.Context())
+			copy.URL = &normalized
+			request = copy
+		}
+	}
 	alias, geminiEndpoint := geminiMethod(request.URL.Path)
 	var modelScope []string
-	if s.config.AuthorizeInference && (geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+	if s.config.AuthorizeInference && (deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
@@ -94,6 +108,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if request.Method == http.MethodPost {
+		if deploymentOperation != "" {
+			s.infer(writer, request, deploymentOperation, deployment, modelScope)
+			return
+		}
 		if geminiEndpoint != "" {
 			s.infer(writer, request, geminiEndpoint, alias, modelScope)
 			return
@@ -719,6 +737,11 @@ func (s *Server) authorized(request *http.Request) bool {
 }
 
 func inferenceCredential(request *http.Request) string {
+	if strings.HasPrefix(request.URL.Path, "/openai/deployments/") {
+		if key := request.Header.Get("api-key"); key != "" {
+			return key
+		}
+	}
 	if _, endpoint := geminiMethod(request.URL.Path); endpoint != "" {
 		if key := request.Header.Get("x-goog-api-key"); key != "" {
 			return key

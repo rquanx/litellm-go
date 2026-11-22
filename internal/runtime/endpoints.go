@@ -1,5 +1,7 @@
 package runtime
 
+import "strings"
+
 type endpointSpec struct {
 	path      string
 	family    string
@@ -35,6 +37,34 @@ func EndpointFromPath(path string) string {
 		}
 	}
 	return ""
+}
+
+func proxyAlias(path string) bool {
+	switch path {
+	case "/models", "/chat/completions", "/completions", "/embeddings", "/moderations",
+		"/audio/speech", "/audio/transcriptions", "/images/generations", "/images/edits", "/rerank", "/responses":
+		return true
+	}
+	return strings.HasPrefix(path, "/responses/") || resourceFamily("/v1"+path) != ""
+}
+
+func deploymentEndpoint(path string) (string, string) {
+	for _, prefix := range []string{"/openai/deployments/", "/engines/"} {
+		remainder, ok := strings.CutPrefix(path, prefix)
+		if !ok {
+			continue
+		}
+		for _, name := range []string{"chat-completions", "completions", "embeddings", "image-generation", "image-edit"} {
+			if prefix == "/engines/" && (name == "image-generation" || name == "image-edit") {
+				continue
+			}
+			suffix := strings.TrimPrefix(endpoints[name].path, "/v1")
+			if alias, ok := strings.CutSuffix(remainder, suffix); ok && alias != "" {
+				return alias, name
+			}
+		}
+	}
+	return "", ""
 }
 
 // CompatibleEndpoints reports whether the runtime can serve both endpoints from a route.
