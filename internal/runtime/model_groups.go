@@ -134,7 +134,7 @@ func modelGroupMode(endpoint string) string {
 		return "audio_transcription"
 	case "speech":
 		return "audio_speech"
-	case "moderations", "rerank":
+	case "moderations", "rerank", "ocr":
 		return endpoint
 	default:
 		return "chat"

@@ -547,6 +547,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			s.recordLatency(candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
+			if endpoint == "ocr" && candidate.Provider == "mistral" {
+				body = mistralOCRResponse(responseBody, route.Alias)
+			}
 			if endpoint == "rerank" && candidate.Provider == "voyage" {
 				body = voyageRerankResponse(body)
 			}
@@ -934,6 +937,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	}
 	if targetEndpoint == "cohere-embeddings" {
 		payload = cohereEmbeddingRequest(payload)
+	}
+	if targetEndpoint == "ocr" && candidate.Provider == "mistral" {
+		payload = mistralOCRRequest(payload)
 	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err

@@ -21,6 +21,7 @@ var endpoints = map[string]endpointSpec{
 	"translation":        {"/v1/audio/translations", "translation", false},
 	"moderations":        {"/v1/moderations", "moderations", false},
 	"rerank":             {"/v1/rerank", "rerank", false},
+	"ocr":                {"/v1/ocr", "ocr", false},
 	"anthropic-messages": {"/v1/messages", "anthropic", true},
 	"gemini-generate":    {"", "gemini", false},
 	"gemini-stream":      {"", "gemini", true},
@@ -46,7 +47,7 @@ func EndpointFromPath(path string) string {
 func proxyAlias(path string) bool {
 	switch path {
 	case "/models", "/chat/completions", "/completions", "/embeddings", "/moderations",
-		"/audio/speech", "/audio/transcriptions", "/images/generations", "/images/edits", "/rerank", "/responses":
+		"/audio/speech", "/audio/transcriptions", "/images/generations", "/images/edits", "/rerank", "/ocr", "/responses":
 		return true
 	}
 	return strings.HasPrefix(path, "/responses/") || strings.HasPrefix(path, "/models/") ||

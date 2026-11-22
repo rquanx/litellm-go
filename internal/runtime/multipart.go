@@ -31,6 +31,9 @@ func decodeJSONPayload(body []byte) (requestPayload, error) {
 }
 
 func decodePayload(contentType string, body []byte, endpoint string) (requestPayload, error) {
+	if endpoint == "ocr" {
+		return decodeOCRPayload(contentType, body)
+	}
 	if endpoint != "image-edit" && endpoint != "transcription" && endpoint != "translation" {
 		return decodeJSONPayload(body)
 	}

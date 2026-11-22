@@ -473,8 +473,10 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
+	mistralOCR := provider == "mistral" && (entry.Info.Mode == "ocr" || strings.HasPrefix(model, "mistral-ocr") ||
+		slices.Contains(entry.Info.Endpoints, "/v1/ocr"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !mistralOCR) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -516,6 +518,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
+	}
+	if base == "" && mistralOCR {
+		base = "https://api.mistral.ai/v1"
 	}
 	if base == "" && entry.rerankConfigured() {
 		switch provider {
@@ -587,6 +592,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
+	if key == "" && mistralOCR {
+		key = os.Getenv("MISTRAL_API_KEY")
+	}
 	if key == "" && entry.rerankConfigured() {
 		switch provider {
 		case "fireworks_ai":
@@ -654,6 +662,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
+	if mistralOCR {
+		endpoint = "ocr"
+	}
 	if provider == "anthropic" {
 		endpoint = "anthropic-messages"
 	}
