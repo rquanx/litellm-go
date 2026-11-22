@@ -72,18 +72,11 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 	upstream.SetReadLimit(s.config.MaxBodyBytes)
 	client.SetReadLimit(s.config.MaxBodyBytes)
 
-	done := make(chan struct{}, 2)
-	go func() {
-		defer func() { done <- struct{}{} }()
+	runSocketRelay(ctx, func(ctx context.Context) {
 		s.socketClientToProvider(ctx, request, client, upstream, alias, candidate)
-	}()
-	go func() {
-		defer func() { done <- struct{}{} }()
+	}, func(ctx context.Context) {
 		socketProviderToClient(ctx, upstream, client, alias, candidate)
-	}()
-	<-done
-	cancel()
-	<-done
+	})
 }
 
 func nativeResponsesSocket(candidate Candidate) bool {
@@ -103,7 +96,10 @@ func (s *Server) dialResponsesSocket(ctx context.Context, candidate Candidate) (
 	query := address.Query()
 	query.Set("model", candidate.ModelID)
 	address.RawQuery = query.Encode()
-	headers := make(http.Header)
+	return s.dialProviderSocket(ctx, candidate, address.String(), make(http.Header))
+}
+
+func (s *Server) dialProviderSocket(ctx context.Context, candidate Candidate, address string, headers http.Header) (*websocket.Conn, error) {
 	key := candidate.APIKey
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
@@ -115,10 +111,38 @@ func (s *Server) dialResponsesSocket(ctx context.Context, candidate Candidate) (
 			headers.Set("Authorization", "Bearer "+key)
 		}
 	}
-	conn, _, err := websocket.Dial(ctx, address.String(), &websocket.DialOptions{
+	conn, _, err := websocket.Dial(ctx, address, &websocket.DialOptions{
 		HTTPClient: s.config.HTTPClient, HTTPHeader: headers,
 	})
 	return conn, err
+}
+
+func runSocketRelay(ctx context.Context, clientToProvider, providerToClient func(context.Context)) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		clientToProvider(ctx)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		providerToClient(ctx)
+	}()
+	<-done
+	cancel()
+	<-done
+}
+
+func (s *Server) socketStillAllowed(request *http.Request, alias string, candidate Candidate) bool {
+	if s.authorized(request) {
+		return true
+	}
+	if s.config.AuthorizeKey == nil {
+		return false
+	}
+	scope, allowed := s.config.AuthorizeKey(inferenceCredential(request))
+	return allowed && modelAllowed(scope, alias) && candidateAllowed(scope, candidate)
 }
 
 func (s *Server) socketClientToProvider(ctx context.Context, request *http.Request, client, upstream *websocket.Conn, alias string, candidate Candidate) {
@@ -127,16 +151,9 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 		if err != nil {
 			return
 		}
-		if !s.authorized(request) {
-			var scope []string
-			var allowed bool
-			if s.config.AuthorizeKey != nil {
-				scope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
-			}
-			if !allowed || !modelAllowed(scope, alias) || !candidateAllowed(scope, candidate) {
-				_ = writeSocketError(ctx, client, http.StatusForbidden, "The key cannot use this WebSocket session")
-				return
-			}
+		if !s.socketStillAllowed(request, alias, candidate) {
+			_ = writeSocketError(ctx, client, http.StatusForbidden, "The key cannot use this WebSocket session")
+			return
 		}
 		event, err := prepareSocketEvent(kind, data, alias, candidate)
 		if err != nil {

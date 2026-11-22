@@ -98,7 +98,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}
 	}
 	var modelScope []string
-	if s.config.AuthorizeInference && (deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+	realtime := isRealtimeSocketPath(request.URL.Path)
+	if s.config.AuthorizeInference && (realtime || deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
@@ -107,6 +108,11 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 			return
 		}
+	}
+	if s.config.AuthorizeInference && realtime && request.Method == http.MethodGet &&
+		strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+		s.realtimeSocket(writer, request, modelScope)
+		return
 	}
 	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) &&
 		request.URL.Path != endpoints["responses-compact"].path {
