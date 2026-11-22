@@ -143,7 +143,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		payload := searchPayload(tool, input, query, queries)
 		status, headers, body := s.callSearch(r.Context(), tool, payload)
 		if status >= 200 && status < 300 {
-			if result, ok := normalizeSearch(tool.Provider, body); ok {
+			if result, ok := normalizeSearch(tool.Provider, body, payload); ok {
 				if recorder != nil {
 					recorder.event.Spend = searchCost(tool.Provider, input, max(1, len(queries)))
 				}
@@ -174,7 +174,8 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 	}
 	method := http.MethodPost
 	var bodyReader io.Reader = bytes.NewReader(payload)
-	if tool.Provider == "searxng" || tool.Provider == "searchapi" || tool.Provider == "google_pse" {
+	switch tool.Provider {
+	case "searxng", "searchapi", "google_pse", "brave", "duckduckgo":
 		method, bodyReader = http.MethodGet, nil
 	}
 	request, err := http.NewRequestWithContext(ctx, method, tool.URL, bodyReader)
@@ -192,7 +193,11 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 			if json.Unmarshal(value, &decoded) == nil {
 				query.Set(key, decoded)
 			} else {
-				query.Set(key, string(value))
+				encoded := string(value)
+				if tool.Provider == "brave" && (encoded == "true" || encoded == "false") {
+					encoded = strings.ToUpper(encoded[:1]) + encoded[1:]
+				}
+				query.Set(key, encoded)
 			}
 		}
 		if tool.Provider == "searchapi" {
@@ -213,7 +218,10 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 	case "dataforseo":
 		login, password, _ := strings.Cut(tool.APIKey, ":")
 		request.SetBasicAuth(login, password)
-	case "searchapi", "google_pse":
+	case "brave":
+		request.Header.Set("X-Subscription-Token", tool.APIKey)
+		request.Header.Set("Accept", "application/json")
+	case "searchapi", "google_pse", "duckduckgo":
 	default:
 		if tool.APIKey != "" {
 			request.Header.Set("Authorization", "Bearer "+tool.APIKey)

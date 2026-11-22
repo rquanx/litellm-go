@@ -22,7 +22,7 @@ func searchCost(provider string, input map[string]json.RawMessage, queryCount in
 		rate = 0.00587
 	case "serper":
 		rate = 0.001
-	case "searxng":
+	case "searxng", "duckduckgo":
 		rate = 0
 	case "parallel_ai":
 		rate = 0.004

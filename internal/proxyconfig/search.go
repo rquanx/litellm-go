@@ -70,6 +70,10 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		defaultBase, baseEnv, keyEnv = "https://www.googleapis.com/customsearch/v1", "GOOGLE_PSE_API_BASE", "GOOGLE_PSE_API_KEY"
 	case "dataforseo":
 		defaultBase, baseEnv = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced", "DATAFORSEO_API_BASE"
+	case "brave":
+		defaultBase, baseEnv, keyEnv = "https://api.search.brave.com/res/v1/web/search", "BRAVE_API_BASE", "BRAVE_API_KEY"
+	case "duckduckgo":
+		defaultBase, baseEnv = "https://api.duckduckgo.com", "DUCKDUCKGO_API_BASE"
 	default:
 		return runtime.SearchTool{}, fmt.Errorf("unsupported search_provider %q", params.Provider)
 	}
@@ -93,7 +97,9 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		suffix = "/v1beta/search"
 	}
 	switch params.Provider {
-	case "searchapi", "google_pse", "dataforseo":
+	case "searchapi", "google_pse", "dataforseo", "brave":
+	case "duckduckgo":
+		target.Path = strings.TrimRight(target.Path, "/") + "/"
 	default:
 		if !strings.HasSuffix(strings.TrimRight(target.Path, "/"), suffix) {
 			target = target.JoinPath(suffix)
@@ -140,7 +146,7 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 			}
 		}
 	}
-	if key == "" && params.Provider != "searxng" {
+	if key == "" && params.Provider != "searxng" && params.Provider != "duckduckgo" {
 		return runtime.SearchTool{}, fmt.Errorf("missing search API key (%s)", keyEnv)
 	}
 	return runtime.SearchTool{Name: entry.Name, Provider: params.Provider, URL: target.String(), APIKey: key,

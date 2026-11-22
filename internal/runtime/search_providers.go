@@ -145,6 +145,29 @@ func searchPayload(tool SearchTool, input map[string]json.RawMessage, query stri
 			params["language"], _ = json.Marshal(language)
 		}
 		extras = []string{"categories", "engines", "language", "pageno", "time_range", "safesearch"}
+	case "duckduckgo":
+		delete(params, "query")
+		params["q"] = queryText
+		params["format"] = json.RawMessage(`"json"`)
+		copyParam("max_results", "_max_results")
+		extras = []string{"pretty", "no_redirect", "no_html", "skip_disambig"}
+	case "brave":
+		delete(params, "query")
+		var domains []string
+		if json.Unmarshal(input["search_domain_filter"], &domains) == nil && len(domains) != 0 {
+			query = "(" + query + ") AND (site:" + strings.Join(domains, " OR site:") + ")"
+		}
+		params["q"], _ = json.Marshal(query)
+		var limit int
+		if json.Unmarshal(input["max_results"], &limit) == nil {
+			params["count"] = json.RawMessage(strconv.Itoa(min(limit, 20)))
+		}
+		params["include_fetch_metadata"] = json.RawMessage("true")
+		if string(input["include_fetch_metadata"]) == "false" {
+			params["include_fetch_metadata"] = json.RawMessage("false")
+		}
+		extras = []string{"count", "offset", "search_lang", "ui_lang", "freshness", "safesearch", "spellcheck", "text_decorations",
+			"result_filter", "units", "goggles_id", "goggles", "extra_snippets", "summary", "enable_rich_callback", "operators"}
 	}
 	for _, key := range extras {
 		copyParam(key, key)
@@ -194,7 +217,13 @@ type searchProviderResult struct {
 	Excerpts      []string `json:"excerpts"`
 }
 
-func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
+func normalizeSearch(provider string, body, request []byte) ([]searchResult, bool) {
+	switch provider {
+	case "duckduckgo":
+		return normalizeDuckDuckGoSearch(body, request)
+	case "brave":
+		return normalizeBraveSearch(body, request)
+	}
 	var payload *struct {
 		Results []searchProviderResult `json:"results"`
 		Organic []searchProviderResult `json:"organic"`
