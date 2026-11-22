@@ -94,12 +94,13 @@ func TestBackgroundHealthCachesEnabledDeployments(t *testing.T) {
 }
 
 func TestHealthRoutingFiltersOnlyFreshFailuresAndKeepsLastCandidate(t *testing.T) {
-	server := NewServer(Config{HealthRoutingStaleness: time.Minute})
+	server := NewServer(Config{HealthRoutingStaleness: time.Minute, IgnoreTransientHealthErrors: true})
 	now := time.Now()
 	server.healthResults = map[string]ModelHealthRecord{
 		"bad": {Status: "unhealthy", CheckedAt: now},
 		"old": {Status: "unhealthy", CheckedAt: now.Add(-time.Hour)},
 		"also-bad": {Status: "unhealthy", CheckedAt: now},
+		"limited": {Status: "unhealthy", CheckedAt: now, responseStatus: http.StatusTooManyRequests},
 	}
 	bad := Candidate{DeploymentID: "bad"}
 	old := Candidate{DeploymentID: "old"}
@@ -109,6 +110,10 @@ func TestHealthRoutingFiltersOnlyFreshFailuresAndKeepsLastCandidate(t *testing.T
 	}
 	if candidates := server.filterUnhealthyCandidates([]Candidate{bad, alsoBad}); len(candidates) != 2 {
 		t.Fatalf("routing removed every candidate: %+v", candidates)
+	}
+	if candidates := server.filterUnhealthyCandidates([]Candidate{bad, {DeploymentID: "limited"}}); len(candidates) != 1 ||
+		candidates[0].DeploymentID != "limited" {
+		t.Fatalf("routing did not preserve the rate-limited deployment: %+v", candidates)
 	}
 }
 

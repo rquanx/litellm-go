@@ -34,6 +34,7 @@ type configFile struct {
 		SkipDisabledHealthChecks bool `yaml:"health_check_skip_disabled_background_models"`
 		EnableHealthCheckRouting bool `yaml:"enable_health_check_routing"`
 		HealthCheckStaleness int `yaml:"health_check_staleness_threshold"`
+		IgnoreTransientHealthErrors bool `yaml:"health_check_ignore_transient_errors"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
@@ -109,6 +110,7 @@ type Config struct {
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
 	HealthRoutingStaleness time.Duration
+	IgnoreTransientHealthErrors bool
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -185,6 +187,7 @@ func Load(reader io.Reader) (Config, error) {
 	}
 	config.HealthCheckConcurrency = file.General.HealthCheckConcurrency
 	config.SkipDisabledHealthChecks = file.General.SkipDisabledHealthChecks
+	config.IgnoreTransientHealthErrors = file.General.IgnoreTransientHealthErrors
 	if file.General.BackgroundHealthChecks {
 		interval := file.General.HealthCheckInterval
 		if interval == 0 {

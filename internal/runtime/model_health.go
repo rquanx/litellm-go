@@ -104,7 +104,8 @@ func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment
 				start := time.Now()
 				entry := ModelHealthRecord{ID: newUUID(), Model: deployment.alias, ModelID: deployment.candidate.DeploymentID,
 					Status: "unhealthy", UnhealthyCount: 1, CheckedAt: start, CreatedAt: start}
-				if s.probeDeployment(ctx, r, deployment.candidate) {
+				entry.responseStatus = s.probeDeployment(ctx, r, deployment.candidate)
+				if entry.responseStatus >= 200 && entry.responseStatus < 300 {
 					entry.Status, entry.HealthyCount, entry.UnhealthyCount = "healthy", 1, 0
 				}
 				entry.ResponseMS = float64(time.Since(start)) / float64(time.Millisecond)
@@ -175,7 +176,9 @@ func (s *Server) filterUnhealthyCandidates(candidates []Candidate) []Candidate {
 	filtered := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
 		result := cache[candidate.DeploymentID]
-		if result.Status != "unhealthy" || !result.CheckedAt.After(cutoff) {
+		transient := s.config.IgnoreTransientHealthErrors &&
+			(result.responseStatus == http.StatusTooManyRequests || result.responseStatus == http.StatusRequestTimeout)
+		if result.Status != "unhealthy" || !result.CheckedAt.After(cutoff) || transient {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -185,7 +188,7 @@ func (s *Server) filterUnhealthyCandidates(candidates []Candidate) []Candidate {
 	return filtered
 }
 
-func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) bool {
+func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) int {
 	const prompt = "ping"
 	endpoint := candidate.Endpoint
 	var fields map[string]any
@@ -205,8 +208,14 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 	case endpoint == "speech":
 		fields = map[string]any{"input": prompt, "voice": "alloy"}
 	default:
-		return false
+		return http.StatusNotImplemented
 	}
 	status, _, _, _, err := s.callJSON(ctx, r, endpoint, candidate, requestPayload{fields: fields})
-	return err == nil && status >= 200 && status < 300
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return http.StatusRequestTimeout
+		}
+		return http.StatusBadGateway
+	}
+	return status
 }

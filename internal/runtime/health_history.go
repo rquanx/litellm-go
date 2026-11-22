@@ -20,6 +20,7 @@ type ModelHealthRecord struct {
 	CheckedBy      *string   `json:"checked_by"`
 	CheckedAt      time.Time `json:"checked_at"`
 	CreatedAt      time.Time `json:"created_at"`
+	responseStatus int
 }
 
 type HealthHistoryQuery struct {

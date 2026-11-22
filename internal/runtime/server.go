@@ -50,6 +50,7 @@ type Config struct {
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
 	HealthRoutingStaleness time.Duration
+	IgnoreTransientHealthErrors bool
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
