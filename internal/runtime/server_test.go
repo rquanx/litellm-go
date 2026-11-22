@@ -141,15 +141,25 @@ func TestToolCallJSONConversion(t *testing.T) {
 		var body map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		input, _ := body["input"].([]any)
-		if len(input) != 1 || len(body["tools"].([]any)) != 1 {
-			t.Fatalf("tool request was not converted: %#v", body)
+		tools, _ := body["tools"].([]any)
+		if len(input) != 1 || len(tools) != 1 {
+			t.Errorf("tool request was not converted: %#v", body)
+		} else {
+			tool, _ := tools[0].(map[string]any)
+			if tool["name"] != "lookup" || tool["function"] != nil {
+				t.Errorf("expected a flat Responses function tool, got %#v", tool)
+			}
 		}
-		_, _ = writer.Write([]byte(`{"id":"resp-tool","object":"response","created_at":1,"output":[{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\"q\":\"hello\"}"}],"usage":{"total_tokens":3}}`))
+		choice, _ := body["tool_choice"].(map[string]any)
+		if choice["name"] != "lookup" || choice["function"] != nil {
+			t.Errorf("expected a flat Responses tool choice, got %#v", choice)
+		}
+		_, _ = writer.Write([]byte(`{"id":"resp-tool","object":"response","created_at":1,"output":[{"type":"message","content":[{"type":"output_text","text":"Checking."}]},{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\"q\":\"hello\"}"}],"usage":{"total_tokens":3}}`))
 	}))
 	defer upstream.Close()
 	server := NewServer(Config{HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "m", APIBase: upstream.URL, Endpoint: "responses"}}})
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":{"type":"function","function":{"name":"lookup"}}}`))
 	result := httptest.NewRecorder()
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK {
@@ -158,8 +168,10 @@ func TestToolCallJSONConversion(t *testing.T) {
 	var response map[string]any
 	_ = json.Unmarshal(result.Body.Bytes(), &response)
 	choices := response["choices"].([]any)
-	message := choices[0].(map[string]any)["message"].(map[string]any)
-	if len(message["tool_calls"].([]any)) != 1 {
+	choice := choices[0].(map[string]any)
+	message := choice["message"].(map[string]any)
+	calls, _ := message["tool_calls"].([]any)
+	if len(calls) != 1 || message["content"] != "Checking." || choice["finish_reason"] != "tool_calls" {
 		t.Fatalf("tool call was not converted back: %#v", response)
 	}
 }
@@ -168,7 +180,8 @@ func TestToolCallSSEConversion(t *testing.T) {
 	chatFrame := []byte(`data: {"id":"chat-1","created":1,"choices":[{"delta":{"tool_calls":[{"id":"call-1","function":{"name":"lookup","arguments":"{\"q\":\"hello\"}"}}]},"finish_reason":null}]}
 
 `)
-	converted := string(convertSSEFrame(chatFrame, "responses", "chat-completions", "demo"))
+	stream := chatResponsesStream{alias: "demo", limit: 1 << 20}
+	converted := string(stream.convert(chatFrame))
 	if !strings.Contains(converted, "response.output_item.added") || !strings.Contains(converted, "response.function_call_arguments.delta") {
 		t.Fatalf("tool SSE was not converted: %q", converted)
 	}
@@ -284,6 +297,7 @@ func TestSSEErrorEventFallsBackBeforeWriting(t *testing.T) {
 func TestResponsesSSEConvertsChatUpstream(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = writer.Write([]byte(": keepalive\r\n\r\n"))
 		_, _ = writer.Write([]byte("data: {\"id\":\"chat-1\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":null}]}\n\n"))
 		_, _ = writer.Write([]byte("data: {\"id\":\"chat-1\",\"created\":1,\"model\":\"m\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"))
 		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":2}}\n\ndata: [DONE]\n\n"))
@@ -297,6 +311,12 @@ func TestResponsesSSEConvertsChatUpstream(t *testing.T) {
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "response.completed") || !strings.Contains(result.Body.String(), "done") {
 		t.Fatalf("expected converted Responses stream, status=%d body=%q", result.Code, result.Body.String())
+	}
+	if strings.Count(result.Body.String(), "event: response.completed\n") != 1 {
+		t.Fatalf("expected exactly one terminal event: %s", result.Body.String())
+	}
+	if !strings.Contains(result.Body.String(), `"total_tokens":2`) {
+		t.Fatalf("terminal event is missing final usage: %s", result.Body.String())
 	}
 }
 

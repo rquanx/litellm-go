@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 func responsesToChat(input map[string]any) map[string]any {
@@ -31,10 +32,16 @@ func responsesToChat(input map[string]any) map[string]any {
 	}
 	if text, ok := input["text"].(map[string]any); ok {
 		if format, ok := text["format"].(map[string]any); ok {
-			result["response_format"] = format
+			switch format["type"] {
+			case "json_schema":
+				result["response_format"] = map[string]any{"type": "json_schema", "json_schema": schemaOptions(format)}
+			case "json_object":
+				result["response_format"] = map[string]any{"type": "json_object"}
+			}
 		}
 	}
 	delete(result, "text")
+	convertFunctionTools(result, true)
 	return result
 }
 
@@ -91,12 +98,31 @@ func chatRequestToResponses(input map[string]any) map[string]any {
 		result["max_output_tokens"] = value
 		delete(result, "max_completion_tokens")
 	}
-	if value, ok := result["response_format"]; ok {
-		result["text"] = map[string]any{"format": value}
-		delete(result, "response_format")
+	if format, ok := input["response_format"].(map[string]any); ok {
+		switch format["type"] {
+		case "json_schema":
+			schema, _ := format["json_schema"].(map[string]any)
+			options := schemaOptions(schema)
+			options["type"] = "json_schema"
+			result["text"] = map[string]any{"format": options}
+		case "json_object", "text":
+			result["text"] = map[string]any{"format": map[string]any{"type": format["type"]}}
+		}
 	}
+	delete(result, "response_format")
 	delete(result, "stream_options")
+	convertFunctionTools(result, false)
 	return result
+}
+
+func schemaOptions(format map[string]any) map[string]any {
+	options := map[string]any{"name": "response_schema", "schema": map[string]any{}, "strict": false}
+	for key := range options {
+		if value, exists := format[key]; exists {
+			options[key] = value
+		}
+	}
+	return options
 }
 
 func chatToResponses(input map[string]any, alias string) map[string]any {
@@ -124,12 +150,12 @@ func chatToResponses(input map[string]any, alias string) map[string]any {
 		"id": input["id"], "object": "response", "created_at": input["created"],
 		"status": "completed", "model": alias,
 		"output": output,
-		"usage":  input["usage"],
+		"usage":  convertTokenUsage(input["usage"], true),
 	}
 }
 
 func responsesToChatResponse(input map[string]any, alias string) map[string]any {
-	content := ""
+	var content strings.Builder
 	toolCalls := []any{}
 	if output, ok := input["output"].([]any); ok {
 		for _, item := range output {
@@ -147,25 +173,54 @@ func responsesToChatResponse(input map[string]any, alias string) map[string]any 
 			for _, part := range parts {
 				value, ok := part.(map[string]any)
 				if ok && value["type"] == "output_text" {
-					content, _ = value["text"].(string)
-					break
+					text, _ := value["text"].(string)
+					content.WriteString(text)
 				}
-			}
-			if content != "" {
-				break
 			}
 		}
 	}
-	message := map[string]any{"role": "assistant", "content": content}
+	message := map[string]any{"role": "assistant", "content": content.String()}
+	finish := "stop"
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
-		message["content"] = nil
+		finish = "tool_calls"
+		if content.Len() == 0 {
+			message["content"] = nil
+		}
 	}
 	return map[string]any{
 		"id": input["id"], "object": "chat.completion", "created": input["created_at"], "model": alias,
-		"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": map[bool]string{true: "tool_calls", false: "stop"}[len(toolCalls) > 0]}},
-		"usage":   input["usage"],
+		"choices": []any{map[string]any{"index": 0, "message": message, "finish_reason": finish}},
+		"usage":   convertTokenUsage(input["usage"], false),
 	}
+}
+
+func convertTokenUsage(value any, toResponses bool) any {
+	usage, ok := value.(map[string]any)
+	if !ok {
+		return value
+	}
+	result := make(map[string]any, len(usage))
+	for key, value := range usage {
+		result[key] = value
+	}
+	fields := [][2]string{
+		{"prompt_tokens", "input_tokens"},
+		{"completion_tokens", "output_tokens"},
+		{"prompt_tokens_details", "input_tokens_details"},
+		{"completion_tokens_details", "output_tokens_details"},
+	}
+	for _, field := range fields {
+		from, to := field[0], field[1]
+		if !toResponses {
+			from, to = to, from
+		}
+		if value, present := result[from]; present {
+			result[to] = value
+			delete(result, from)
+		}
+	}
+	return result
 }
 
 func responsesInputToChat(item any) map[string]any {

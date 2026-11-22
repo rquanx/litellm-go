@@ -195,7 +195,12 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		streamFailure := false
 		if err == nil && response != nil && status >= 200 && status < 300 {
 			reader = bufio.NewReader(response.Body)
-			firstFrame, err = readSSEFrame(reader, s.config.MaxBodyBytes)
+			for {
+				firstFrame, err = readSSEFrame(reader, s.config.MaxBodyBytes)
+				if err != nil || bytes.HasPrefix(firstFrame, []byte("data:")) || bytes.Contains(firstFrame, []byte("\ndata:")) {
+					break
+				}
+			}
 			if err != nil || sseFrameFailure(firstFrame) {
 				streamFailure = true
 				retryable = true
@@ -203,7 +208,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 				response.Body.Close()
 			}
 		}
-		if err == nil && response != nil && (status < 200 || status >= 300) {
+		if err == nil && !streamFailure && response != nil && (status < 200 || status >= 300) {
 			body, readErr := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
 			response.Body.Close()
 			response.Body = io.NopCloser(bytes.NewReader(body))
@@ -231,13 +236,14 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			writer.Header().Set("X-Accel-Buffering", "no")
 			writer.WriteHeader(status)
 			flush, _ := writer.(http.Flusher)
-			if len(firstFrame) > 0 {
-				writeStreamFrame(writer, flush, firstFrame, endpoint, candidate.Endpoint, route.Alias)
+			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, input, s.config.MaxBodyBytes)
+			if len(firstFrame) > 0 && !writeStreamFrame(writer, flush, convert(firstFrame)) {
+				return
 			}
 			for {
 				frame, readErr := readSSEFrame(reader, s.config.MaxBodyBytes)
-				if len(frame) > 0 {
-					writeStreamFrame(writer, flush, frame, endpoint, candidate.Endpoint, route.Alias)
+				if len(frame) > 0 && !writeStreamFrame(writer, flush, convert(frame)) {
+					return
 				}
 				if readErr != nil {
 					break
@@ -246,11 +252,11 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 		if !retryable || index == len(eligible)-1 {
+			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if streamFailure {
 				writeError(writer, http.StatusBadGateway, "upstream_stream_failure", "Upstream stream failed before data")
 				return
 			}
-			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if err != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", err.Error())
 			} else {
@@ -266,107 +272,30 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	}
 }
 
-func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []byte, endpoint, candidateEndpoint, alias string) {
-	converted := convertSSEFrame(frame, endpoint, candidateEndpoint, alias)
-	if len(converted) == 0 {
-		return
+func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []byte) bool {
+	if len(frame) == 0 {
+		return true
 	}
-	_, _ = writer.Write(converted)
+	if _, err := writer.Write(frame); err != nil {
+		return false
+	}
 	if flush != nil {
 		flush.Flush()
 	}
+	return true
 }
 
-func convertSSEFrame(frame []byte, endpoint, candidateEndpoint, alias string) []byte {
-	if endpoint == candidateEndpoint {
-		return frame
+func streamConverter(endpoint, upstream, alias string, input map[string]any, limit int64) func([]byte) []byte {
+	if endpoint == "responses" && upstream == "chat-completions" {
+		bridge := &chatResponsesStream{alias: alias, limit: limit}
+		return bridge.convert
 	}
-	var output bytes.Buffer
-	for _, line := range bytes.Split(frame, []byte{'\n'}) {
-		line = bytes.TrimSuffix(line, []byte{'\r'})
-		if !bytes.HasPrefix(line, []byte("data:")) {
-			continue
-		}
-		data := strings.TrimSpace(string(bytes.TrimPrefix(line, []byte("data:"))))
-		if data == "" {
-			continue
-		}
-		if data == "[DONE]" {
-			if endpoint == "responses" {
-				continue
-			}
-			output.WriteString("data: [DONE]\n\n")
-			continue
-		}
-		var value map[string]any
-		if json.Unmarshal([]byte(data), &value) != nil {
-			continue
-		}
-		if endpoint == "responses" && candidateEndpoint == "chat-completions" {
-			if choices, ok := value["choices"].([]any); ok && len(choices) > 0 {
-				choice, _ := choices[0].(map[string]any)
-				delta, _ := choice["delta"].(map[string]any)
-				if content, ok := delta["content"].(string); ok && content != "" {
-					encoded, _ := json.Marshal(map[string]any{"type": "response.output_text.delta", "delta": content, "response": map[string]any{"model": alias}})
-					output.WriteString("event: response.output_text.delta\ndata: " + string(encoded) + "\n\n")
-				}
-				if choice["finish_reason"] != nil {
-					encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias, "output": []any{}}})
-					output.WriteString("event: response.completed\ndata: " + string(encoded) + "\n\n")
-				}
-				if calls, ok := delta["tool_calls"].([]any); ok {
-					for _, raw := range calls {
-						call, _ := raw.(map[string]any)
-						function, _ := call["function"].(map[string]any)
-						if call["id"] != nil || function["name"] != nil {
-							item := map[string]any{"type": "function_call", "id": call["id"], "call_id": call["id"], "name": function["name"], "arguments": ""}
-							encoded, _ := json.Marshal(map[string]any{"type": "response.output_item.added", "item": item})
-							output.WriteString("event: response.output_item.added\ndata: " + string(encoded) + "\n\n")
-						}
-						if function["arguments"] != nil {
-							encoded, _ := json.Marshal(map[string]any{"type": "response.function_call_arguments.delta", "item_id": call["id"], "delta": function["arguments"]})
-							output.WriteString("event: response.function_call_arguments.delta\ndata: " + string(encoded) + "\n\n")
-						}
-					}
-				}
-			} else if value["usage"] != nil {
-				encoded, _ := json.Marshal(map[string]any{"type": "response.completed", "response": map[string]any{"model": alias, "usage": value["usage"]}})
-				output.WriteString("event: response.completed\ndata: " + string(encoded) + "\n\n")
-			}
-			continue
-		}
-		if endpoint == "chat-completions" && candidateEndpoint == "responses" {
-			if value["type"] == "response.output_text.delta" {
-				chunk := map[string]any{"id": value["id"], "object": "chat.completion.chunk", "created": value["created"], "model": alias,
-					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"content": value["delta"]}, "finish_reason": nil}}}
-				encoded, _ := json.Marshal(chunk)
-				output.WriteString("data: " + string(encoded) + "\n\n")
-			} else if value["type"] == "response.output_item.added" {
-				item, _ := value["item"].(map[string]any)
-				if item["type"] == "function_call" {
-					chunk := map[string]any{"id": value["sequence_number"], "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": alias,
-						"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": item["call_id"], "type": "function", "function": map[string]any{"name": item["name"], "arguments": ""}}}}, "finish_reason": nil}}}
-					encoded, _ := json.Marshal(chunk)
-					output.WriteString("data: " + string(encoded) + "\n\n")
-				}
-			} else if value["type"] == "response.function_call_arguments.delta" {
-				chunk := map[string]any{"id": value["sequence_number"], "object": "chat.completion.chunk", "created": time.Now().Unix(), "model": alias,
-					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": value["item_id"], "type": "function", "function": map[string]any{"arguments": value["delta"]}}}}, "finish_reason": nil}}}
-				encoded, _ := json.Marshal(chunk)
-				output.WriteString("data: " + string(encoded) + "\n\n")
-			} else if value["type"] == "response.completed" {
-				if response, ok := value["response"].(map[string]any); ok {
-					response["model"] = alias
-				}
-				chunk := map[string]any{"id": value["id"], "object": "chat.completion.chunk", "created": value["created"], "model": alias,
-					"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "tool_calls"}}}
-				encoded, _ := json.Marshal(chunk)
-				output.WriteString("data: " + string(encoded) + "\n\n")
-				output.WriteString("data: [DONE]\n\n")
-			}
-		}
+	if endpoint == "chat-completions" && upstream == "responses" {
+		options, _ := input["stream_options"].(map[string]any)
+		bridge := &responsesChatStream{alias: alias, includeUsage: inputBool(options, "include_usage")}
+		return bridge.convert
 	}
-	return output.Bytes()
+	return func(frame []byte) []byte { return frame }
 }
 
 func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, alias string) (int, []byte, http.Header, bool, error) {
@@ -409,6 +338,9 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	payload["stream"] = stream
 	if endpoint == "responses" && targetEndpoint == "chat-completions" {
 		payload = responsesToChat(payload)
+		if stream {
+			payload["stream_options"] = map[string]any{"include_usage": true}
+		}
 	} else if endpoint == "chat-completions" && targetEndpoint == "responses" {
 		payload = chatRequestToResponses(payload)
 	}
@@ -570,21 +502,25 @@ func newUUID() string {
 
 func readSSEFrame(reader *bufio.Reader, max int64) ([]byte, error) {
 	frame := make([]byte, 0, 256)
-	for int64(len(frame)) <= max {
-		line, err := reader.ReadBytes('\n')
-		frame = append(frame, line...)
-		trimmed := bytes.TrimSpace(line)
-		if len(trimmed) == 0 && len(frame) > len(line) {
-			return frame, nil
+	lineStart := 0
+	for {
+		fragment, err := reader.ReadSlice('\n')
+		if int64(len(frame))+int64(len(fragment)) > max {
+			return nil, errors.New("sse_frame_too_large")
+		}
+		frame = append(frame, fragment...)
+		if err == bufio.ErrBufferFull {
+			continue
 		}
 		if err != nil {
-			if len(frame) == 0 {
-				return nil, err
-			}
+			return nil, err
+		}
+		line := frame[lineStart:]
+		if bytes.Equal(line, []byte("\n")) || bytes.Equal(line, []byte("\r\n")) {
 			return frame, nil
 		}
+		lineStart = len(frame)
 	}
-	return nil, errors.New("sse_frame_too_large")
 }
 
 func sseFrameFailure(frame []byte) bool {

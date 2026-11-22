@@ -1,0 +1,10 @@
+[
+  {"name":"explicit schema","direction":"responses_to_chat","input":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"},"strict":true}},"output":{"type":"json_schema","json_schema":{"name":"result","schema":{"type":"object"},"strict":true}}},
+  {"name":"schema defaults","direction":"responses_to_chat","input":{"format":{"type":"json_schema"}},"output":{"type":"json_schema","json_schema":{"name":"response_schema","schema":{},"strict":false}}},
+  {"name":"JSON object","direction":"responses_to_chat","input":{"format":{"type":"json_object"}},"output":{"type":"json_object"}},
+  {"name":"plain text","direction":"responses_to_chat","input":{"format":{"type":"text"}},"output":null},
+  {"name":"explicit schema","direction":"chat_to_responses","input":{"type":"json_schema","json_schema":{"name":"result","schema":{"type":"object"},"strict":true}},"output":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"},"strict":true}}},
+  {"name":"schema defaults","direction":"chat_to_responses","input":{"type":"json_schema","json_schema":{}},"output":{"format":{"type":"json_schema","name":"response_schema","schema":{},"strict":false}}},
+  {"name":"JSON object","direction":"chat_to_responses","input":{"type":"json_object"},"output":{"format":{"type":"json_object"}}},
+  {"name":"plain text","direction":"chat_to_responses","input":{"type":"text"},"output":{"format":{"type":"text"}}}
+]
