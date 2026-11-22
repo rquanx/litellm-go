@@ -642,7 +642,9 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 					return baseConvert(frame)
 				}
 			}
-			if recorder, ok := writer.(*callbackResponse); ok && candidate.Endpoint == "anthropic-messages" && endpoint != candidate.Endpoint {
+			if recorder, ok := writer.(*callbackResponse); ok &&
+				(candidate.Endpoint == "bedrock-converse" || isGeminiEndpoint(candidate.Endpoint) ||
+					(candidate.Endpoint == "anthropic-messages" && endpoint != candidate.Endpoint)) {
 				baseConvert := convert
 				convert = func(frame []byte) []byte {
 					if raw := streamErrorBody(frame); len(raw) != 0 {

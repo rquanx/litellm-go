@@ -106,6 +106,13 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		Message struct {
 			Usage usage `json:"usage"`
 		} `json:"message"`
+		Gemini struct {
+			Prompt int `json:"promptTokenCount"`
+			Completion int `json:"candidatesTokenCount"`
+			Thoughts int `json:"thoughtsTokenCount"`
+			Total int `json:"totalTokenCount"`
+			Cached int `json:"cachedContentTokenCount"`
+		} `json:"usageMetadata"`
 	}
 	if json.Unmarshal(data, &payload) != nil {
 		return
@@ -115,6 +122,10 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	}
 	if payload.Type == "message_start" && payload.Message.Usage != (usage{}) {
 		payload.Usage = payload.Message.Usage
+	}
+	if payload.Gemini.Prompt != 0 || payload.Gemini.Completion != 0 || payload.Gemini.Thoughts != 0 {
+		payload.Usage = usage{Prompt: payload.Gemini.Prompt, Completion: payload.Gemini.Completion + payload.Gemini.Thoughts,
+			Total: payload.Gemini.Total, PromptDetails: tokenDetails{Cached: payload.Gemini.Cached}}
 	}
 	if payload.Usage != (usage{}) {
 		if payload.Type != "message_delta" || payload.Usage.Input > 0 || payload.Usage.NativeCacheRead > 0 ||

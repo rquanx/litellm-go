@@ -36,3 +36,11 @@ func TestAnthropicStreamPreservesInputAccountingAcrossDeltas(t *testing.T) {
 		t.Fatalf("unexpected stream accounting: %+v", recorder.event)
 	}
 }
+
+func TestCallbackAccountsForNativeGeminiUsage(t *testing.T) {
+	recorder := &callbackResponse{ResponseWriter: httptest.NewRecorder()}
+	recorder.recordJSON([]byte(`{"usageMetadata":{"promptTokenCount":12,"cachedContentTokenCount":7,"candidatesTokenCount":3,"thoughtsTokenCount":2,"totalTokenCount":17}}`))
+	if recorder.event.Prompt != 12 || recorder.event.Completion != 5 || recorder.event.Total != 17 || recorder.cachedTokens != 7 {
+		t.Fatalf("unexpected Gemini accounting: %+v", recorder.event)
+	}
+}
