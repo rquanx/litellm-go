@@ -25,6 +25,7 @@ type InferenceEvent struct {
 	Prompt     int             `json:"prompt_tokens"`
 	Completion int             `json:"completion_tokens"`
 	Spend      *float64        `json:"response_cost"`
+	CacheHit   bool            `json:"cache_hit"`
 	KeyDigest  string          `json:"-"`
 	Messages   json.RawMessage `json:"messages"`
 	Response   json.RawMessage `json:"response"`
@@ -152,6 +153,11 @@ func (recorder *callbackResponse) finish() {
 	recorder.event.Status = "success"
 	if recorder.status >= 400 {
 		recorder.event.Status = "failure"
+	}
+	if recorder.event.CacheHit {
+		cost := 0.0
+		recorder.event.Spend = &cost
+		return
 	}
 	uncached := recorder.event.Prompt
 	if recorder.cachePrice != nil {

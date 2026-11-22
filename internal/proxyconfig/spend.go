@@ -42,6 +42,7 @@ func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog
 	);
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS model_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS project_id TEXT NOT NULL DEFAULT '';
+	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS cache_hit BOOLEAN NOT NULL DEFAULT FALSE;
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_started_at ON minato_proxy_spend (started_at DESC, request_id);`)
 	if err != nil {
 		return nil, errors.New("could not initialize Go proxy spend logs")
@@ -68,6 +69,7 @@ type spendRow struct {
 	Completion int       `json:"completion_tokens"`
 	Total      int       `json:"total_tokens"`
 	Spend      *float64  `json:"spend"`
+	CacheHit   bool      `json:"cache_hit"`
 }
 
 func (log *SpendLog) Record(event runtime.InferenceEvent) {
@@ -89,11 +91,11 @@ func (log *SpendLog) Record(event runtime.InferenceEvent) {
 	start := time.Unix(0, int64(event.StartTime*1e9)).UTC()
 	end := time.Unix(0, int64(event.EndTime*1e9)).UTC()
 	_, _ = log.db.ExecContext(ctx, `INSERT INTO minato_proxy_spend
-		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend,cache_hit)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		ON CONFLICT (request_id) DO NOTHING`,
 		event.ID, start, end, event.KeyDigest, key.Alias, key.UserID, key.TeamID, key.ProjectID, event.Model, event.ModelGroup,
-		event.ModelID, event.Provider, event.CallType, event.Status, event.Prompt, event.Completion, event.Total, event.Spend)
+		event.ModelID, event.Provider, event.CallType, event.Status, event.Prompt, event.Completion, event.Total, event.Spend, event.CacheHit)
 }
 
 func (log *SpendLog) Start(ctx context.Context) func(runtime.InferenceEvent) {
@@ -126,6 +128,7 @@ func (log *SpendLog) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /global/spend/keys", log.ranked)
 	mux.HandleFunc("GET /global/spend/models", log.ranked)
 	mux.HandleFunc("GET /global/spend/teams", log.teamSpend)
+	mux.HandleFunc("GET /global/activity/cache_hits", log.cacheActivity)
 	mux.Handle("/", next)
 	return mux
 }
@@ -163,7 +166,7 @@ func (log *SpendLog) list(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	const columns = `request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,
-		provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend`
+		provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend,cache_hit`
 	where, args, err := spendFilter(query, start, end)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, err.Error())
@@ -195,7 +198,7 @@ func (log *SpendLog) list(w http.ResponseWriter, request *http.Request) {
 	for rows.Next() {
 		var row spendRow
 		if err := rows.Scan(&row.ID, &row.Started, &row.Ended, &row.Key, &row.KeyAlias, &row.User, &row.Team, &row.Project,
-			&row.Model, &row.Group, &row.ModelID, &row.Provider, &row.Call, &row.Status, &row.Prompt, &row.Completion, &row.Total, &row.Spend); err != nil {
+			&row.Model, &row.Group, &row.ModelID, &row.Provider, &row.Call, &row.Status, &row.Prompt, &row.Completion, &row.Total, &row.Spend, &row.CacheHit); err != nil {
 			modelError(w, http.StatusInternalServerError, "Could not decode spend logs")
 			return
 		}

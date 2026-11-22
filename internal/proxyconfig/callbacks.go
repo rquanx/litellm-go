@@ -16,6 +16,8 @@ import (
 )
 
 type callbackSettings struct {
+	Cache             bool                 `yaml:"cache"`
+	CacheParams       inferenceCacheParams `yaml:"cache_params"`
 	Callbacks        []string          `yaml:"callbacks"`
 	Success          []string          `yaml:"success_callback"`
 	Failure          []string          `yaml:"failure_callback"`

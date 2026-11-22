@@ -81,6 +81,9 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 		'fixture-id','openai','acompletion','success',2,3,5,0.015);`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN cache_hit TEXT DEFAULT 'True'`); err != nil {
+		t.Fatal(err)
+	}
 	for _, expected := range []int64{1, 0} {
 		if count, err := ImportLiteLLMSpend(db); err != nil || count != expected {
 			t.Fatalf("imported %d, want %d: %v", count, expected, err)
@@ -90,4 +93,7 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	if strings.Contains(historical, "sk-plaintext-fixture") || !strings.Contains(historical, `"total_tokens":5`) {
 		t.Fatalf("unexpected historical spend %s", historical)
 	}
+	activity := "/global/activity/cache_hits?start_date=2026-01-01&end_date=2026-01-01"
+	call("sk-test", activity, 401, "master key")
+	call("master", activity, 200, `"cache_hit_true_rows":1,"cached_completion_tokens":3,"generated_completion_tokens":0`)
 }

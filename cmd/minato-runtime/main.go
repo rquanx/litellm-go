@@ -65,6 +65,7 @@ func main() {
 		config.AuthorizeInference = true
 		config.PublicReadinessDetails = proxy.PublicReadinessDetails
 		config.ResponsePolling = proxy.ResponsePolling
+		config.InferenceCache = proxy.InferenceCache
 		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
 		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
 		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks
@@ -214,6 +215,16 @@ func main() {
 		}
 		defer cache.Close()
 		config.PollingStore = cache
+	}
+	if proxy.InferenceCacheRedis != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cache, err := proxyconfig.OpenRedisInferenceCache(ctx, proxy.InferenceCacheRedis, proxy.InferenceCache.Namespace)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer cache.Close()
+		config.InferenceCacheStore = cache
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server

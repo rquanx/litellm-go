@@ -39,6 +39,8 @@ type Config struct {
 	ContainerOwners     ContainerOwners
 	ResponsePolling     ResponsePollingConfig
 	PollingStore        PollingStore
+	InferenceCache      InferenceCacheConfig
+	InferenceCacheStore InferenceCacheStore
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
@@ -105,6 +107,9 @@ func NewServer(config Config) *Server {
 	if config.ContainerOwners == nil && config.AuthorizeInference {
 		config.ContainerOwners = &memoryContainerOwners{owners: make(map[containerKey]string)}
 	}
+	if config.InferenceCache.Enabled && config.InferenceCacheStore == nil {
+		config.InferenceCacheStore = newMemoryInferenceCache()
+	}
 	routes := make(map[string]Route, len(config.Routes))
 	for _, route := range config.Routes {
 		routes[route.Alias] = route
@@ -137,6 +142,9 @@ func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTo
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.inFlight.Add(1)
 	defer s.inFlight.Add(-1)
+	if s.config.AuthorizeInference && s.serveInferenceCacheAdmin(writer, request) {
+		return
+	}
 	if s.config.AuthorizeInference && s.serveHealth(writer, request) {
 		return
 	}
@@ -521,6 +529,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
+	cache := s.prepareInferenceCache(request, endpoint, route.Alias, stream, &payload)
 	if stream {
 		if !endpoints[endpoint].streaming {
 			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
@@ -533,6 +542,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	plan := s.attemptPlan(route.Alias)
 	for {
 		candidate := route.Candidates[plan.index]
+		cacheKey := cache.key(candidate)
+		if cacheKey != "" && s.serveCachedInference(writer, request, cache, cacheKey, candidate, attempts) {
+			return
+		}
 		started := time.Now()
 		reservation, admitted := s.admitDeployment(candidate, payload)
 		var status int
@@ -617,6 +630,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 				if arn := responseHeaders.Get("X-LiteLLM-Invocation-ARN"); arn != "" {
 					writer.Header().Set("X-LiteLLM-Invocation-ARN", arn)
 				}
+			}
+			if cacheKey != "" {
+				s.storeInference(request, cache, cacheKey, status, body)
 			}
 			writeResponse(writer, status, responseHeaders, body)
 			return

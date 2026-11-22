@@ -13,6 +13,7 @@ import (
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/redis/go-redis/v9"
 	"github.com/rquanx/minato-runtime/internal/runtime"
 	"go.yaml.in/yaml/v3"
 )
@@ -136,6 +137,8 @@ type Config struct {
 	publicMCPServers []string
 	ResponsePolling runtime.ResponsePollingConfig
 	PollingRedisURL string
+	InferenceCache runtime.InferenceCacheConfig
+	InferenceCacheRedis *redis.Options
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -196,6 +199,11 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	if file.Callbacks.Cache {
+		if err := file.Callbacks.CacheParams.apply(&config); err != nil {
+			return Config{}, err
+		}
+	}
 	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
 	config.publicModelLinks = file.Callbacks.PublicModelLinks
 	config.publicMCPServers = slices.Clone(file.Callbacks.PublicMCPServers)
