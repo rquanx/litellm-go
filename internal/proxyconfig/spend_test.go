@@ -68,6 +68,8 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	call("master", "/spend/logs/v2?project_id=fixture-project", 200, `"total_count":1`)
 	call("master", "/spend/logs/v2?team_id=fixture-team", 200, `"total_count":1`)
 	call("master", "/global/spend/logs", 200, `"total_tokens":5`)
+	call("master", "/global/spend/models?limit=1", 200, `"model":"fixture"`)
+	call("master", "/global/spend/keys?limit=1", 200, `"key_alias":"test-key"`)
 	if _, err := db.Exec(`CREATE TEMP TABLE "LiteLLM_SpendLogs" (
 		request_id TEXT, "startTime" TIMESTAMP, "endTime" TIMESTAMP, api_key TEXT, metadata JSONB,
 		"user" TEXT, team_id TEXT, model TEXT, model_group TEXT, model_id TEXT, custom_llm_provider TEXT,
