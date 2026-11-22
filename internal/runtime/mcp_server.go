@@ -56,8 +56,13 @@ func (s *Server) serveMCPForServer(w http.ResponseWriter, r *http.Request, serve
 }
 
 func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, access MCPAccess, toolsOnly bool) {
+	if _, legacy := w.(*mcpSSECapture); !legacy {
+		var accepted bool
+		r, accepted = s.streamableMCPRequest(w, r)
+		if !accepted { return }
+	}
 	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
+		w.Header().Set("Allow", "POST, DELETE")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -87,6 +92,9 @@ func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, access MCPA
 		case "2025-11-25", "2025-06-18", "2025-03-26":
 		default:
 			params.ProtocolVersion = "2025-03-26"
+		}
+		if !s.initializeMCPStreamableSession(w, r, params.ProtocolVersion) {
+			return
 		}
 		capabilities := map[string]any{"tools": map[string]any{}}
 		if !toolsOnly {
@@ -166,16 +174,16 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRP
 		writeMCPError(w, http.StatusOK, req.ID, -32602, "Tool is unavailable")
 		return
 	}
-	session, err := s.openMCP(r.Context(), s.mcpRequestServer(r, selected))
+	session, release, err := s.protocolMCPSession(r.Context(), s.mcpRequestServer(r, selected))
 	if err != nil {
 		writeMCPError(w, http.StatusOK, req.ID, -32603, "Could not open MCP session")
 		return
 	}
-	defer session.close()
+	defer release()
 	if params.Arguments == nil {
 		params.Arguments = make(map[string]json.RawMessage)
 	}
-	response, err := session.rpc("tools/call", map[string]any{"name": name, "arguments": params.Arguments})
+	response, err := session.rpcContext(r.Context(), "tools/call", map[string]any{"name": name, "arguments": params.Arguments})
 	if err != nil {
 		writeMCPError(w, http.StatusOK, req.ID, -32603, "MCP tool call failed")
 		return

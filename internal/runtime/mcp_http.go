@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +40,7 @@ type mcpSession struct {
 	output *bufio.Scanner
 	cancel context.CancelFunc
 	closePipes func() bool
+	expired atomic.Bool
 	sseBody io.ReadCloser
 	sseScanner *bufio.Scanner
 	postURL string
@@ -145,6 +147,10 @@ func (session *mcpSession) close() {
 }
 
 func (session *mcpSession) rpc(method string, params any) (json.RawMessage, error) {
+	return session.rpcContext(session.ctx, method, params)
+}
+
+func (session *mcpSession) rpcContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := newUUID()
 	payload := map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
@@ -160,12 +166,15 @@ func (session *mcpSession) rpc(method string, params any) (json.RawMessage, erro
 		}
 		return nil, errors.New("MCP process closed before its response")
 	}
-	response, err := session.send(session.ctx, http.MethodPost, payload)
+	response, err := session.send(ctx, http.MethodPost, payload)
 	if err != nil {
 		return nil, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		if response.StatusCode == http.StatusNotFound && session.id != "" {
+			session.expired.Store(true)
+		}
 		return nil, errors.New("MCP upstream request failed")
 	}
 	if method == "initialize" {
@@ -268,15 +277,15 @@ func (session *mcpSession) startProcess() error {
 }
 
 func (s *Server) mcpTools(ctx context.Context, server MCPServer) ([]map[string]any, error) {
-	session, err := s.openMCP(ctx, server)
+	session, release, err := s.protocolMCPSession(ctx, server)
 	if err != nil {
 		return nil, err
 	}
-	defer session.close()
+	defer release()
 	var tools []map[string]any
 	params := make(map[string]string)
 	for page := 0; page < 32; page++ {
-		body, err := session.rpc("tools/list", params)
+		body, err := session.rpcContext(ctx, "tools/list", params)
 		if err != nil {
 			return nil, err
 		}

@@ -72,24 +72,24 @@ func (s *Server) handleMCPContent(w http.ResponseWriter, r *http.Request, req mc
 }
 
 func (s *Server) requestMCPContent(ctx context.Context, server MCPServer, method string, params any) (json.RawMessage, error) {
-	session, err := s.openMCP(ctx, server)
+	session, release, err := s.protocolMCPSession(ctx, server)
 	if err != nil {
 		return nil, err
 	}
-	defer session.close()
-	return session.rpc(method, params)
+	defer release()
+	return session.rpcContext(ctx, method, params)
 }
 
 func (s *Server) listMCPContent(ctx context.Context, server MCPServer, method, field string) []map[string]any {
-	session, err := s.openMCP(ctx, server)
+	session, release, err := s.protocolMCPSession(ctx, server)
 	if err != nil {
 		return nil
 	}
-	defer session.close()
+	defer release()
 	var items []map[string]any
 	params := make(map[string]string)
 	for page := 0; page < 32; page++ {
-		result, err := session.rpc(method, params)
+		result, err := session.rpcContext(ctx, method, params)
 		if err != nil {
 			break
 		}

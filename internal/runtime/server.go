@@ -76,6 +76,7 @@ type Server struct {
 	mcpServers []MCPServer
 	mcpToolsets []MCPToolset
 	mcpSSESessions map[string]*clientMCPSession
+	mcpStreamableSessions map[string]*mcpStreamableSession
 	passThrough []PassThroughRoute
 	searchFallbacks map[string][]string
 	healthResults map[string]ModelHealthRecord
