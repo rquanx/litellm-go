@@ -216,7 +216,7 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		return
 	}
 	query := upstream.URL.Query()
-	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter"} {
+	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter", "variant"} {
 		for _, value := range request.URL.Query()[key] {
 			if (key == "after" || key == "before") && strings.HasPrefix(value, "minato_") {
 				id, ok := decodeResourceID(value, resourceResultKind(family))
@@ -250,8 +250,8 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		return
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 200 && response.StatusCode < 300 && family == "files" &&
-		strings.HasPrefix(path, "/v1/files/") && strings.HasSuffix(path, "/content") {
+	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.HasSuffix(path, "/content") &&
+		((family == "files" && strings.HasPrefix(path, "/v1/files/")) || family == "videos") {
 		writer.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 		writer.WriteHeader(response.StatusCode)
 		_, _ = io.Copy(writer, response.Body)
