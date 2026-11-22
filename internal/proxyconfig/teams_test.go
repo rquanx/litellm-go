@@ -104,4 +104,25 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	handler = newHandler()
 	send("GET", "/v1/models", key, "", 401)
 	send("GET", "/v1/models", "legacy", "", 200)
+
+	send("POST", "/organization/new", master, `{"organization_id":"org","organization_alias":"Fixture","models":["second"]}`, 200)
+	send("POST", "/team/update", master, `{"team_id":"fixture","organization_id":"org","models":["first"]}`, 200)
+	orgKey := generate(`["all-team-models"]`)
+	if noModels := send("GET", "/v1/models", orgKey, "", 200); strings.Contains(noModels, "first") || strings.Contains(noModels, "second") {
+		t.Fatalf("disjoint organization and team scopes exposed models: %s", noModels)
+	}
+	send("PATCH", "/organization/update", master, `{"organization_id":"org","models":["first","second"]}`, 200)
+	send("POST", "/v1/chat/completions", orgKey, `{"model":"first","messages":[]}`, 503)
+	send("POST", "/v1/chat/completions", orgKey, `{"model":"second","messages":[]}`, 403)
+	organizations := send("GET", "/organization/list?org_alias=fixture", master, "", 200)
+	if !strings.Contains(organizations, `"team_id":"fixture"`) {
+		t.Fatal("organization list omitted its team")
+	}
+	send("DELETE", "/organization/delete", master, `{"organization_ids":["org","unknown"]}`, 404)
+	send("GET", "/team/info?team_id=fixture", master, "", 200)
+	send("DELETE", "/organization/delete", master, `{"organization_ids":["org"]}`, 200)
+	handler = newHandler()
+	send("GET", "/team/info?team_id=fixture", master, "", 404)
+	send("GET", "/v1/models", orgKey, "", 401)
+	send("GET", "/v1/models", "legacy", "", 200)
 }

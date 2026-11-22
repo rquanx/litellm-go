@@ -20,6 +20,7 @@ type virtualKey struct {
 	Models    []string       `json:"models"`
 	Expires   *time.Time     `json:"expires,omitempty"`
 	TeamID    string         `json:"team_id,omitempty"`
+	OrgID     string         `json:"organization_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
@@ -28,6 +29,7 @@ type virtualKey struct {
 type accessState struct {
 	Keys  map[string]virtualKey `json:"keys"`
 	Teams map[string]team       `json:"teams"`
+	Organizations map[string]organization `json:"organizations,omitempty"`
 }
 
 func (state *accessState) UnmarshalJSON(payload []byte) error {
@@ -62,7 +64,7 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 		return nil, errors.New("virtual keys require a proxy master key")
 	}
 	registry := &KeyRegistry{master: master, store: store, state: accessState{
-		Keys: make(map[string]virtualKey), Teams: make(map[string]team),
+		Keys: make(map[string]virtualKey), Teams: make(map[string]team), Organizations: make(map[string]organization),
 	}}
 	if store == nil {
 		return registry, nil
@@ -83,21 +85,32 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
 		return nil, false
 	}
-	if key.TeamID == "" {
-		return unrestrictedScope(key.Models), true
+	scope := unrestrictedScope(key.Models)
+	orgID := key.OrgID
+	if key.TeamID != "" {
+		owner, exists := registry.state.Teams[key.TeamID]
+		if !exists || owner.Blocked || (orgID != "" && orgID != owner.OrgID) {
+			return nil, false
+		}
+		if slices.Contains(scope, "all-team-models") {
+			scope = nil
+		}
+		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
+		orgID = owner.OrgID
 	}
-	owner, exists := registry.state.Teams[key.TeamID]
-	if !exists || owner.Blocked {
-		return nil, false
+	if orgID != "" {
+		owner, exists := registry.state.Organizations[orgID]
+		if !exists {
+			return nil, false
+		}
+		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 	}
-	return intersectScopes(key.Models, owner.Models), true
+	return scope, true
 }
 
 func intersectScopes(key, team []string) []string {
-	key = unrestrictedScope(key)
-	team = unrestrictedScope(team)
 	switch {
-	case key == nil || slices.Contains(key, "all-team-models"):
+	case key == nil:
 		return team
 	case team == nil:
 		return key
@@ -132,6 +145,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	})
 	mux.HandleFunc("GET /key/list", registry.listKeys)
 	registry.registerTeamRoutes(mux)
+	registry.registerOrganizationRoutes(mux)
 	mux.Handle("/", next)
 	return mux
 }
@@ -153,6 +167,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		Duration string         `json:"duration"`
 		Models   []string       `json:"models"`
 		TeamID   string         `json:"team_id"`
+		OrgID    string         `json:"organization_id"`
 		Blocked  bool           `json:"blocked"`
 		Metadata map[string]any `json:"metadata"`
 	}
@@ -166,7 +181,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusBadRequest, "Invalid key duration")
 		return
 	}
-	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID,
+	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, OrgID: input.OrgID,
 		Blocked: input.Blocked, Metadata: input.Metadata, Expires: expiry, CreatedAt: &now}
 	var random [32]byte
 	rand.Read(random[:])

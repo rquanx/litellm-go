@@ -64,9 +64,20 @@ func (registry *KeyRegistry) resolveKey(reference string) string {
 }
 
 func (registry *KeyRegistry) validKey(w http.ResponseWriter, key virtualKey) bool {
+	if key.OrgID != "" {
+		if _, exists := registry.state.Organizations[key.OrgID]; !exists {
+			modelError(w, http.StatusBadRequest, "Organization not found")
+			return false
+		}
+	}
 	if key.TeamID != "" {
-		if _, exists := registry.state.Teams[key.TeamID]; !exists {
+		team, exists := registry.state.Teams[key.TeamID]
+		if !exists {
 			modelError(w, http.StatusBadRequest, "Team not found")
+			return false
+		}
+		if key.OrgID != "" && team.OrgID != key.OrgID {
+			modelError(w, http.StatusBadRequest, "Team belongs to a different organization")
 			return false
 		}
 	} else if slices.Contains(key.Models, "all-team-models") {
@@ -89,6 +100,7 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 		Alias    *string         `json:"key_alias"`
 		Models   *[]string       `json:"models"`
 		TeamID   *string         `json:"team_id"`
+		OrgID    *string         `json:"organization_id"`
 		Blocked  *bool           `json:"blocked"`
 		Metadata *map[string]any `json:"metadata"`
 		Duration json.RawMessage `json:"duration"`
@@ -113,6 +125,9 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.TeamID != nil {
 		key.TeamID = *input.TeamID
+	}
+	if input.OrgID != nil {
+		key.OrgID = *input.OrgID
 	}
 	if input.Blocked != nil {
 		key.Blocked = *input.Blocked
@@ -200,7 +215,7 @@ func (registry *KeyRegistry) listKeys(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	for field := range query {
 		switch field {
-		case "page", "size", "key_hash", "team_id", "key_alias", "return_full_object", "sort_by", "sort_order":
+		case "page", "size", "key_hash", "team_id", "organization_id", "key_alias", "return_full_object", "sort_by", "sort_order":
 		default:
 			modelError(w, http.StatusBadRequest, "Unsupported key list filter")
 			return
@@ -220,10 +235,12 @@ func (registry *KeyRegistry) listKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamID, digest, alias := query.Get("team_id"), query.Get("key_hash"), strings.ToLower(query.Get("key_alias"))
+	orgID := query.Get("organization_id")
 	registry.mu.RLock()
 	keys := make([]keyRecord, 0, len(registry.state.Keys))
 	for token, key := range registry.state.Keys {
-		if (teamID == "" || key.TeamID == teamID) && (digest == "" || token == digest) &&
+		if (orgID == "" || key.OrgID == orgID || registry.state.Teams[key.TeamID].OrgID == orgID) &&
+			(teamID == "" || key.TeamID == teamID) && (digest == "" || token == digest) &&
 			strings.Contains(strings.ToLower(key.Alias), alias) {
 			keys = append(keys, keyRecord{Token: token, virtualKey: key})
 		}

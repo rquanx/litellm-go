@@ -13,6 +13,7 @@ import (
 type team struct {
 	ID       string         `json:"team_id"`
 	Alias    string         `json:"team_alias"`
+	OrgID    string         `json:"organization_id,omitempty"`
 	Models   []string       `json:"models"`
 	Blocked  bool           `json:"blocked"`
 	Metadata map[string]any `json:"metadata"`
@@ -21,6 +22,7 @@ type team struct {
 type teamChanges struct {
 	ID       string          `json:"team_id"`
 	Alias    *string         `json:"team_alias"`
+	OrgID    *string         `json:"organization_id"`
 	Models   *[]string       `json:"models"`
 	Blocked  *bool           `json:"blocked"`
 	Metadata *map[string]any `json:"metadata"`
@@ -53,9 +55,7 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported team configuration")
 		return
 	}
-	if input.Models != nil && slices.ContainsFunc(*input.Models, func(model string) bool {
-		return strings.TrimSpace(model) == "" || model == "all-team-models" || model == "all-proxy-models"
-	}) {
+	if input.Models != nil && !validOwnerModels(*input.Models) {
 		modelError(w, http.StatusBadRequest, "Invalid team model scope")
 		return
 	}
@@ -64,11 +64,7 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 			modelError(w, http.StatusBadRequest, "Supply a team ID")
 			return
 		}
-		var id [16]byte
-		rand.Read(id[:])
-		id[6] = (id[6] & 0x0f) | 0x40
-		id[8] = (id[8] & 0x3f) | 0x80
-		input.ID = fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+		input.ID = newEntityID()
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -87,6 +83,21 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 	if input.Alias != nil {
 		current.Alias = *input.Alias
 	}
+	if input.OrgID != nil {
+		if *input.OrgID != "" {
+			if _, exists := registry.state.Organizations[*input.OrgID]; !exists {
+				modelError(w, http.StatusBadRequest, "Organization not found")
+				return
+			}
+		}
+		for _, key := range registry.state.Keys {
+			if key.TeamID == current.ID && key.OrgID != "" && key.OrgID != *input.OrgID {
+				modelError(w, http.StatusConflict, "Team has keys bound to its organization")
+				return
+			}
+		}
+		current.OrgID = *input.OrgID
+	}
 	if input.Models != nil {
 		current.Models = *input.Models
 	}
@@ -97,6 +108,20 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 		current.Metadata = *input.Metadata
 	}
 	registry.saveTeam(w, current)
+}
+
+func newEntityID() string {
+	var id [16]byte
+	rand.Read(id[:])
+	id[6] = (id[6] & 0x0f) | 0x40
+	id[8] = (id[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", id[:4], id[4:6], id[6:8], id[8:10], id[10:])
+}
+
+func validOwnerModels(models []string) bool {
+	return !slices.ContainsFunc(models, func(model string) bool {
+		return strings.TrimSpace(model) == "" || model == "all-team-models" || model == "all-proxy-models"
+	})
 }
 
 func (registry *KeyRegistry) setTeamBlocked(w http.ResponseWriter, r *http.Request, blocked bool) {
@@ -162,14 +187,18 @@ func (registry *KeyRegistry) listTeams(w http.ResponseWriter, r *http.Request) {
 	if !registry.requireMaster(w, r) {
 		return
 	}
-	if r.URL.Query().Get("user_id") != "" || r.URL.Query().Get("organization_id") != "" {
-		modelError(w, http.StatusBadRequest, "User and organization filters are unsupported")
+	if r.URL.Query().Get("user_id") != "" {
+		modelError(w, http.StatusBadRequest, "User filter is unsupported")
 		return
 	}
+	orgID := r.URL.Query().Get("organization_id")
 	registry.mu.RLock()
 	teams := make([]team, 0, len(registry.state.Teams))
 	for _, id := range slices.Sorted(maps.Keys(registry.state.Teams)) {
-		teams = append(teams, registry.state.Teams[id])
+		current := registry.state.Teams[id]
+		if orgID == "" || orgID == current.OrgID {
+			teams = append(teams, current)
+		}
 	}
 	registry.mu.RUnlock()
 	modelJSON(w, http.StatusOK, teams)
