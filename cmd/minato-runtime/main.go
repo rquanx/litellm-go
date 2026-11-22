@@ -48,6 +48,7 @@ func main() {
 		config.Routes = proxy.Routes
 		config.SearchTools = proxy.SearchTools
 		config.MCPServers = proxy.MCPServers
+		config.Agents = proxy.Agents
 		config.SearchFallbacks = proxy.SearchFallbacks
 		config.PassThrough = proxy.PassThrough
 		config.NumRetries = proxy.NumRetries
@@ -243,6 +244,10 @@ func main() {
 		} else {
 			handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
 		}
+		if err != nil {
+			log.Fatal(err)
+		}
+		handler, err = proxyconfig.WithAgentManagement(handler, server, proxy, stateDB, *statePath)
 		if err != nil {
 			log.Fatal(err)
 		}

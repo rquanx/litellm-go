@@ -16,6 +16,7 @@ import (
 )
 
 type callbackSettings struct {
+	PublicAgentGroups []string `yaml:"public_agent_groups"`
 	Cache             bool                 `yaml:"cache"`
 	CacheParams       inferenceCacheParams `yaml:"cache_params"`
 	Callbacks        []string          `yaml:"callbacks"`

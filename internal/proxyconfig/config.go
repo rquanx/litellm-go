@@ -19,6 +19,7 @@ import (
 )
 
 type configFile struct {
+	Agents []agentConfig `yaml:"agent_list"`
 	Models  []deployment `yaml:"model_list"`
 	SearchTools []searchToolConfig `yaml:"search_tools"`
 	MCPServers map[string]mcpServerConfig `yaml:"mcp_servers"`
@@ -102,6 +103,9 @@ type deployment struct {
 }
 
 type Config struct {
+	Agents []runtime.Agent
+	staticAgents []agentConfig
+	publicAgents []string
 	Routes    []runtime.Route
 	SearchTools []runtime.SearchTool
 	MCPServers []runtime.MCPServer
@@ -161,7 +165,7 @@ func Load(reader io.Reader) (Config, error) {
 	if len(file.SearchTools) == 0 {
 		file.SearchTools = file.General.SearchTools
 	}
-	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough)+len(file.MCPServers) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
+	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough)+len(file.MCPServers)+len(file.Agents) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
 		return Config{}, errors.New("configure a model, search tool, pass-through endpoint or MCP server and use valid router settings")
 	}
 	strategy := file.Router.Strategy
@@ -221,6 +225,11 @@ func Load(reader io.Reader) (Config, error) {
 			return Config{}, err
 		}
 	}
+	agents, err := prepareAgents(file.Agents, file.Callbacks.PublicAgentGroups)
+	if err != nil { return Config{}, err }
+	config.Agents = agents
+	config.staticAgents = file.Agents
+	config.publicAgents = slices.Clone(file.Callbacks.PublicAgentGroups)
 	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
 	config.publicModelLinks = file.Callbacks.PublicModelLinks
 	config.publicMCPServers = slices.Clone(file.Callbacks.PublicMCPServers)

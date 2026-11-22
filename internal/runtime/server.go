@@ -62,6 +62,7 @@ type Config struct {
 	IgnoreTransientHealthErrors bool
 	PassThrough []PassThroughRoute
 	MCPServers []MCPServer
+	Agents []Agent
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
@@ -72,6 +73,7 @@ type Server struct {
 	inFlight atomic.Int64
 	routes map[string]Route
 	configuredRoutes map[string]Route
+	agents []Agent
 	searchTools []SearchTool
 	mcpServers []MCPServer
 	mcpToolsets []MCPToolset
@@ -118,7 +120,7 @@ func NewServer(config Config) *Server {
 		routes[route.Alias] = route
 	}
 	server := &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
-		passThrough: config.PassThrough,
+		passThrough: config.PassThrough, agents: config.Agents,
 		mcpServers: config.MCPServers,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent), veoReads: make(chan struct{}, 1)}
 	if config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0 {
@@ -146,6 +148,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.inFlight.Add(1)
 	defer s.inFlight.Add(-1)
 	if s.config.AuthorizeInference && s.serveInferenceCacheAdmin(writer, request) {
+		return
+	}
+	if s.config.AuthorizeInference && s.serveAgent(writer, request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveHealth(writer, request) {
