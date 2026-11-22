@@ -35,6 +35,7 @@ type configFile struct {
 		EnableHealthCheckRouting bool `yaml:"enable_health_check_routing"`
 		HealthCheckStaleness int `yaml:"health_check_staleness_threshold"`
 		IgnoreTransientHealthErrors bool `yaml:"health_check_ignore_transient_errors"`
+		PassThrough []passThroughConfig `yaml:"pass_through_endpoints"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
@@ -111,6 +112,7 @@ type Config struct {
 	SkipDisabledHealthChecks bool
 	HealthRoutingStaleness time.Duration
 	IgnoreTransientHealthErrors bool
+	PassThrough []runtime.PassThroughRoute
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -135,8 +137,8 @@ func Load(reader io.Reader) (Config, error) {
 	if len(file.SearchTools) == 0 {
 		file.SearchTools = file.General.SearchTools
 	}
-	if len(file.Models)+len(file.SearchTools) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
-		return Config{}, errors.New("model_list or search_tools is required and router settings must use a valid timeout and retry count between zero and eight")
+	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
+		return Config{}, errors.New("a model, search tool or pass-through endpoint is required and router settings must use a valid timeout and retry count between zero and eight")
 	}
 	strategy := file.Router.Strategy
 	if strategy == "" {
@@ -211,6 +213,10 @@ func Load(reader io.Reader) (Config, error) {
 		config.credentials[credential.Name] = credential
 	}
 	var err error
+	config.PassThrough, err = preparePassThrough(file.General.PassThrough)
+	if err != nil {
+		return Config{}, err
+	}
 	config.SearchTools, err = prepareSearchTools(file.SearchTools)
 	if err != nil {
 		return Config{}, err

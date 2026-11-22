@@ -46,6 +46,7 @@ func main() {
 		config.Routes = proxy.Routes
 		config.SearchTools = proxy.SearchTools
 		config.SearchFallbacks = proxy.SearchFallbacks
+		config.PassThrough = proxy.PassThrough
 		config.NumRetries = proxy.NumRetries
 		config.RoutingStrategy = proxy.RoutingStrategy
 		config.LatencyBuffer = proxy.LatencyBuffer

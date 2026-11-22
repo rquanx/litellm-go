@@ -51,6 +51,7 @@ type Config struct {
 	SkipDisabledHealthChecks bool
 	HealthRoutingStaleness time.Duration
 	IgnoreTransientHealthErrors bool
+	PassThrough []PassThroughRoute
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
@@ -119,6 +120,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
+		return
+	}
+	if s.config.AuthorizeInference && s.servePassThrough(writer, request) {
 		return
 	}
 	alias, geminiEndpoint := geminiMethod(request.URL.Path)
