@@ -33,7 +33,7 @@ type InferenceEvent struct {
 
 func newInferenceEvent(endpoint, alias string, stream bool) InferenceEvent {
 	id := newUUID()
-	call := map[string]string{"chat-completions": "acompletion", "responses": "aresponses", "embeddings": "aembedding"}[endpoint]
+	call := map[string]string{"chat-completions": "acompletion", "responses": "aresponses", "interactions": "acreate_interaction", "embeddings": "aembedding"}[endpoint]
 	if call == "" {
 		call = endpoint
 	}
@@ -87,6 +87,13 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		Cached int `json:"cached_tokens"`
 		Creation int `json:"cache_creation_tokens"`
 	}
+	type interactionUsage struct {
+		Input int `json:"total_input_tokens"`
+		Output int `json:"total_output_tokens"`
+		Reasoning int `json:"total_reasoning_tokens"`
+		Cached int `json:"total_cached_tokens"`
+		Total int `json:"total_tokens"`
+	}
 	type usage struct {
 		Prompt int `json:"prompt_tokens"`
 		Completion int `json:"completion_tokens"`
@@ -117,6 +124,20 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	}
 	if json.Unmarshal(data, &payload) != nil {
 		return
+	}
+	if recorder.event.CallType == "acreate_interaction" {
+		var result struct {
+			Usage interactionUsage `json:"usage"`
+			Interaction struct { Usage interactionUsage `json:"usage"` } `json:"interaction"`
+		}
+		if json.Unmarshal(data, &result) == nil {
+			data := result.Usage
+			if result.Interaction.Usage != (interactionUsage{}) {
+				data = result.Interaction.Usage
+			}
+			payload.Usage = usage{Input: data.Input, Output: data.Output + data.Reasoning, Total: data.Total,
+				InputDetails: tokenDetails{Cached: data.Cached}}
+		}
 	}
 	if payload.Response.Usage != (usage{}) {
 		payload.Usage = payload.Response.Usage

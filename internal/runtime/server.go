@@ -190,6 +190,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			request = copy
 		}
 	}
+	interaction, isInteraction := interactionSuffix(request.URL.EscapedPath())
 	var modelScope []string
 	realtime := isRealtimeSocketPath(request.URL.Path)
 	rtHTTP := realtimeHTTPOperation(request.URL.Path)
@@ -197,7 +198,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.realtimeCall(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && (realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
+	if s.config.AuthorizeInference && (isInteraction || realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
 		request.URL.Path == "/utils/token_counter" || request.URL.Path == "/model_group/info" ||
 		strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
@@ -208,6 +209,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 			return
 		}
+	}
+	if s.config.AuthorizeInference && isInteraction {
+		s.serveInteraction(writer, request, interaction, modelScope)
+		return
 	}
 	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
 		s.countTokens(writer, request, modelScope)
