@@ -18,7 +18,9 @@ func TestResponsePollingReturnsPartialOutputAndChecksOwner(t *testing.T) {
 			t.Errorf("unexpected background request %+v", payload)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"first\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_fixture\",\"content\":[]}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_fixture\",\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_fixture\",\"content_index\":0,\"delta\":\"first\"}\n\n")
 		w.(http.Flusher).Flush()
 		select {
 		case <-release:

@@ -246,6 +246,9 @@ func (w *pollingWriter) Write(data []byte) (int, error) {
 	if w.cache.entries[w.id] != entry || entry.body["status"] == "cancelled" || entry.body["status"] == "failed" {
 		return 0, context.Canceled
 	}
+	if entry.body["status"] == "completed" || entry.body["status"] == "incomplete" {
+		return len(data), nil
+	}
 	if w.status >= 400 {
 		entry.body["status"] = "failed"
 		var failure map[string]any
@@ -327,21 +330,47 @@ func applyPollingEvent(state, event map[string]any) {
 		return
 	}
 	state["status"] = "in_progress"
-	if kind != "response.output_item.added" && kind != "response.output_item.done" && kind != "response.output_text.delta" {
-		return
-	}
-	index, ok := event["output_index"].(float64)
-	if !ok || index < 0 || index >= 512 || float64(int(index)) != index {
+	switch kind {
+	case "response.output_item.added", "response.output_item.done", "response.output_text.delta",
+		"response.content_part.added", "response.content_part.done", "response.function_call_arguments.delta", "response.function_call_arguments.done":
+	default:
 		return
 	}
 	output, _ := state["output"].([]any)
+	index, ok := event["output_index"].(float64)
+	if !ok {
+		if id, exists := event["item_id"].(string); exists {
+			for i, raw := range output {
+				item, _ := raw.(map[string]any)
+				if item["id"] == id {
+					index, ok = float64(i), true
+					break
+				}
+			}
+		}
+	}
+	if !ok || index < 0 || index >= 512 || float64(int(index)) != index {
+		return
+	}
 	for len(output) <= int(index) {
 		output = append(output, nil)
 	}
 	if item, ok := event["item"].(map[string]any); ok {
 		output[int(index)] = item
-	} else if kind == "response.output_text.delta" {
+	} else {
 		item, _ := output[int(index)].(map[string]any)
+		if kind == "response.function_call_arguments.delta" || kind == "response.function_call_arguments.done" {
+			if item != nil && item["type"] == "function_call" {
+				if kind == "response.function_call_arguments.done" {
+					item["arguments"] = event["arguments"]
+				} else {
+					value, _ := item["arguments"].(string)
+					delta, _ := event["delta"].(string)
+					item["arguments"] = value + delta
+				}
+			}
+			return
+		}
 		if item == nil {
 			item = map[string]any{"type": "message", "role": "assistant"}
 		}
@@ -352,6 +381,15 @@ func applyPollingEvent(state, event map[string]any) {
 		content, _ := item["content"].([]any)
 		for len(content) <= int(contentIndex) {
 			content = append(content, nil)
+		}
+		if kind == "response.content_part.added" || kind == "response.content_part.done" {
+			if part, ok := event["part"].(map[string]any); ok {
+				content[int(contentIndex)] = part
+				item["content"] = content
+				output[int(index)] = item
+				state["output"] = output
+			}
+			return
 		}
 		part, _ := content[int(contentIndex)].(map[string]any)
 		if part == nil {
