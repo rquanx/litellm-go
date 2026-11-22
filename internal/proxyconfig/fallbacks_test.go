@@ -26,7 +26,7 @@ func TestSpecializedFallbacks(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"error":{"code":"context_length_exceeded"}}`)
+		fmt.Fprint(w, `{"error":{"type":"invalid_request_error","message":"prompt is too long"}}`)
 	}))
 	defer main.Close()
 	var contextCalls, policyCalls atomic.Int32
@@ -71,11 +71,11 @@ router_settings:
 			t.Fatalf("got %d %s, want %d containing %q", response.Code, response.Body, status, result)
 		}
 	}
-	call("restricted", `{"model":"primary","messages":[]}`, 400, "context_length_exceeded")
+	call("restricted", `{"model":"primary","messages":[]}`, 400, "prompt is too long")
 	call("master", `{"model":"primary","messages":[]}`, 200, "context fallback")
 	call("master", `{"model":"primary","messages":[],"stream":true}`, 200, "policy fallback")
 	call("restricted", `{"model":"primary","messages":[],"router_settings_override":{"context_window_fallbacks":["large"]}}`, 400, "invalid_fallback")
-	call("master", `{"model":"primary","messages":[],"context_window_fallbacks":[]}`, 400, "context_length_exceeded")
+	call("master", `{"model":"primary","messages":[],"context_window_fallbacks":[]}`, 400, "prompt is too long")
 	call("master", `{"model":"primary","messages":[],"router_settings_override":{"context_window_fallbacks":[{"primary":["large"]}]}}`, 200, "context fallback")
 	for token, expect := range map[string]string{"master": `"fallbacks":["large"]`, "restricted": `"fallbacks":[]`} {
 		request := httptest.NewRequest("GET", "/models?include_metadata=true&fallback_type=context_window", nil)

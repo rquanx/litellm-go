@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -19,7 +20,7 @@ type attemptPlan struct {
 
 func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Header, retryable bool, body []byte, route *Route) bool {
 	if len(body) > 0 && !plan.specialized && route.Candidates[plan.index].RoutingGroup != "" {
-		kind := specializedFailure(body)
+		kind := specializedFailure(status, body)
 		var candidates []Candidate
 		switch kind {
 		case "context":
@@ -42,21 +43,37 @@ func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Head
 	return plan.advance(ctx, status, headers, retryable, len(route.Candidates))
 }
 
-func specializedFailure(body []byte) string {
+func specializedFailure(status int, body []byte) string {
 	var payload struct {
 		Error struct {
-			Code string `json:"code"`
+			Code any `json:"code"`
 			Type string `json:"type"`
+			Message string `json:"message"`
+			Inner struct {
+				Code string `json:"code"`
+			} `json:"innererror"`
 		} `json:"error"`
 	}
 	if json.Unmarshal(body, &payload) != nil {
 		return ""
 	}
-	for _, value := range []string{payload.Error.Code, payload.Error.Type} {
+	code, _ := payload.Error.Code.(string)
+	for _, value := range []string{code, payload.Error.Type, payload.Error.Inner.Code} {
 		switch value {
 		case "context_length_exceeded", "context_window_exceeded":
 			return "context"
 		case "content_policy_violation", "content_filter", "ResponsibleAIPolicyViolation":
+			return "policy"
+		}
+	}
+	if status == http.StatusBadRequest || status == http.StatusRequestEntityTooLarge {
+		message := strings.ToLower(payload.Error.Message)
+		for _, marker := range []string{"prompt is too long", "prompt: length", "maximum context length", "context length exceeded"} {
+			if strings.Contains(message, marker) {
+				return "context"
+			}
+		}
+		if strings.Contains(message, "content policy violation") {
 			return "policy"
 		}
 	}
