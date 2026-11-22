@@ -183,6 +183,12 @@ func rerankTarget(candidate Candidate) string {
 		return base + "/inference/" + strings.Join(model, "/")
 	case "nvidia_nim":
 		return nvidiaRerankTarget(base, candidate.ModelID)
+	case "watsonx":
+		version := candidate.APIVersion
+		if version == "" {
+			version = "2024-03-13"
+		}
+		return base + "/ml/v1/text/rerank?version=" + url.QueryEscape(version)
 	case "azure_ai":
 		if strings.HasSuffix(base, "/v1/rerank") || strings.HasSuffix(base, "/v2/rerank") {
 			return base

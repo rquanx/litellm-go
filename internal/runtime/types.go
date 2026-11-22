@@ -29,6 +29,7 @@ type Candidate struct {
 	CacheReadPrice   *float64          `json:"-"`
 	CacheCreationPrice *float64        `json:"-"`
 	Vertex           *VertexConfig     `json:"-"`
+	WatsonX          *WatsonXRerankConfig `json:"-"`
 	Weight           *float64          `json:"weight,omitempty"`
 	RPM              *int              `json:"rpm,omitempty"`
 	TPM              *int              `json:"tpm,omitempty"`

@@ -5,18 +5,36 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 func TestProviderRerank(t *testing.T) {
+	var iamCalls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/identity/token" {
+			iamCalls.Add(1)
+			if err := r.ParseForm(); err != nil || r.Form.Get("apikey") != "fixture-ibm" ||
+				r.Form.Get("grant_type") != "urn:ibm:params:oauth:grant-type:apikey" {
+				t.Error("unexpected IBM IAM request")
+			}
+			w.Write([]byte(`{"access_token":"fixture-iam","expires_in":600}`))
+			return
+		}
 		var request map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Error(err)
 		}
 		switch r.URL.Path {
+		case "/ml/v1/text/rerank":
+			if r.Header.Get("Authorization") != "Bearer fixture-iam" || r.URL.Query().Get("version") != "2024-03-13" ||
+				request["model_id"] != "ibm/ranker" || request["project_id"] != "fixture-project" {
+				t.Errorf("unexpected watsonx request: %+v", request)
+			}
+			w.Write([]byte(`{"model_id":"ibm/ranker","results":[{"index":0,"score":0.9,"input":"fixture"}],"input_token_count":3}`))
+			return
 		case "/hf/rerank":
 			texts, _ := request["texts"].([]any)
 			if r.Header.Get("Authorization") != "Bearer fixture-hf" || len(texts) != 1 ||
@@ -125,6 +143,9 @@ func TestProviderRerank(t *testing.T) {
 	t.Setenv("AZURE_AI_API_KEY", "fixture-azure-ai")
 	t.Setenv("HF_API_BASE", upstream.URL+"/hf")
 	t.Setenv("HUGGINGFACE_API_KEY", "fixture-hf")
+	t.Setenv("WATSONX_IAM_URL", upstream.URL+"/identity/token")
+	t.Setenv("WATSONX_TOKEN", "")
+	t.Setenv("WATSONX_ZENAPIKEY", "")
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: cohere
@@ -164,12 +185,15 @@ model_list:
   - model_name: hf
     litellm_params: {model: huggingface/org/hf-ranker}
     model_info: {mode: rerank}
+  - model_name: watsonx
+    litellm_params: {model: watsonx/ibm/ranker, api_base: os.environ/TEST_RERANK_BASE, api_key: fixture-ibm, watsonx_project: fixture-project}
+    model_info: {mode: rerank}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking", "azure-ai", "hf"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking", "azure-ai", "hf", "watsonx", "watsonx"} {
 		body := `{"model":"` + model + `","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`
 		if model == "hf" {
 			body = strings.TrimSuffix(body, "}") + `,"return_documents":true}`
@@ -200,9 +224,14 @@ model_list:
 			expected = `{"id":"nvidia-job","meta":{"billed_units":{"total_tokens":5}},"results":[{"document":{"text":"document"},"index":0,"relevance_score":0.9}]}`
 		case "azure-ai":
 			expected = `{"id":"azure-job","results":[{"index":0,"relevance_score":0.9}],"meta":{"billed_units":{"search_units":1}}}`
+		case "watsonx":
+			expected = `{"id":"ibm/ranker","meta":{"tokens":{"input_tokens":3}},"results":[{"document":{"text":"fixture"},"index":0,"relevance_score":0.9}]}`
 		}
 		if expected != "" && strings.TrimSpace(result.Body.String()) != expected {
 			t.Fatalf("unexpected %s response: %s", model, result.Body.String())
 		}
+	}
+	if calls := iamCalls.Load(); calls != 1 {
+		t.Fatalf("IBM IAM called %d times, want 1", calls)
 	}
 }

@@ -84,6 +84,8 @@ type deployment struct {
 		AWSProfile string `yaml:"aws_profile_name" json:"aws_profile_name,omitempty"`
 		VertexProject string `yaml:"vertex_project" json:"vertex_project,omitempty"`
 		VertexLocation string `yaml:"vertex_location" json:"vertex_location,omitempty"`
+		WatsonXProject string `yaml:"watsonx_project" json:"watsonx_project,omitempty"`
+		WatsonXSpace string `yaml:"space_id" json:"space_id,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
@@ -464,7 +466,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
-	nativeRerank := (provider == "infinity" || provider == "huggingface") && entry.rerankConfigured()
+	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
 		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
@@ -521,6 +523,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = "https://api.together.xyz"
 		case "azure_ai":
 			base = os.Getenv("AZURE_AI_API_BASE")
+		case "watsonx":
+			base = firstWatsonXEnv("WATSONX_API_BASE", "WATSONX_URL", "WX_URL", "WML_URL")
 		case "huggingface":
 			base = os.Getenv("HF_API_BASE")
 			if base == "" {
@@ -597,6 +601,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			key = os.Getenv("TOGETHERAI_API_KEY")
 		case "azure_ai":
 			key = os.Getenv("AZURE_AI_API_KEY")
+		case "watsonx":
+			key = firstWatsonXEnv("WATSONX_APIKEY", "WATSONX_API_KEY", "WX_API_KEY")
 		case "huggingface":
 			key = os.Getenv("HUGGINGFACE_API_KEY")
 		case "nvidia_nim":
@@ -619,6 +625,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	version, err := resolveEnv(entry.Params.APIVersion)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_version: %w", err)
+	}
+	var watsonx *runtime.WatsonXRerankConfig
+	if provider == "watsonx" && nativeRerank {
+		watsonx, err = entry.watsonXRerankConfig()
+		if err != nil {
+			return runtime.Candidate{}, err
+		}
 	}
 	var azureADToken string
 	if provider == "azure" {
@@ -704,7 +717,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
-		Vertex: vertex, AzureADToken: azureADToken}, nil
+		Vertex: vertex, AzureADToken: azureADToken, WatsonX: watsonx}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

@@ -542,6 +542,8 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 					body = nvidiaRerankResponse(body, payload.fields)
 				case "huggingface":
 					body = huggingFaceRerankResponse(body, payload.fields, candidate.ModelID)
+				case "watsonx":
+					body = watsonXRerankResponse(body)
 				case "infinity", "together_ai":
 					body = cohereStyleRerankResponse(body, candidate.Provider)
 				}
@@ -891,6 +893,13 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 			payload = nvidiaRerankRequest(payload)
 		case "huggingface":
 			payload = huggingFaceRerankRequest(payload)
+		case "watsonx":
+			payload, err := watsonXRerankRequest(payload, candidate)
+			if err != nil {
+				return nil, "", err
+			}
+			body, err := json.Marshal(payload)
+			return body, "application/json", err
 		case "infinity", "azure_ai":
 			payload = hostedRerankRequest(payload, candidate.Provider)
 			if input.fields["max_chunks_per_doc"] != nil {
@@ -990,6 +999,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 	} else if isGeminiEndpoint(candidate.Endpoint) || candidate.Endpoint == "google-embeddings" || candidate.Vertex != nil {
 		if err := applyGeminiCredential(upstream, candidate, apiKey); err != nil {
+			release()
+			return nil, err
+		}
+	} else if candidate.WatsonX != nil && candidate.Endpoint == "rerank" {
+		if err := candidate.WatsonX.authorize(upstream, s.config.HTTPClient, apiKey); err != nil {
 			release()
 			return nil, err
 		}
