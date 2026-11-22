@@ -91,7 +91,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
 		path := request.URL.Path
 		azureResponses := path == "/openai/v1/responses" || strings.HasPrefix(path, "/openai/v1/responses/")
-		if unversioned := proxyAlias(path); unversioned || azureResponses {
+		anthropicMessages := path == "/anthropic/v1/messages" || strings.HasPrefix(path, "/anthropic/v1/messages/")
+		if unversioned := proxyAlias(path); unversioned || azureResponses || anthropicMessages {
 			normalized := *request.URL
 			if unversioned {
 				normalized.Path = "/v1" + path
@@ -99,8 +100,12 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 					normalized.RawPath = "/v1" + normalized.RawPath
 				}
 			} else {
-				normalized.Path = strings.TrimPrefix(path, "/openai")
-				normalized.RawPath = strings.TrimPrefix(normalized.RawPath, "/openai")
+				prefix := "/openai"
+				if anthropicMessages {
+					prefix = "/anthropic"
+				}
+				normalized.Path = strings.TrimPrefix(path, prefix)
+				normalized.RawPath = strings.TrimPrefix(normalized.RawPath, prefix)
 			}
 			copy := request.WithContext(request.Context())
 			copy.URL = &normalized
@@ -154,6 +159,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.config.AuthorizeInference && isVideoPath(request.URL.Path) {
 		s.videoResource(writer, request, modelScope)
+		return
+	}
+	if s.config.AuthorizeInference && isAnthropicBatchPath(request.URL.Path) {
+		s.anthropicBatch(writer, request, modelScope)
 		return
 	}
 	if s.config.AuthorizeInference && resourceFamily(request.URL.Path) != "" {
@@ -969,7 +978,7 @@ func inferenceCredential(request *http.Request) string {
 			return key
 		}
 	}
-	if request.URL.Path == "/v1/messages" || request.URL.Path == "/v1/messages/count_tokens" {
+	if request.URL.Path == "/v1/messages" || request.URL.Path == "/v1/messages/count_tokens" || isAnthropicBatchPath(request.URL.Path) {
 		if key := request.Header.Get("x-api-key"); key != "" {
 			return key
 		}
