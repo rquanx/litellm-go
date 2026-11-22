@@ -252,6 +252,11 @@ func main() {
 			log.Fatal(err)
 		}
 	}
+	if stateDB != nil && keys != nil {
+		var err error
+		handler, err = proxyconfig.WithMemoryManagement(handler, stateDB, keys)
+		if err != nil { log.Fatal(err) }
+	}
 	if keys != nil {
 		handler = keys.Handler(handler)
 	}

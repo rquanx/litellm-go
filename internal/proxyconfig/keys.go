@@ -189,12 +189,16 @@ func (permission *objectPermission) scope() []string {
 }
 
 func (registry *KeyRegistry) authorize(token string) ([]string, keyObjectPermissions, bool) {
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	return registry.authorizeLocked(token)
+}
+
+func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectPermissions, bool) {
 	var permissions keyObjectPermissions
 	if token == "" {
 		return nil, permissions, false
 	}
-	registry.mu.RLock()
-	defer registry.mu.RUnlock()
 	key, exists := registry.state.Keys[keyDigest(token)]
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
 		return nil, permissions, false
