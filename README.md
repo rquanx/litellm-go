@@ -44,7 +44,7 @@ go run ./cmd/minato-runtime --config proxy.yaml --host 127.0.0.1 --port 4000
 
 Standalone mode supports dynamic deployments through `/model/info`, `/model/new`, `/model/update`, `PATCH /model/{model_id}/update` and `/model/delete`. `--model-state PATH` persists these deployments to a local JSON file. Use credential references in dynamic deployments to keep provider secrets in the environment.
 
-The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. Use `--key-state PATH` to persist hashed virtual keys, scopes and expiry. Use distinct paths for the model and key state files.
+The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. It can also list keys, change their scopes and validity, or temporarily block them through `/key/list`, `/key/update`, `/key/block` and `/key/unblock`. Use `--key-state PATH` to persist hashed virtual keys, teams and access settings. Use distinct paths for the model and key state files.
 
 The master key can also create teams at `/team/new` and bind new virtual keys with `team_id`. Bound keys use the intersection of their own model list and the team's list. A key with `models: ["all-team-models"]` follows the team's model list. Changes made through `/team/update`, `/team/block` and `/team/unblock` apply to subsequent requests. `/team/delete` revokes the team's keys, including when another team is later created with the same ID.
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
@@ -54,6 +55,36 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	}
 	send(handler, "POST", "/v1/chat/completions", generated.Key, `{"model":"restricted","messages":[]}`, 403)
 	send(handler, "POST", "/key/generate", generated.Key, `{}`, 401)
-	send(handler, "POST", "/key/delete", master, `{"keys":["`+generated.Key+`"]}`, 200)
+	digest := keyDigest(generated.Key)
+	reference := `{"key":"` + digest + `"}`
+	send(handler, "POST", "/key/block", master, reference, 200)
+	handler = buildHandler()
+	send(handler, "GET", "/v1/models", generated.Key, "", 401)
+	send(handler, "POST", "/key/unblock", master, reference, 200)
+	send(handler, "POST", "/key/update", master, `{"key":"`+digest+`","key_alias":"Fixture","duration":"2w","models":["restricted"]}`, 200)
+	models = send(handler, "GET", "/v1/models", generated.Key, "", 200)
+	if strings.Contains(models, "permitted") || !strings.Contains(models, "restricted") {
+		t.Fatal("key update did not change the inference model scope")
+	}
+	send(handler, "POST", "/key/update", master, `{"key":"`+digest+`","duration":null}`, 200)
+	keys := send(handler, "GET", "/key/list?key_alias=fixture&return_full_object=true", master, "", 200)
+	if !strings.Contains(keys, digest) || !strings.Contains(keys, "Fixture") || strings.Contains(keys, generated.Key) || strings.Contains(keys, "expires") {
+		t.Fatalf("unexpected key list: %s", keys)
+	}
+	send(handler, "POST", "/key/delete", master, `{"keys":["`+digest+`"]}`, 200)
 	send(buildHandler(), "GET", "/v1/models", generated.Key, "", 401)
+}
+
+func TestKeyExpiryCalendarUnits(t *testing.T) {
+	now := time.Date(2024, time.January, 31, 12, 0, 0, 0, time.UTC)
+	for input, expected := range map[string]time.Time{
+		"1mo": time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC),
+		"1w": now.Add(7 * 24 * time.Hour),
+		"1d": now.Add(24 * time.Hour),
+	} {
+		expiry, err := keyExpiry(now, input)
+		if err != nil || expiry == nil || !expiry.Equal(expected) {
+			t.Errorf("%s: expiry=%v, err=%v, want %v", input, expiry, err, expected)
+		}
+	}
 }

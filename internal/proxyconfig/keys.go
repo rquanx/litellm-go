@@ -16,10 +16,13 @@ import (
 )
 
 type virtualKey struct {
-	Alias   string     `json:"key_alias,omitempty"`
-	Models  []string   `json:"models"`
-	Expires *time.Time `json:"expires,omitempty"`
-	TeamID  string     `json:"team_id,omitempty"`
+	Alias     string         `json:"key_alias,omitempty"`
+	Models    []string       `json:"models"`
+	Expires   *time.Time     `json:"expires,omitempty"`
+	TeamID    string         `json:"team_id,omitempty"`
+	Blocked   bool           `json:"blocked"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedAt *time.Time     `json:"created_at,omitempty"`
 }
 
 type accessState struct {
@@ -77,7 +80,7 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 	key, exists := registry.state.Keys[keyDigest(token)]
-	if !exists || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
+	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
 		return nil, false
 	}
 	if key.TeamID == "" {
@@ -120,6 +123,14 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("POST /key/generate", registry.generate)
 	mux.HandleFunc("GET /key/info", registry.info)
 	mux.HandleFunc("POST /key/delete", registry.remove)
+	mux.HandleFunc("POST /key/update", registry.updateKey)
+	mux.HandleFunc("POST /key/block", func(w http.ResponseWriter, r *http.Request) {
+		registry.setKeyBlocked(w, r, true)
+	})
+	mux.HandleFunc("POST /key/unblock", func(w http.ResponseWriter, r *http.Request) {
+		registry.setKeyBlocked(w, r, false)
+	})
+	mux.HandleFunc("GET /key/list", registry.listKeys)
 	registry.registerTeamRoutes(mux)
 	mux.Handle("/", next)
 	return mux
@@ -138,35 +149,32 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Alias    string   `json:"key_alias"`
-		Duration string   `json:"duration"`
-		Models   []string `json:"models"`
-		TeamID   string   `json:"team_id"`
+		Alias    string         `json:"key_alias"`
+		Duration string         `json:"duration"`
+		Models   []string       `json:"models"`
+		TeamID   string         `json:"team_id"`
+		Blocked  bool           `json:"blocked"`
+		Metadata map[string]any `json:"metadata"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key configuration")
 		return
 	}
-	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID}
-	if input.Duration != "" {
-		duration, err := time.ParseDuration(input.Duration)
-		if err != nil || duration <= 0 {
-			modelError(w, http.StatusBadRequest, "Invalid key duration")
-			return
-		}
-		expires := time.Now().Add(duration).UTC()
-		key.Expires = &expires
+	now := time.Now().UTC()
+	expiry, err := keyExpiry(now, input.Duration)
+	if err != nil {
+		modelError(w, http.StatusBadRequest, "Invalid key duration")
+		return
 	}
+	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID,
+		Blocked: input.Blocked, Metadata: input.Metadata, Expires: expiry, CreatedAt: &now}
 	var random [32]byte
 	rand.Read(random[:])
 	token := "sk-" + hex.EncodeToString(random[:])
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if input.TeamID != "" {
-		if _, exists := registry.state.Teams[input.TeamID]; !exists {
-			modelError(w, http.StatusBadRequest, "Team not found")
-			return
-		}
+	if !registry.validKey(w, key) {
+		return
 	}
 	next := registry.state
 	next.Keys = maps.Clone(next.Keys)
@@ -183,13 +191,14 @@ func (registry *KeyRegistry) info(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.URL.Query().Get("key")
 	registry.mu.RLock()
-	key, exists := registry.state.Keys[keyDigest(token)]
+	digest := registry.resolveKey(token)
+	key, exists := registry.state.Keys[digest]
 	registry.mu.RUnlock()
 	if !exists {
 		modelError(w, http.StatusNotFound, "Virtual key not found")
 		return
 	}
-	modelJSON(w, http.StatusOK, map[string]any{"key": keyDigest(token), "info": key})
+	modelJSON(w, http.StatusOK, map[string]any{"key": digest, "info": key})
 }
 
 func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +218,7 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 	next.Keys = maps.Clone(next.Keys)
 	removed := 0
 	for _, token := range input.Keys {
-		digest := keyDigest(token)
+		digest := registry.resolveKey(token)
 		if _, exists := next.Keys[digest]; exists {
 			delete(next.Keys, digest)
 			removed++
