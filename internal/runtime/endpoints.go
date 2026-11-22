@@ -82,6 +82,9 @@ func isConversationEndpoint(endpoint string) bool {
 }
 
 func servesEndpoint(request, provider string) bool {
+	if request == "gemini-count-tokens" {
+		return isGeminiEndpoint(provider)
+	}
 	if request == "responses-compact" {
 		return provider == "responses" || provider == "responses-compact"
 	}

@@ -32,6 +32,8 @@ func geminiMethod(path string) (alias, endpoint string) {
 		return alias, "gemini-generate"
 	case "streamGenerateContent":
 		return alias, "gemini-stream"
+	case "countTokens":
+		return alias, "gemini-count-tokens"
 	}
 	return "", ""
 }
@@ -60,6 +62,9 @@ func geminiURL(base, model, endpoint string) string {
 	if endpoint == "google-embeddings" {
 		return target + ":batchEmbedContents"
 	}
+	if endpoint == "gemini-count-tokens" {
+		return target + ":countTokens"
+	}
 	if endpoint == "gemini-stream" {
 		return target + ":streamGenerateContent?alt=sse"
 	}
@@ -81,6 +86,9 @@ func geminiTarget(candidate Candidate, endpoint string) string {
 		"/publishers/google/models/" + url.PathEscape(model)
 	if endpoint == "google-embeddings" {
 		return target + ":predict"
+	}
+	if endpoint == "gemini-count-tokens" {
+		return target + ":countTokens"
 	}
 	if endpoint == "gemini-stream" {
 		return target + ":streamGenerateContent?alt=sse"

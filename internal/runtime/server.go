@@ -107,7 +107,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.realtimeCall(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && (realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+	if s.config.AuthorizeInference && (realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
+		request.URL.Path == "/utils/token_counter" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
@@ -116,6 +117,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 			return
 		}
+	}
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
+		s.countTokens(writer, request, modelScope)
+		return
 	}
 	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "client_secrets" {
 		s.realtimeClientSecret(writer, request, modelScope)
@@ -741,7 +746,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if candidate.RelativeAPIBase {
 		target = strings.TrimRight(candidate.APIBase, "/") + strings.TrimPrefix(path, "/v1")
 	}
-	if isGeminiEndpoint(endpoint) {
+	if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
 		target = geminiTarget(candidate, endpoint)
 	} else if isGeminiEndpoint(candidate.Endpoint) {
 		geminiEndpoint := "gemini-generate"

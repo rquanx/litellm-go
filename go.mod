@@ -10,6 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.9
 	github.com/coder/websocket v1.8.14
 	github.com/lib/pq v1.10.9
+	github.com/tiktoken-go/tokenizer v0.6.2
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.45.0
 	golang.org/x/oauth2 v0.30.0
@@ -29,4 +30,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.14 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.6 // indirect
 	github.com/aws/smithy-go v1.24.1 // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 )
