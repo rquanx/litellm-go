@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ type configFile struct {
 		ContextFallbacks []map[string][]string `yaml:"context_window_fallbacks"`
 		PolicyFallbacks []map[string][]string `yaml:"content_policy_fallbacks"`
 		Strategy string                 `yaml:"routing_strategy"`
+		ModelGroupAliases map[string]modelGroupAlias `yaml:"model_group_alias"`
 		StrategyArgs struct {
 			Buffer float64 `yaml:"lowest_latency_buffer"`
 			Samples int `yaml:"max_latency_list_size"`
@@ -78,6 +80,7 @@ type Config struct {
 	defaultFallbacks []string
 	contextFallbacks []map[string][]string
 	policyFallbacks []map[string][]string
+	modelGroupAliases map[string]modelGroupAlias
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -109,7 +112,7 @@ func Load(reader io.Reader) (Config, error) {
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
-		LatencyBuffer: args.Buffer, LatencySamples: args.Samples}
+		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases}
 	var err error
 	config.MasterKey, err = resolveEnv(file.General.MasterKey)
 	if err != nil {
@@ -150,14 +153,35 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		}
 		byAlias[model.Alias] = append(byAlias[model.Alias], candidate)
 	}
+	for alias, mapping := range config.modelGroupAliases {
+		if alias == "" || alias == "*" || byAlias[alias] != nil {
+			return nil, fmt.Errorf("invalid or repeated model group alias %q", alias)
+		}
+		if byAlias[mapping.Model] == nil || config.modelGroupAliases[mapping.Model].Model != "" {
+			return nil, fmt.Errorf("model group alias %q must target a configured model", alias)
+		}
+	}
+	for alias, mapping := range config.modelGroupAliases {
+		candidates := slices.Clone(byAlias[mapping.Model])
+		for index := range candidates {
+			candidates[index].RoutingGroup = alias
+		}
+		byAlias[alias] = candidates
+		aliases = append(aliases, alias)
+	}
 	fallbacks := make(map[string][]string)
 	for _, entry := range config.fallbacks {
 		for alias, targets := range entry {
 			_, exists := fallbacks[alias]
-			if len(byAlias[alias]) == 0 || exists {
+			if (alias != "*" && len(byAlias[alias]) == 0) || exists {
 				return nil, fmt.Errorf("unknown or repeated fallback alias %q", alias)
 			}
 			fallbacks[alias] = targets
+			for _, target := range targets {
+				if byAlias[target] == nil {
+					return nil, fmt.Errorf("unknown fallback target %q", target)
+				}
+			}
 		}
 	}
 	for _, alias := range config.defaultFallbacks {
@@ -169,7 +193,18 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 	for _, alias := range aliases {
 		candidates := append([]runtime.Candidate(nil), byAlias[alias]...)
 		seen := map[string]bool{alias: true}
-		for _, target := range fallbacks[alias] {
+		targets, explicit := fallbacks[alias]
+		if !explicit {
+			targets, explicit = fallbacks[config.modelGroupAliases[alias].Model]
+		}
+		if !explicit {
+			targets = fallbacks["*"]
+		}
+		for _, target := range targets {
+			if !explicit && (target == alias || target == config.modelGroupAliases[alias].Model ||
+				!runtime.CompatibleEndpoints(candidates[0].Endpoint, byAlias[target][0].Endpoint)) {
+				continue
+			}
 			if seen[target] || len(byAlias[target]) == 0 {
 				return nil, fmt.Errorf("model %q has an unknown or repeated fallback %q", alias, target)
 			}
@@ -190,7 +225,7 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 				return nil, fmt.Errorf("model %q mixes incompatible endpoints", alias)
 			}
 		}
-		routes = append(routes, runtime.Route{Alias: alias, Version: "1", Candidates: candidates})
+		routes = append(routes, runtime.Route{Alias: alias, Version: "1", Candidates: candidates, Hidden: config.modelGroupAliases[alias].Hidden})
 	}
 	for _, policy := range []struct {
 		name string
@@ -208,6 +243,9 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		}
 		for index := range routes {
 			candidates, exists := overrides[routes[index].Alias]
+			if !exists {
+				candidates, exists = overrides[config.modelGroupAliases[routes[index].Alias].Model]
+			}
 			if !exists {
 				candidates = []runtime.Candidate{}
 			}

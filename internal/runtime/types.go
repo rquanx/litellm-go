@@ -3,6 +3,7 @@ package runtime
 type Route struct {
 	Alias      string      `json:"alias"`
 	Version    string      `json:"version"`
+	Hidden     bool        `json:"-"`
 	Candidates []Candidate `json:"candidates"`
 	ContextFallback []Candidate `json:"-"`
 	PolicyFallback []Candidate `json:"-"`

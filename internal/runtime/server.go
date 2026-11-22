@@ -198,7 +198,7 @@ func (s *Server) models(writer http.ResponseWriter, request *http.Request, model
 		}
 	}
 	for alias, route := range s.configuredRoutes {
-		if _, overridden := s.routes[alias]; !overridden && modelAllowed(modelScope, alias) {
+		if _, overridden := s.routes[alias]; !overridden && !route.Hidden && modelAllowed(modelScope, alias) {
 			data = append(data, s.modelEntry(route, includeMetadata, fallbackType, modelScope))
 		}
 	}
@@ -213,7 +213,7 @@ func (s *Server) modelInfo(writer http.ResponseWriter, alias string, scope []str
 		route, ok = s.configuredRoutes[alias]
 	}
 	s.mu.RUnlock()
-	if !ok || !modelAllowed(scope, alias) {
+	if !ok || route.Hidden || !modelAllowed(scope, alias) {
 		writeError(writer, http.StatusNotFound, "model_not_found", "Model not found")
 		return
 	}
