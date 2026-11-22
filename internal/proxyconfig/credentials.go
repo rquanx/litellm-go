@@ -21,6 +21,7 @@ type modelState struct {
 	Credentials map[string]providerCredential `json:"credentials,omitempty"`
 	Router      routerPatch                   `json:"router_settings,omitempty"`
 	SearchTools []managedSearchTool           `json:"search_tools,omitempty"`
+	PassThrough []passThroughConfig          `json:"pass_through_endpoints,omitempty"`
 }
 
 func (state *modelState) UnmarshalJSON(payload []byte) error {

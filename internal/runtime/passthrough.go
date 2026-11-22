@@ -43,13 +43,22 @@ func IsBuiltInProxyPath(path string) bool {
 	return false
 }
 
+func (s *Server) ReplacePassThrough(routes []PassThroughRoute) {
+	s.mu.Lock()
+	s.passThrough = routes
+	s.mu.Unlock()
+}
+
 func (s *Server) servePassThrough(w http.ResponseWriter, r *http.Request) bool {
-	if len(s.config.PassThrough) == 0 || IsBuiltInProxyPath(r.URL.Path) {
+	s.mu.RLock()
+	routes := s.passThrough
+	s.mu.RUnlock()
+	if len(routes) == 0 || IsBuiltInProxyPath(r.URL.Path) {
 		return false
 	}
 	var selected *PassThroughRoute
-	for i := range s.config.PassThrough {
-		route := &s.config.PassThrough[i]
+	for i := range routes {
+		route := &routes[i]
 		if !slices.Contains(route.Methods, r.Method) ||
 			(r.URL.Path != route.Path && !(route.IncludeSubpath && strings.HasPrefix(r.URL.Path, route.Path+"/"))) {
 			continue

@@ -63,6 +63,7 @@ type Server struct {
 	routes map[string]Route
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
+	passThrough []PassThroughRoute
 	searchFallbacks map[string][]string
 	healthResults map[string]ModelHealthRecord
 	configGeneration uint64
@@ -95,6 +96,7 @@ func NewServer(config Config) *Server {
 		routes[route.Alias] = route
 	}
 	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
+		passThrough: config.PassThrough,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 

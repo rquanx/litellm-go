@@ -113,6 +113,7 @@ type Config struct {
 	HealthRoutingStaleness time.Duration
 	IgnoreTransientHealthErrors bool
 	PassThrough []runtime.PassThroughRoute
+	staticPassThrough []passThroughConfig
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -217,6 +218,7 @@ func Load(reader io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	config.staticPassThrough = file.General.PassThrough
 	config.SearchTools, err = prepareSearchTools(file.SearchTools)
 	if err != nil {
 		return Config{}, err

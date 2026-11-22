@@ -1,14 +1,69 @@
 package proxyconfig
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestManagedPassThroughSurvivesRestart(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer provider-fixture" {
+			t.Error("persisted pass-through credential missing")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer origin.Close()
+	const master = "fixture-master"
+	state := filepath.Join(t.TempDir(), "state.json")
+	open := func() http.Handler {
+		t.Helper()
+		handler, err := WithModelManagement(runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true}), Config{}, master, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler
+	}
+	handler := open()
+	call := func(method, path, key, body string, status int) []byte {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+key)
+		output := httptest.NewRecorder()
+		handler.ServeHTTP(output, request)
+		if output.Code != status || strings.Contains(output.Body.String(), "provider-fixture") {
+			t.Fatalf("%s %s returned %d, want %d: %s", method, path, output.Code, status, output.Body.String())
+		}
+		return output.Body.Bytes()
+	}
+	body := `{"path":"/vendor","target":"` + origin.URL + `","headers":{"Authorization":"Bearer provider-fixture"}}`
+	call("POST", passThroughManagementPath, "wrong", body, 401)
+	var created struct {
+		Endpoints []struct {
+			ID string `json:"id"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(call("POST", passThroughManagementPath, master, body, 200), &created); err != nil ||
+		len(created.Endpoints) != 1 || created.Endpoints[0].ID == "" {
+		t.Fatalf("missing managed pass-through endpoint: %+v", created)
+	}
+	call("GET", "/vendor", master, "", 204)
+	handler = open()
+	call("GET", "/vendor", master, "", 204)
+	id := created.Endpoints[0].ID
+	call("POST", passThroughManagementPath+"/"+id, master, strings.Replace(body, "/vendor", "/renamed", 1), 200)
+	call("GET", "/vendor", master, "", 404)
+	call("GET", "/renamed", master, "", 204)
+	call("DELETE", passThroughManagementPath+"?endpoint_id="+id, master, "", 200)
+	handler = open()
+	call("GET", "/renamed", master, "", 404)
+}
 
 func TestConfiguredPassThroughKeepsProxyCredentialsLocal(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

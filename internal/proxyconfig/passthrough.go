@@ -13,17 +13,17 @@ import (
 )
 
 type passThroughConfig struct {
-	Path          string            `yaml:"path"`
-	Target        string            `yaml:"target"`
-	Headers       map[string]string `yaml:"headers"`
-	DefaultQuery  map[string]string `yaml:"default_query_params"`
-	ForwardHeaders bool             `yaml:"forward_headers"`
-	MergeQuery    bool              `yaml:"merge_query_params"`
-	IncludeSubpath bool             `yaml:"include_subpath"`
-	Auth          *bool             `yaml:"auth"`
-	Methods       []string          `yaml:"methods"`
-	Cost          *float64          `yaml:"cost_per_request"`
-	ID            string            `yaml:"id"`
+	Path          string            `yaml:"path" json:"path"`
+	Target        string            `yaml:"target" json:"target"`
+	Headers       map[string]string `yaml:"headers" json:"headers,omitempty"`
+	DefaultQuery  map[string]string `yaml:"default_query_params" json:"default_query_params,omitempty"`
+	ForwardHeaders bool             `yaml:"forward_headers" json:"forward_headers,omitempty"`
+	MergeQuery    bool              `yaml:"merge_query_params" json:"merge_query_params,omitempty"`
+	IncludeSubpath bool             `yaml:"include_subpath" json:"include_subpath"`
+	Auth          *bool             `yaml:"auth" json:"auth,omitempty"`
+	Methods       []string          `yaml:"methods" json:"methods,omitempty"`
+	Cost          *float64          `yaml:"cost_per_request" json:"cost_per_request,omitempty"`
+	ID            string            `yaml:"id" json:"id,omitempty"`
 }
 
 func preparePassThrough(entries []passThroughConfig) ([]runtime.PassThroughRoute, error) {

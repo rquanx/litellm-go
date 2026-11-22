@@ -27,6 +27,7 @@ type modelRegistry struct {
 	credentials map[string]providerCredential
 	router routerPatch
 	searchTools []managedSearchTool
+	passThrough []passThroughConfig
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -50,12 +51,16 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		}
 		registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
 		registry.searchTools = state.SearchTools
+		registry.passThrough = state.PassThrough
 	}
 	config, err := registry.compileConfiguration(registry.models, registry.credentials, registry.router, registry.searchTools)
 	if err != nil {
 		return nil, err
 	}
 	server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
+	if err := registry.loadPassThrough(); err != nil {
+		return nil, err
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /model/info", registry.info)
@@ -66,6 +71,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)
 	registry.registerCredentialRoutes(mux)
 	registry.registerSearchToolRoutes(mux)
+	registry.registerPassThroughRoutes(mux)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.HandleFunc("POST /config/update", registry.updateRouter)
@@ -285,7 +291,7 @@ func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, model
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools}); err != nil {
+		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools, PassThrough: registry.passThrough}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
