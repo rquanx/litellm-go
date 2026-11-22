@@ -21,10 +21,15 @@ var providerPassThroughRoutes = map[string]providerPassThrough{
 	"assemblyai":    {"https://api.assemblyai.com", "ASSEMBLYAI_API_BASE", []string{"ASSEMBLYAI_API_KEY"}},
 	"eu.assemblyai": {"https://api.eu.assemblyai.com", "ASSEMBLYAI_EU_API_BASE", []string{"ASSEMBLYAI_EU_API_KEY", "ASSEMBLYAI_API_KEY"}},
 	"cursor":        {"https://api.cursor.com", "CURSOR_API_BASE", []string{"CURSOR_API_KEY"}},
+	"openai":        {"https://api.openai.com", "OPENAI_API_BASE", []string{"OPENAI_API_KEY"}},
 }
 
 func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request) bool {
 	provider, suffix, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	prefix := "/" + provider
+	if provider == "openai_passthrough" {
+		provider = "openai"
+	}
 	config, ok := providerPassThroughRoutes[provider]
 	if !ok || suffix == "" || !slices.Contains([]string{"GET", "POST", "PUT", "DELETE", "PATCH"}, r.Method) {
 		return false
@@ -67,7 +72,7 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid pass-through provider base")
 		return true
 	}
-	route := PassThroughRoute{Path: "/" + provider, Target: *target, MergeQuery: true, Headers: make(http.Header)}
+	route := PassThroughRoute{Path: prefix, Target: *target, MergeQuery: true, Headers: make(http.Header)}
 	switch provider {
 	case "gemini":
 		route.UpstreamQuery = url.Values{"key": {key}}
@@ -75,6 +80,18 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		route.Headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(key+":")))
 	case "assemblyai", "eu.assemblyai":
 		route.Headers.Set("Authorization", key)
+	case "openai":
+		route.Headers.Set("Authorization", "Bearer "+key)
+		route.Headers.Set("Api-Key", key)
+		if target.Hostname() == "api.openai.com" && !strings.HasPrefix(suffix, "v1/") && !strings.HasSuffix(target.Path, "/v1") {
+			route.Target = *target.JoinPath("v1")
+		}
+		for _, segment := range strings.Split(suffix, "/") {
+			if slices.Contains([]string{"assistants", "threads", "runs", "steps"}, segment) {
+				route.Headers.Set("OpenAI-Beta", "assistants=v2")
+				break
+			}
+		}
 	default:
 		route.Headers.Set("Authorization", "Bearer "+key)
 	}
