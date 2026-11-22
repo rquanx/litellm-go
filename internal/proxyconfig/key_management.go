@@ -147,7 +147,7 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 		key.Metadata = *input.Metadata
 	}
 	if input.ObjectPermission != nil {
-		var permission *searchPermission
+		var permission *objectPermission
 		if err := decodeModelJSON(strings.NewReader(string(input.ObjectPermission)), &permission); err != nil {
 			modelError(w, http.StatusBadRequest, "Invalid or unsupported object permission")
 			return

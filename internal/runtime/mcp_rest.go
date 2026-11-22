@@ -7,22 +7,35 @@ import (
 	"strings"
 )
 
+type MCPAccess func(MCPServer, string) bool
+
+func (s *Server) mcpAccess(r *http.Request) (MCPAccess, bool) {
+	if s.authorized(r) {
+		return func(MCPServer, string) bool { return true }, true
+	}
+	token := ProxyCredential(r)
+	if s.config.AuthorizeMCP != nil {
+		return s.config.AuthorizeMCP(token)
+	}
+	if s.config.AuthorizeKey != nil {
+		_, valid := s.config.AuthorizeKey(token)
+		if valid {
+			return func(server MCPServer, _ string) bool { return server.AllowAllKeys }, true
+		}
+	}
+	return nil, false
+}
+
 func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
 	list := r.Method == http.MethodGet && r.URL.Path == "/mcp-rest/tools/list"
 	call := r.Method == http.MethodPost && r.URL.Path == "/mcp-rest/tools/call"
 	if !list && !call {
 		return false
 	}
-	admin := s.authorized(r)
-	if !admin {
-		valid := false
-		if s.config.AuthorizeKey != nil {
-			_, valid = s.config.AuthorizeKey(ProxyCredential(r))
-		}
-		if !valid {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
-			return true
-		}
+	access, valid := s.mcpAccess(r)
+	if !valid {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+		return true
 	}
 	select {
 	case s.sem <- struct{}{}:
@@ -31,19 +44,19 @@ func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if list {
-		s.listMCPTools(w, r, admin)
+		s.listMCPTools(w, r, access)
 	} else {
-		s.callMCPTool(w, r, admin)
+		s.callMCPTool(w, r, access)
 	}
 	return true
 }
 
-func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, admin bool) {
+func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, access MCPAccess) {
 	selector := r.URL.Query().Get("server_id")
 	tools := make([]map[string]any, 0)
 	var listed bool
 	for _, server := range s.config.MCPServers {
-		if (!admin && !server.AllowAllKeys) || (selector != "" && !server.matches(selector)) {
+		if !access(server, "") || (selector != "" && !server.matches(selector)) {
 			continue
 		}
 		listed = true
@@ -55,7 +68,11 @@ func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, admin bool
 			}
 			continue
 		}
-		tools = append(tools, results...)
+		for _, tool := range results {
+			if access(server, tool["name"].(string)) {
+				tools = append(tools, tool)
+			}
+		}
 	}
 	if !listed && selector != "" {
 		writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": "server_not_found", "message": "MCP server not found"})
@@ -64,7 +81,7 @@ func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, admin bool
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": nil, "message": nil})
 }
 
-func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, admin bool) {
+func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPAccess) {
 	var input struct {
 		ServerID string `json:"server_id"`
 		Name string `json:"name"`
@@ -86,7 +103,7 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, admin bool)
 				break
 			}
 		}
-		if (!admin && !server.AllowAllKeys) || !server.allowsTool(name) {
+		if name == "" || !access(server, name) || !server.allowsTool(name) {
 			writeError(w, http.StatusForbidden, "tool_not_allowed", "MCP tool access denied")
 			return
 		}
@@ -118,7 +135,11 @@ func (server MCPServer) allowsTool(name string) bool {
 	if server.AllowedTools == nil {
 		return true
 	}
-	for _, pattern := range server.AllowedTools {
+	return MCPToolMatches(server.AllowedTools, name)
+}
+
+func MCPToolMatches(patterns []string, name string) bool {
+	for _, pattern := range patterns {
 		if match, _ := path.Match(pattern, name); pattern == name || match {
 			return true
 		}

@@ -66,15 +66,22 @@ mcp_servers:
   fixture:
     url: os.environ/TEST_MCP_URL
     transport: http
-    allow_all_keys: true
     allowed_tools: [echo]
     headers: {Authorization: Bearer mcp-fixture}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.state.Teams["fixture-team"] = team{ID: "fixture-team", ObjectPermission: &objectPermission{
+		MCPServers: []string{"fixture"}, MCPTools: map[string][]string{"fixture": {"echo"}},
+	}}
+	registry.state.Keys[keyDigest("fixture-key")] = virtualKey{TeamID: "fixture-team"}
 	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "fixture-master", MCPServers: cfg.MCPServers,
-		AuthorizeKey: func(token string) ([]string, bool) { return nil, token == "fixture-key" }})
+		AuthorizeMCP: registry.AuthorizeMCP})
 	call := func(method, p, key, body string, status int) string {
 		t.Helper()
 		request := httptest.NewRequest(method, p, strings.NewReader(body))

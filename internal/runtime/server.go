@@ -33,6 +33,7 @@ type Config struct {
 	NumRetries         int
 	AuthorizeKey       func(string) ([]string, bool)
 	AuthorizeSearch    func(string) ([]string, bool)
+	AuthorizeMCP       func(string) (MCPAccess, bool)
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string

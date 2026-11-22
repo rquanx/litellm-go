@@ -45,7 +45,7 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 		{"LiteLLM_OrganizationTable", importer.importOrganization},
 		{"LiteLLM_UserTable", state.importUser},
 		{"LiteLLM_TeamTable", func(payload []byte) error {
-			payload, err := importer.expandSearchPermission(payload)
+			payload, err := importer.expandObjectPermission(payload)
 			if err != nil {
 				return err
 			}
@@ -63,7 +63,7 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 			if status.Blocked {
 				return nil
 			}
-			payload, err := importer.expandSearchPermission(payload)
+			payload, err := importer.expandObjectPermission(payload)
 			if err != nil {
 				return err
 			}
@@ -105,7 +105,7 @@ func (importer accessImporter) importObjectPermission(payload []byte) error {
 	return nil
 }
 
-func (importer accessImporter) expandSearchPermission(payload []byte) ([]byte, error) {
+func (importer accessImporter) expandObjectPermission(payload []byte) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &fields); err != nil || fields == nil {
 		return nil, errors.New("invalid access record")
@@ -122,13 +122,21 @@ func (importer accessImporter) expandSearchPermission(payload []byte) ([]byte, e
 	if err := json.Unmarshal(importer.objectPermissions[id], &restrictions); err != nil {
 		return nil, errors.New("invalid object permission")
 	}
-	permission := searchPermission{}
+	permission := objectPermission{}
 	for name, value := range restrictions {
 		switch name {
 		case "object_permission_id":
 		case "search_tools":
 			if err := json.Unmarshal(value, &permission.SearchTools); err != nil {
 				return nil, errors.New("invalid search tool scope")
+			}
+		case "mcp_servers":
+			if err := json.Unmarshal(value, &permission.MCPServers); err != nil {
+				return nil, errors.New("invalid MCP server scope")
+			}
+		case "mcp_tool_permissions":
+			if err := json.Unmarshal(value, &permission.MCPTools); err != nil {
+				return nil, errors.New("invalid MCP tool scope")
 			}
 		default:
 			switch string(value) {

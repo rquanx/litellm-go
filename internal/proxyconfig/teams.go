@@ -18,7 +18,7 @@ type team struct {
 	Models   []string       `json:"models"`
 	Blocked  bool           `json:"blocked"`
 	Metadata map[string]any `json:"metadata"`
-	ObjectPermission *searchPermission `json:"object_permission,omitempty"`
+	ObjectPermission *objectPermission `json:"object_permission,omitempty"`
 	Members []teamMembership `json:"members_with_roles,omitempty"`
 }
 
@@ -111,7 +111,7 @@ func (registry *KeyRegistry) writeTeam(w http.ResponseWriter, r *http.Request, u
 		current.Models = *input.Models
 	}
 	if input.ObjectPermission != nil {
-		var permission *searchPermission
+		var permission *objectPermission
 		if err := decodeModelJSON(strings.NewReader(string(input.ObjectPermission)), &permission); err != nil {
 			modelError(w, http.StatusBadRequest, "Invalid or unsupported object permission")
 			return

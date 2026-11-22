@@ -14,16 +14,10 @@ type mcpRPCRequest struct {
 }
 
 func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
-	admin := s.authorized(r)
-	if !admin {
-		valid := false
-		if s.config.AuthorizeKey != nil {
-			_, valid = s.config.AuthorizeKey(ProxyCredential(r))
-		}
-		if !valid {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
-			return
-		}
+	access, valid := s.mcpAccess(r)
+	if !valid {
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+		return
 	}
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
@@ -70,19 +64,19 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.Method == "tools/list" {
-			s.handleMCPList(w, r, req, admin)
+			s.handleMCPList(w, r, req, access)
 		} else {
-			s.handleMCPCall(w, r, req, admin)
+			s.handleMCPCall(w, r, req, access)
 		}
 	default:
 		writeMCPError(w, http.StatusOK, req.ID, -32601, "Method not found")
 	}
 }
 
-func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, admin bool) {
+func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, access MCPAccess) {
 	tools := make([]map[string]any, 0)
 	for _, server := range s.config.MCPServers {
-		if !admin && !server.AllowAllKeys {
+		if !access(server, "") {
 			continue
 		}
 		entries, err := s.mcpTools(r.Context(), server)
@@ -90,7 +84,11 @@ func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRP
 			continue
 		}
 		for _, tool := range entries {
-			tool["name"] = server.Name + "-" + tool["name"].(string)
+			name := tool["name"].(string)
+			if !access(server, name) {
+				continue
+			}
+			tool["name"] = server.Name + "-" + name
 			delete(tool, "mcp_info")
 			tools = append(tools, tool)
 		}
@@ -98,7 +96,7 @@ func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRP
 	writeMCPResult(w, req.ID, map[string]any{"tools": tools})
 }
 
-func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, admin bool) {
+func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, access MCPAccess) {
 	var params struct {
 		Name string `json:"name"`
 		Arguments map[string]json.RawMessage `json:"arguments"`
@@ -114,7 +112,7 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRP
 		}
 	}
 	name := strings.TrimPrefix(params.Name, selected.Name+"-")
-	if selected.Name == "" || (!admin && !selected.AllowAllKeys) || !selected.allowsTool(name) {
+	if selected.Name == "" || name == "" || !access(selected, name) || !selected.allowsTool(name) {
 		writeMCPError(w, http.StatusOK, req.ID, -32602, "Tool is unavailable")
 		return
 	}

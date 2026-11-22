@@ -26,7 +26,7 @@ type virtualKey struct {
 	UserID    string         `json:"user_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
-	ObjectPermission *searchPermission `json:"object_permission,omitempty"`
+	ObjectPermission *objectPermission `json:"object_permission,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
 	RotationTarget string     `json:"rotation_target,omitempty"`
 }
@@ -87,46 +87,93 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 }
 
 func (registry *KeyRegistry) AuthorizeSearch(token string) ([]string, bool) {
-	_, tools, valid := registry.authorize(token)
-	return tools, valid
+	_, permissions, valid := registry.authorize(token)
+	return intersectScopes(permissions.key.scope(), permissions.team.scope()), valid
 }
 
-type searchPermission struct {
-	SearchTools []string `json:"search_tools"`
+func (registry *KeyRegistry) AuthorizeMCP(token string) (runtime.MCPAccess, bool) {
+	_, permissions, valid := registry.authorize(token)
+	if !valid {
+		return nil, false
+	}
+	return func(server runtime.MCPServer, tool string) bool {
+		key, team := permissions.key, permissions.team
+		serverAllowed := team.grantsMCPServer(server)
+		if key != nil && key.MCPServers != nil {
+			serverAllowed = key.grantsMCPServer(server) && (team == nil || team.MCPServers == nil || serverAllowed)
+		}
+		serverAllowed = serverAllowed || server.AllowAllKeys
+		return serverAllowed && key.allowsMCPTool(server, tool) && team.allowsMCPTool(server, tool)
+	}, true
 }
 
-func (permission *searchPermission) scope() []string {
+type objectPermission struct {
+	SearchTools []string `json:"search_tools,omitempty"`
+	MCPServers []string `json:"mcp_servers"`
+	MCPTools map[string][]string `json:"mcp_tool_permissions,omitempty"`
+}
+
+func (permission *objectPermission) grantsMCPServer(server runtime.MCPServer) bool {
+	if permission == nil {
+		return false
+	}
+	for _, id := range permission.MCPServers {
+		if id == server.ID || id == server.Name || (server.Alias != "" && id == server.Alias) {
+			return true
+		}
+	}
+	return false
+}
+
+func (permission *objectPermission) allowsMCPTool(server runtime.MCPServer, tool string) bool {
+	if permission == nil || tool == "" {
+		return true
+	}
+	for _, id := range []string{server.ID, server.Name, server.Alias} {
+		if id != "" && len(permission.MCPTools[id]) != 0 && !runtime.MCPToolMatches(permission.MCPTools[id], tool) {
+			return false
+		}
+	}
+	return true
+}
+
+type keyObjectPermissions struct {
+	key, team *objectPermission
+}
+
+func (permission *objectPermission) scope() []string {
 	if permission == nil || len(permission.SearchTools) == 0 {
 		return nil
 	}
 	return permission.SearchTools
 }
 
-func (registry *KeyRegistry) authorize(token string) ([]string, []string, bool) {
+func (registry *KeyRegistry) authorize(token string) ([]string, keyObjectPermissions, bool) {
+	var permissions keyObjectPermissions
 	if token == "" {
-		return nil, nil, false
+		return nil, permissions, false
 	}
 	registry.mu.RLock()
 	defer registry.mu.RUnlock()
 	key, exists := registry.state.Keys[keyDigest(token)]
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
-		return nil, nil, false
+		return nil, permissions, false
 	}
 	if key.RotationTarget != "" {
 		key, exists = registry.state.Keys[key.RotationTarget]
 		if !exists || key.Blocked || key.RotationTarget != "" || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
-			return nil, nil, false
+			return nil, permissions, false
 		}
 	}
 	scope := unrestrictedScope(key.Models)
-	searchScope := key.ObjectPermission.scope()
+	permissions.key = key.ObjectPermission
 	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
 		scope = nil
 	}
 	if key.UserID != "" {
 		user, exists := registry.state.Users[key.UserID]
 		if !exists || user.Role != "internal_user" {
-			return nil, nil, false
+			return nil, permissions, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(user.Models))
 	}
@@ -134,10 +181,10 @@ func (registry *KeyRegistry) authorize(token string) ([]string, []string, bool) 
 	if key.TeamID != "" {
 		owner, exists := registry.state.Teams[key.TeamID]
 		if !exists || owner.Blocked || (orgID != "" && orgID != owner.OrgID) {
-			return nil, nil, false
+			return nil, permissions, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
-		searchScope = intersectScopes(searchScope, owner.ObjectPermission.scope())
+		permissions.team = owner.ObjectPermission
 		if index := memberIndex(owner, key.UserID); index >= 0 {
 			scope = intersectScopes(scope, unrestrictedScope(owner.Members[index].Models))
 		}
@@ -146,15 +193,15 @@ func (registry *KeyRegistry) authorize(token string) ([]string, []string, bool) 
 	if orgID != "" {
 		owner, exists := registry.state.Organizations[orgID]
 		if !exists {
-			return nil, nil, false
+			return nil, permissions, false
 		}
 		if index := organizationMemberIndex(owner, key.UserID); index >= 0 &&
 			owner.Members[index].Role == "internal_user_viewer" {
-			return nil, nil, false
+			return nil, permissions, false
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 	}
-	return scope, searchScope, true
+	return scope, permissions, true
 }
 
 func intersectScopes(key, team []string) []string {
@@ -222,7 +269,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		UserID   string         `json:"user_id"`
 		Blocked  bool           `json:"blocked"`
 		Metadata map[string]any `json:"metadata"`
-		ObjectPermission *searchPermission `json:"object_permission"`
+		ObjectPermission *objectPermission `json:"object_permission"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key configuration")
