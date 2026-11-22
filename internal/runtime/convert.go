@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -20,7 +21,16 @@ func responsesToChat(input map[string]any) map[string]any {
 		messages = append(messages, map[string]any{"role": "user", "content": typed})
 	case []any:
 		for _, item := range typed {
-			messages = append(messages, responsesInputToChat(item))
+			message := responsesInputToChat(item)
+			if calls, ok := message["tool_calls"].([]any); ok && len(messages) > 0 {
+				previous, _ := messages[len(messages)-1].(map[string]any)
+				if previous["role"] == "assistant" {
+					existing, _ := previous["tool_calls"].([]any)
+					previous["tool_calls"] = append(existing, calls...)
+					continue
+				}
+			}
+			messages = append(messages, message)
 		}
 	default:
 		messages = append(messages, map[string]any{"role": "user", "content": fmt.Sprint(value)})
@@ -68,6 +78,9 @@ func chatRequestToResponses(input map[string]any) map[string]any {
 			continue
 		}
 		if role == "assistant" {
+			if content != nil && content != "" {
+				prompt = append(prompt, map[string]any{"role": role, "content": convertContent(content, role, false)})
+			}
 			if calls, ok := message["tool_calls"].([]any); ok {
 				for _, call := range calls {
 					if item := chatToolCallToResponse(call); item != nil {
@@ -75,16 +88,13 @@ func chatRequestToResponses(input map[string]any) map[string]any {
 					}
 				}
 			}
-			if content != nil && content != "" {
-				prompt = append(prompt, map[string]any{"role": role, "content": content})
-			}
 			continue
 		}
 		if role == "tool" {
 			prompt = append(prompt, map[string]any{"type": "function_call_output", "call_id": message["tool_call_id"], "output": content})
 			continue
 		}
-		prompt = append(prompt, map[string]any{"role": role, "content": content})
+		prompt = append(prompt, map[string]any{"role": role, "content": convertContent(content, role, false)})
 	}
 	result["input"] = prompt
 	if instructions != "" {
@@ -234,7 +244,17 @@ func responsesInputToChat(item any) map[string]any {
 	if value["type"] == "function_call_output" {
 		return map[string]any{"role": "tool", "tool_call_id": value["call_id"], "content": value["output"]}
 	}
-	return value
+	message := maps.Clone(value)
+	if content, present := value["content"]; present {
+		role, _ := value["role"].(string)
+		message["content"] = convertContent(content, role, true)
+	}
+	if message["type"] == "message" {
+		delete(message, "type")
+		delete(message, "id")
+		delete(message, "status")
+	}
+	return message
 }
 
 func chatToolCallToResponse(value any) map[string]any {

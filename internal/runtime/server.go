@@ -20,10 +20,12 @@ import (
 )
 
 type Config struct {
-	Token         string
-	HTTPClient    *http.Client
-	MaxBodyBytes  int64
-	MaxConcurrent int
+	Routes             []Route
+	AuthorizeInference bool
+	Token              string
+	HTTPClient         *http.Client
+	MaxBodyBytes       int64
+	MaxConcurrent      int
 }
 
 type Server struct {
@@ -45,10 +47,18 @@ func NewServer(config Config) *Server {
 	if config.MaxConcurrent == 0 {
 		config.MaxConcurrent = 128
 	}
-	return &Server{config: config, routes: map[string]Route{}, sem: make(chan struct{}, config.MaxConcurrent)}
+	routes := make(map[string]Route, len(config.Routes))
+	for _, route := range config.Routes {
+		routes[route.Alias] = route
+	}
+	return &Server{config: config, routes: routes, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, "/v1/") && !s.authorized(request) {
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+		return
+	}
 	switch {
 	case request.Method == http.MethodGet && request.URL.Path == "/healthz":
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
@@ -112,6 +122,10 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Candidate endpoint must be responses, chat-completions or embeddings")
 			return
 		}
+		if (candidate.Endpoint == "embeddings") != (route.Candidates[0].Endpoint == "embeddings") {
+			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "A route cannot mix embeddings with text generation")
+			return
+		}
 		if candidate.CredentialRef != "" && !credentialRefPattern.MatchString(candidate.CredentialRef) {
 			writeError(writer, http.StatusBadRequest, "invalid_credential_ref", "Credential reference must be an environment variable name")
 			return
@@ -141,6 +155,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if !ok {
 		writer.Header().Set("X-Minato-Runtime-Route-Missing", "1")
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
+		return
+	}
+	if (endpoint == "embeddings") != (route.Candidates[0].Endpoint == "embeddings") {
+		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
 	}
 	if request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream") {

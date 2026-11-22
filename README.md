@@ -34,6 +34,28 @@ The runtime supports JSON and SSE for `/v1/responses` and `/v1/chat/completions`
 
 Successful responses include `X-Minato-Runtime-Source`, `X-Minato-Runtime-Model` and `X-Minato-Runtime-Attempts` headers. Minato uses these headers to associate the final selected upstream with its audit record.
 
+## Run with a LiteLLM Proxy config
+
+The Go runtime can start directly from a LiteLLM YAML file for OpenAI-compatible providers. The supported fields cover `model_list`, `model_info.supported_endpoints`, `general_settings.master_key`, and the router's direct `fallbacks`, `timeout` and `num_retries: 0`. Use an explicit `api_base` for each deployment. Credentials can use LiteLLM's `os.environ/VARIABLE` syntax. Unsupported configuration fields produce a startup error.
+
+```bash
+go run ./cmd/minato-runtime --config proxy.yaml --host 127.0.0.1 --port 4000
+```
+
+```yaml
+model_list:
+  - model_name: summarize
+    litellm_params:
+      model: openai/chat_completions/example-model
+      api_base: https://provider.example/v1
+      api_key: os.environ/UPSTREAM_KEY
+general_settings:
+  master_key: os.environ/PROXY_MASTER_KEY
+router_settings:
+  timeout: 30
+  num_retries: 0
+```
+
 ## Run with Docker
 
 ```bash

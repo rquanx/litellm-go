@@ -96,3 +96,35 @@ func TestCrossProtocolUsage(t *testing.T) {
 		t.Fatalf("missing usage was replaced with %#v", got)
 	}
 }
+
+func TestCrossProtocolImageAndParallelToolHistory(t *testing.T) {
+	chatParts := []any{
+		map[string]any{"type": "text", "text": "Describe the image"},
+		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://fixture.invalid/image.png", "detail": "low"}},
+	}
+	responsesParts := []any{
+		map[string]any{"type": "input_text", "text": "Describe the image"},
+		map[string]any{"type": "input_image", "image_url": "https://fixture.invalid/image.png", "detail": "low"},
+	}
+	message := map[string]any{"role": "user", "content": chatParts}
+	responses := chatRequestToResponses(map[string]any{"messages": []any{message}})
+	input := responses["input"].([]any)
+	if actual := input[0].(map[string]any)["content"]; !reflect.DeepEqual(actual, responsesParts) {
+		t.Fatalf("Responses content = %#v, want %#v", actual, responsesParts)
+	}
+	input = append(input,
+		map[string]any{"type": "function_call", "call_id": "call-a", "name": "lookup", "arguments": "{}"},
+		map[string]any{"type": "function_call", "call_id": "call-b", "name": "list", "arguments": "{}"},
+		map[string]any{"type": "function_call_output", "call_id": "call-a", "output": "a"},
+		map[string]any{"type": "function_call_output", "call_id": "call-b", "output": "b"},
+	)
+	chat := responsesToChat(map[string]any{"input": input})
+	messages := chat["messages"].([]any)
+	if len(messages) != 4 || !reflect.DeepEqual(messages[0], message) {
+		t.Fatalf("unexpected message history: %#v", messages)
+	}
+	calls, _ := messages[1].(map[string]any)["tool_calls"].([]any)
+	if len(calls) != 2 || messages[3].(map[string]any)["tool_call_id"] != "call-b" {
+		t.Fatalf("parallel calls or results changed: %#v", messages)
+	}
+}
