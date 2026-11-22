@@ -234,6 +234,7 @@ func (registry *KeyRegistry) deleteTeams(w http.ResponseWriter, r *http.Request)
 	next := registry.state
 	next.Teams = maps.Clone(next.Teams)
 	next.Keys = maps.Clone(next.Keys)
+	next.Projects = maps.Clone(next.Projects)
 	count := 0
 	for _, id := range input.IDs {
 		if id == "" {
@@ -246,8 +247,13 @@ func (registry *KeyRegistry) deleteTeams(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	for digest, key := range next.Keys {
-		if slices.Contains(input.IDs, key.TeamID) {
+		if slices.Contains(input.IDs, key.TeamID) || slices.Contains(input.IDs, next.Projects[key.ProjectID].TeamID) {
 			delete(next.Keys, digest)
+		}
+	}
+	for id, project := range next.Projects {
+		if slices.Contains(input.IDs, project.TeamID) {
+			delete(next.Projects, id)
 		}
 	}
 	if registry.apply(w, next) {

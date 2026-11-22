@@ -64,6 +64,16 @@ func (registry *KeyRegistry) resolveKey(reference string) string {
 }
 
 func (registry *KeyRegistry) validKey(w http.ResponseWriter, key virtualKey) bool {
+	if key.ProjectID != "" {
+		project, exists := registry.state.Projects[key.ProjectID]
+		if !exists || (project.TeamID != "" && key.TeamID != "" && project.TeamID != key.TeamID) {
+			modelError(w, http.StatusBadRequest, "Project not found or belongs to a different team")
+			return false
+		}
+		if key.TeamID == "" {
+			key.TeamID = project.TeamID
+		}
+	}
 	if key.UserID != "" {
 		if _, exists := registry.state.Users[key.UserID]; !exists {
 			modelError(w, http.StatusBadRequest, "User not found")
@@ -106,6 +116,7 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 		Alias    *string         `json:"key_alias"`
 		Models   *[]string       `json:"models"`
 		TeamID   *string         `json:"team_id"`
+		ProjectID *string        `json:"project_id"`
 		OrgID    *string         `json:"organization_id"`
 		UserID   *string         `json:"user_id"`
 		Blocked  *bool           `json:"blocked"`
@@ -133,6 +144,9 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.TeamID != nil {
 		key.TeamID = *input.TeamID
+	}
+	if input.ProjectID != nil {
+		key.ProjectID = *input.ProjectID
 	}
 	if input.OrgID != nil {
 		key.OrgID = *input.OrgID

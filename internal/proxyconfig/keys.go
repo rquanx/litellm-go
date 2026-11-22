@@ -22,6 +22,7 @@ type virtualKey struct {
 	Models    []string       `json:"models"`
 	Expires   *time.Time     `json:"expires,omitempty"`
 	TeamID    string         `json:"team_id,omitempty"`
+	ProjectID string         `json:"project_id,omitempty"`
 	OrgID     string         `json:"organization_id,omitempty"`
 	UserID    string         `json:"user_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
@@ -36,6 +37,7 @@ type accessState struct {
 	Teams map[string]team       `json:"teams"`
 	Organizations map[string]organization `json:"organizations,omitempty"`
 	Users map[string]internalUser `json:"users,omitempty"`
+	Projects map[string]project `json:"projects,omitempty"`
 }
 
 func (state *accessState) UnmarshalJSON(payload []byte) error {
@@ -88,7 +90,7 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 
 func (registry *KeyRegistry) AuthorizeSearch(token string) ([]string, bool) {
 	_, permissions, valid := registry.authorize(token)
-	return intersectScopes(permissions.key.scope(), permissions.team.scope()), valid
+	return intersectScopes(intersectScopes(permissions.key.scope(), permissions.team.scope()), permissions.project.scope()), valid
 }
 
 func (registry *KeyRegistry) AuthorizeMCP(token string) (runtime.MCPAccess, bool) {
@@ -103,7 +105,11 @@ func (registry *KeyRegistry) AuthorizeMCP(token string) (runtime.MCPAccess, bool
 			serverAllowed = key.grantsMCPServer(server) && (!team.hasMCPGrants() || serverAllowed)
 		}
 		serverAllowed = serverAllowed || server.AllowAllKeys
-		return serverAllowed && key.allowsMCPTool(server, tool) && team.allowsMCPTool(server, tool)
+		project := permissions.project
+		if project.hasMCPGrants() {
+			serverAllowed = serverAllowed && project.grantsMCPServer(server)
+		}
+		return serverAllowed && key.allowsMCPTool(server, tool) && team.allowsMCPTool(server, tool) && project.allowsMCPTool(server, tool)
 	}, true
 }
 
@@ -127,8 +133,14 @@ func (registry *KeyRegistry) AuthorizeMCPToolset(token string) ([]string, runtim
 	if permissions.team != nil && len(permissions.team.MCPToolsets) != 0 {
 		team = permissions.team.MCPToolsets
 	}
-	return intersectScopes(key, team), func(server runtime.MCPServer, tool string) bool {
-		return permissions.key.allowsMCPTool(server, tool) && permissions.team.allowsMCPTool(server, tool)
+	grants := intersectScopes(key, team)
+	if permissions.project != nil && len(permissions.project.MCPToolsets) != 0 {
+		grants = intersectScopes(grants, permissions.project.MCPToolsets)
+	}
+	return grants, func(server runtime.MCPServer, tool string) bool {
+		project := permissions.project
+		return (!project.hasMCPGrants() || project.grantsMCPServer(server)) && project.allowsMCPTool(server, tool) &&
+			permissions.key.allowsMCPTool(server, tool) && permissions.team.allowsMCPTool(server, tool)
 	}, true
 }
 
@@ -166,7 +178,7 @@ func (permission *objectPermission) allowsMCPTool(server runtime.MCPServer, tool
 }
 
 type keyObjectPermissions struct {
-	key, team *objectPermission
+	key, team, project *objectPermission
 }
 
 func (permission *objectPermission) scope() []string {
@@ -193,11 +205,24 @@ func (registry *KeyRegistry) authorize(token string) ([]string, keyObjectPermiss
 			return nil, permissions, false
 		}
 	}
-	scope := unrestrictedScope(key.Models)
 	permissions.key = key.ObjectPermission
+	var projectModels []string
+	if key.ProjectID != "" {
+		project, exists := registry.state.Projects[key.ProjectID]
+		if !exists || project.Blocked || (project.TeamID != "" && key.TeamID != "" && project.TeamID != key.TeamID) {
+			return nil, permissions, false
+		}
+		if key.TeamID == "" {
+			key.TeamID = project.TeamID
+		}
+		permissions.project = project.ObjectPermission
+		projectModels = unrestrictedScope(project.Models)
+	}
+	scope := unrestrictedScope(key.Models)
 	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
 		scope = nil
 	}
+	scope = intersectScopes(scope, projectModels)
 	if key.UserID != "" {
 		user, exists := registry.state.Users[key.UserID]
 		if !exists || user.Role != "internal_user" {
@@ -272,6 +297,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	registry.registerTeamRoutes(mux)
 	registry.registerOrganizationRoutes(mux)
 	registry.registerUserRoutes(mux)
+	registry.registerProjectRoutes(mux)
 	mux.Handle("/", next)
 	return mux
 }
@@ -293,6 +319,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		Duration string         `json:"duration"`
 		Models   []string       `json:"models"`
 		TeamID   string         `json:"team_id"`
+		ProjectID string        `json:"project_id"`
 		OrgID    string         `json:"organization_id"`
 		UserID   string         `json:"user_id"`
 		Blocked  bool           `json:"blocked"`
@@ -309,7 +336,7 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusBadRequest, "Invalid key duration")
 		return
 	}
-	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, OrgID: input.OrgID, UserID: input.UserID,
+	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, ProjectID: input.ProjectID, OrgID: input.OrgID, UserID: input.UserID,
 		Blocked: input.Blocked, Metadata: input.Metadata, ObjectPermission: input.ObjectPermission, Expires: expiry, CreatedAt: &now}
 	token := newKeyToken()
 	registry.mu.Lock()

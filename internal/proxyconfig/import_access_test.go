@@ -27,8 +27,9 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		CREATE TEMP TABLE "LiteLLM_ObjectPermissionTable" (object_permission_id TEXT, search_tools TEXT[], mcp_servers TEXT[], mcp_toolsets TEXT[], agents TEXT[]);
 		CREATE TEMP TABLE "LiteLLM_TeamTable" (team_id TEXT, organization_id TEXT, models TEXT[], members_with_roles JSONB, object_permission_id TEXT);
 		CREATE TEMP TABLE "LiteLLM_TeamMembership" (team_id TEXT, user_id TEXT, budget_id TEXT);
+		CREATE TEMP TABLE "LiteLLM_ProjectTable" (project_id TEXT, team_id TEXT, models TEXT[], budget_id TEXT);
 		CREATE TEMP TABLE "LiteLLM_OrganizationMembership" (organization_id TEXT, user_id TEXT, user_role TEXT);
-		CREATE TEMP TABLE "LiteLLM_VerificationToken" (token TEXT, user_id TEXT, team_id TEXT, models TEXT[], created_at TIMESTAMP, object_permission_id TEXT);
+		CREATE TEMP TABLE "LiteLLM_VerificationToken" (token TEXT, user_id TEXT, team_id TEXT, models TEXT[], created_at TIMESTAMP, object_permission_id TEXT, project_id TEXT);
 		INSERT INTO "LiteLLM_BudgetTable" VALUES ('org-budget', NULL, ARRAY[]::TEXT[]), ('member-budget', 1, ARRAY['allowed']);
 		INSERT INTO "LiteLLM_OrganizationTable" VALUES ('org', 'Fixture', ARRAY['allowed','org-only'], 'org-budget');
 		INSERT INTO "LiteLLM_UserTable" VALUES ('user', 'internal_user', ARRAY['allowed','org-only','user-only']);
@@ -37,12 +38,13 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 			('key-permission', ARRAY['shared','key-search'], NULL, NULL, ARRAY['unsupported']);
 		INSERT INTO "LiteLLM_TeamTable" VALUES ('team', 'org', ARRAY['allowed','org-only','team-only'], '[{"user_id":"user","role":"user"}]', 'team-permission');
 		INSERT INTO "LiteLLM_TeamMembership" VALUES ('team', 'user', 'member-budget');
+		INSERT INTO "LiteLLM_ProjectTable" VALUES ('project','team',ARRAY['allowed'],'org-budget');
 		INSERT INTO "LiteLLM_OrganizationMembership" VALUES ('org', 'user', 'internal_user');
 	`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = db.Exec(`INSERT INTO "LiteLLM_VerificationToken" VALUES ($1,'user','team',ARRAY['all-team-models'],now(),'key-permission')`, keyDigest("fixture-token"))
+	_, err = db.Exec(`INSERT INTO "LiteLLM_VerificationToken" VALUES ($1,'user','team',ARRAY['all-team-models'],now(),'key-permission','project')`, keyDigest("fixture-token"))
 	if err != nil {
 		t.Fatal(err)
 	}

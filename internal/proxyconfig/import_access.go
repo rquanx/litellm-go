@@ -17,7 +17,7 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 	if err := store.load(&state); err != nil {
 		return 0, errors.New("could not read Go access state")
 	}
-	if len(state.Keys)+len(state.Teams)+len(state.Users)+len(state.Organizations) != 0 {
+	if len(state.Keys)+len(state.Teams)+len(state.Users)+len(state.Organizations)+len(state.Projects) != 0 {
 		return 0, errors.New("Go access state must be empty")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -52,6 +52,7 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 			return state.importTeam(payload)
 		}},
 		{"LiteLLM_TeamMembership", importer.importTeamMembership},
+		{"LiteLLM_ProjectTable", importer.importProject},
 		{"LiteLLM_OrganizationMembership", importer.importOrganizationMembership},
 		{"LiteLLM_VerificationToken", func(payload []byte) error {
 			var status struct {
@@ -75,6 +76,15 @@ func ImportLiteLLMAccess(db *sql.DB) (int, error) {
 		}},
 	}
 	for _, reader := range readers {
+		if reader.relation == "LiteLLM_ProjectTable" {
+			var present bool
+			if err := tx.QueryRowContext(ctx, `SELECT to_regclass('"LiteLLM_ProjectTable"') IS NOT NULL`).Scan(&present); err != nil {
+				return 0, err
+			}
+			if !present {
+				continue
+			}
+		}
 		if err := readAccessRows(ctx, tx, reader.relation, reader.apply); err != nil {
 			return 0, err
 		}
@@ -388,6 +398,15 @@ func (importer accessImporter) importOrganizationMembership(payload []byte) erro
 }
 
 func (state *accessState) containsKeyOwners(key virtualKey) bool {
+	if key.ProjectID != "" {
+		record, exists := state.Projects[key.ProjectID]
+		if !exists || (record.TeamID != "" && key.TeamID != "" && record.TeamID != key.TeamID) {
+			return false
+		}
+		if key.TeamID == "" {
+			key.TeamID = record.TeamID
+		}
+	}
 	if _, exists := state.Users[key.UserID]; key.UserID != "" && !exists {
 		return false
 	}
@@ -401,4 +420,30 @@ func (state *accessState) containsKeyOwners(key virtualKey) bool {
 		}
 	}
 	return true
+}
+
+func (importer accessImporter) importProject(payload []byte) error {
+	payload, err := importer.expandObjectPermission(payload)
+	if err != nil {
+		return err
+	}
+	var record struct {
+		project
+		BudgetID string `json:"budget_id"`
+	}
+	if err := decodeAccessOwner(payload, &record, "model_rpm_limit", "model_tpm_limit"); err != nil {
+		return err
+	}
+	budgetModels, err := importer.memberBudgetModels(record.BudgetID)
+	if record.ID == "" || err != nil || len(budgetModels) != 0 || !validOwnerModels(record.Models) {
+		return errors.New("invalid project identity or unsupported project policy")
+	}
+	if _, exists := importer.Teams[record.TeamID]; !exists && record.TeamID != "" {
+		return errors.New("project team does not exist")
+	}
+	if importer.Projects == nil {
+		importer.Projects = make(map[string]project)
+	}
+	importer.Projects[record.ID] = record.project
+	return nil
 }

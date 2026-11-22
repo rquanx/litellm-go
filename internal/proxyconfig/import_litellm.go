@@ -142,7 +142,7 @@ func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtu
 	if key.CreatedAt, err = liteLLMTimestamp(created); err != nil {
 		return "", key, false, errors.New("invalid LiteLLM key creation time")
 	}
-	for _, field := range []string{"agent_id", "project_id", "budget_id",
+	for _, field := range []string{"agent_id", "budget_id",
 		"max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "object_permission_id", "allowed_routes",
 		"allowed_cache_controls", "access_group_ids", "permissions", "policies", "router_settings", "config", "aliases",
 		"model_max_budget", "budget_limits", "auto_rotate", "budget_duration"} {
@@ -155,7 +155,7 @@ func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtu
 	if slices.Contains(key.Models, "all-proxy-models") || (key.TeamID == "" && slices.Contains(key.Models, "all-team-models")) {
 		return "", key, false, fmt.Errorf("virtual key %q uses an unsupported dynamic model scope", key.Alias)
 	}
-	if key.UserID != "" || key.TeamID != "" || key.OrgID != "" {
+	if key.UserID != "" || key.TeamID != "" || key.OrgID != "" || key.ProjectID != "" {
 		if state == nil || !state.containsKeyOwners(key) {
 			return "", key, false, fmt.Errorf("virtual key %q refers to a missing or unsupported owner", key.Alias)
 		}
