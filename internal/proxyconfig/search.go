@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ type searchToolConfig struct {
 		Provider string  `yaml:"search_provider"`
 		APIKey   string  `yaml:"api_key"`
 		APIBase  string  `yaml:"api_base"`
+		EngineID string  `yaml:"search_engine_id"`
 		Timeout  float64 `yaml:"timeout"`
 		Retries  *int    `yaml:"max_retries"`
 	} `yaml:"litellm_params"`
@@ -64,6 +66,10 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		defaultBase, baseEnv, keyEnv = "https://api.parallel.ai", "PARALLEL_AI_API_BASE", "PARALLEL_AI_API_KEY"
 	case "searchapi":
 		defaultBase, baseEnv, keyEnv = "https://www.searchapi.io/api/v1/search", "SEARCHAPI_API_BASE", "SEARCHAPI_API_KEY"
+	case "google_pse":
+		defaultBase, baseEnv, keyEnv = "https://www.googleapis.com/customsearch/v1", "GOOGLE_PSE_API_BASE", "GOOGLE_PSE_API_KEY"
+	case "dataforseo":
+		defaultBase, baseEnv = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced", "DATAFORSEO_API_BASE"
 	default:
 		return runtime.SearchTool{}, fmt.Errorf("unsupported search_provider %q", params.Provider)
 	}
@@ -86,8 +92,12 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 	if params.Provider == "parallel_ai" {
 		suffix = "/v1beta/search"
 	}
-	if params.Provider != "searchapi" && !strings.HasSuffix(strings.TrimRight(target.Path, "/"), suffix) {
-		target = target.JoinPath(suffix)
+	switch params.Provider {
+	case "searchapi", "google_pse", "dataforseo":
+	default:
+		if !strings.HasSuffix(strings.TrimRight(target.Path, "/"), suffix) {
+			target = target.JoinPath(suffix)
+		}
 	}
 	key, err := resolveEnv(params.APIKey)
 	if err != nil {
@@ -99,9 +109,41 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 	if key == "" && params.Provider == "parallel_ai" {
 		key = os.Getenv("PARALLEL_API_KEY")
 	}
+	var engineID string
+	var location int
+	switch params.Provider {
+	case "google_pse":
+		engineID, err = resolveEnv(params.EngineID)
+		if err != nil {
+			return runtime.SearchTool{}, err
+		}
+		if engineID == "" {
+			engineID = os.Getenv("GOOGLE_PSE_ENGINE_ID")
+		}
+		if engineID == "" {
+			return runtime.SearchTool{}, fmt.Errorf("missing Google PSE engine ID")
+		}
+	case "dataforseo":
+		login, password, supplied := strings.Cut(key, ":")
+		if !supplied {
+			login, password = os.Getenv("DATAFORSEO_LOGIN"), os.Getenv("DATAFORSEO_PASSWORD")
+		}
+		if login == "" || password == "" {
+			return runtime.SearchTool{}, fmt.Errorf("missing DataForSEO login or password")
+		}
+		key = login + ":" + password
+		location = 2250
+		if raw := os.Getenv("DEFAULT_DATAFORSEO_LOCATION_CODE"); raw != "" {
+			location, err = strconv.Atoi(raw)
+			if err != nil || location <= 0 {
+				return runtime.SearchTool{}, fmt.Errorf("invalid DataForSEO location code")
+			}
+		}
+	}
 	if key == "" && params.Provider != "searxng" {
 		return runtime.SearchTool{}, fmt.Errorf("missing search API key (%s)", keyEnv)
 	}
 	return runtime.SearchTool{Name: entry.Name, Provider: params.Provider, URL: target.String(), APIKey: key,
-		Description: entry.Info.Description, Timeout: time.Duration(params.Timeout * float64(time.Second)), Retries: params.Retries}, nil
+		Description: entry.Info.Description, Timeout: time.Duration(params.Timeout * float64(time.Second)), Retries: params.Retries,
+		EngineID: engineID, LocationCode: location}, nil
 }

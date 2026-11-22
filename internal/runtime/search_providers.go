@@ -2,10 +2,12 @@ package runtime
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
-func searchPayload(provider string, input map[string]json.RawMessage, query string, queries []string) []byte {
+func searchPayload(tool SearchTool, input map[string]json.RawMessage, query string, queries []string) []byte {
+	provider := tool.Provider
 	params := make(map[string]json.RawMessage)
 	copyParam := func(from, to string) {
 		if value := input[from]; len(value) != 0 && string(value) != "null" && params[to] == nil {
@@ -85,6 +87,48 @@ func searchPayload(provider string, input map[string]json.RawMessage, query stri
 			params["source_policy"], _ = json.Marshal(policy)
 		}
 		extras = []string{"max_results", "search_queries", "processor", "max_chars_per_result", "source_policy", "exclude_domains"}
+	case "google_pse":
+		delete(params, "query")
+		params["q"] = queryText
+		copyParam("max_results", "num")
+		var limit int
+		if json.Unmarshal(params["num"], &limit) == nil && limit > 10 {
+			params["num"] = json.RawMessage("10")
+		}
+		var country, domain string
+		var domains []string
+		if json.Unmarshal(input["country"], &country) == nil {
+			params["gl"], _ = json.Marshal(strings.ToUpper(country))
+		}
+		if json.Unmarshal(input["search_domain_filter"], &domains) == nil && len(domains) != 0 {
+			domain = domains[0]
+		} else {
+			json.Unmarshal(input["search_domain_filter"], &domain)
+		}
+		if domain != "" {
+			params["siteSearch"], _ = json.Marshal(domain)
+			params["siteSearchFilter"] = json.RawMessage(`"i"`)
+		}
+		extras = []string{"num", "start", "gl", "cr", "dateRestrict", "exactTerms", "excludeTerms", "fileType", "filter",
+			"hl", "hq", "linkSite", "lr", "orTerms", "relatedSite", "rights", "safe", "searchType", "siteSearch", "siteSearchFilter", "sort"}
+	case "dataforseo":
+		delete(params, "query")
+		if len(queries) != 0 {
+			queryText, _ = json.Marshal(queries[0])
+		}
+		params["keyword"] = queryText
+		var limit int
+		if json.Unmarshal(input["max_results"], &limit) == nil && limit != 0 {
+			params["depth"] = json.RawMessage(strconv.Itoa(min(700, limit)))
+		}
+		copyParam("country", "location_name")
+		copyParam("search_domain_filter", "domain")
+		params["language_code"] = json.RawMessage(`"en"`)
+		if params["location_name"] == nil {
+			params["location_code"] = json.RawMessage(strconv.Itoa(tool.LocationCode))
+		}
+		extras = []string{"depth", "domain", "location_name", "location_coordinate", "language_name", "device", "os",
+			"tag", "group_organic_results", "calculate_rectangles", "people_also_ask_click_depth", "load_async_ai_overview"}
 	case "searxng":
 		delete(params, "query")
 		params["q"] = queryText
@@ -114,7 +158,11 @@ func searchPayload(provider string, input map[string]json.RawMessage, query stri
 	case "firecrawl":
 		setSearchDefault(params, "scrapeOptions", `{"formats":["markdown"],"onlyMainContent":true}`)
 	}
-	payload, _ := json.Marshal(params)
+	var request any = params
+	if provider == "dataforseo" {
+		request = []map[string]json.RawMessage{params}
+	}
+	payload, _ := json.Marshal(request)
 	return payload
 }
 
@@ -151,6 +199,13 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 		Results []searchProviderResult `json:"results"`
 		Organic []searchProviderResult `json:"organic"`
 		OrganicResults []searchProviderResult `json:"organic_results"`
+		Items   []searchProviderResult `json:"items"`
+		Tasks   []struct {
+			StatusCode int `json:"status_code"`
+			Result []struct {
+				Items []searchProviderResult `json:"items"`
+			} `json:"result"`
+		} `json:"tasks"`
 		Data    json.RawMessage        `json:"data"`
 	}
 	if json.Unmarshal(body, &payload) != nil || payload == nil {
@@ -165,6 +220,15 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 	if provider == "searchapi" {
 		payload.Results = payload.OrganicResults
 	}
+	if provider == "google_pse" {
+		payload.Results = payload.Items
+	}
+	if provider == "dataforseo" {
+		payload.Results = nil
+		if len(payload.Tasks) != 0 && payload.Tasks[0].StatusCode == 20000 && len(payload.Tasks[0].Result) != 0 {
+			payload.Results = payload.Tasks[0].Result[0].Items
+		}
+	}
 	results := make([]searchResult, 0, len(payload.Results))
 	for _, item := range payload.Results {
 		result := item.searchResult
@@ -175,6 +239,13 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 			result.Snippet, result.Date, result.LastUpdated = item.Text, item.PublishedDate, nil
 		case "serper", "searchapi":
 			result.URL, result.LastUpdated = item.Link, nil
+		case "google_pse":
+			result.URL, result.Date, result.LastUpdated = item.Link, nil, nil
+		case "dataforseo":
+			if item.Type != "organic" {
+				continue
+			}
+			result.Snippet, result.Date, result.LastUpdated = item.Description, nil, nil
 		case "parallel_ai":
 			result.Snippet, result.Date, result.LastUpdated = strings.Join(item.Excerpts, " ... "), nil, nil
 		case "searxng":

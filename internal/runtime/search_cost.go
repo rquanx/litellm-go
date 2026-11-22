@@ -12,8 +12,10 @@ func searchCost(provider string, input map[string]json.RawMessage, queryCount in
 	}
 	var rate float64
 	switch provider {
-	case "perplexity":
+	case "perplexity", "google_pse":
 		rate = 0.005
+	case "dataforseo":
+		rate = 0.003
 	case "tavily":
 		rate = 0.008
 	case "linkup":

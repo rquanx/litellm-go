@@ -19,6 +19,8 @@ type SearchTool struct {
 	URL, APIKey                 string
 	Timeout                     time.Duration
 	Retries                     *int
+	EngineID                    string
+	LocationCode                 int
 }
 
 func (s *Server) serveSearch(w http.ResponseWriter, r *http.Request) bool {
@@ -138,7 +140,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 	for {
 		tool := tools[plan.index]
 		lastProvider = tool.Provider
-		payload := searchPayload(tool.Provider, input, query, queries)
+		payload := searchPayload(tool, input, query, queries)
 		status, headers, body := s.callSearch(r.Context(), tool, payload)
 		if status >= 200 && status < 300 {
 			if result, ok := normalizeSearch(tool.Provider, body); ok {
@@ -172,7 +174,7 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 	}
 	method := http.MethodPost
 	var bodyReader io.Reader = bytes.NewReader(payload)
-	if tool.Provider == "searxng" || tool.Provider == "searchapi" {
+	if tool.Provider == "searxng" || tool.Provider == "searchapi" || tool.Provider == "google_pse" {
 		method, bodyReader = http.MethodGet, nil
 	}
 	request, err := http.NewRequestWithContext(ctx, method, tool.URL, bodyReader)
@@ -196,6 +198,10 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 		if tool.Provider == "searchapi" {
 			query.Set("api_key", tool.APIKey)
 		}
+		if tool.Provider == "google_pse" {
+			query.Set("key", tool.APIKey)
+			query.Set("cx", tool.EngineID)
+		}
 		request.URL.RawQuery = query.Encode()
 	}
 	switch tool.Provider {
@@ -204,7 +210,10 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 		fallthrough
 	case "exa_ai", "serper":
 		request.Header.Set("X-API-Key", tool.APIKey)
-	case "searchapi":
+	case "dataforseo":
+		login, password, _ := strings.Cut(tool.APIKey, ":")
+		request.SetBasicAuth(login, password)
+	case "searchapi", "google_pse":
 	default:
 		if tool.APIKey != "" {
 			request.Header.Set("Authorization", "Bearer "+tool.APIKey)
