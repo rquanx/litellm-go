@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"time"
@@ -34,13 +35,32 @@ func ImportLiteLLMModels(db *sql.DB, config Config) (int, error) {
 	if salt == "" {
 		return 0, errors.New("the source LiteLLM salt or master key is required")
 	}
-	models, err := readLiteLLMModels(db, salt)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return 0, errors.New("could not open a snapshot of LiteLLM model state")
+	}
+	defer tx.Rollback()
+	models, err := readLiteLLMModels(ctx, tx, salt)
 	if err != nil {
 		return 0, err
 	}
 	if len(models) == 0 {
 		return 0, nil
 	}
+	credentials, err := readReferencedCredentials(ctx, tx, salt, models, combinedCredentials(config.credentials, existing.Credentials))
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, errors.New("could not finish reading LiteLLM model state")
+	}
+	existing.Credentials = maps.Clone(existing.Credentials)
+	if existing.Credentials == nil {
+		existing.Credentials = make(map[string]providerCredential)
+	}
+	maps.Copy(existing.Credentials, credentials)
 	registry := modelRegistry{base: config, credentials: existing.Credentials}
 	if _, err := registry.compile(models); err != nil {
 		return 0, err
@@ -166,10 +186,8 @@ func liteLLMTimestamp(raw json.RawMessage) (*time.Time, error) {
 	return &instant, err
 }
 
-func readLiteLLMModels(db *sql.DB, salt string) ([]deployment, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	rows, err := db.QueryContext(ctx, `SELECT model_id, model_name, litellm_params, COALESCE(model_info, '{}'::jsonb)
+func readLiteLLMModels(ctx context.Context, tx *sql.Tx, salt string) ([]deployment, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT model_id, model_name, litellm_params, COALESCE(model_info, '{}'::jsonb)
 		FROM "LiteLLM_ProxyModelTable" ORDER BY created_at, model_id`)
 	if err != nil {
 		return nil, errors.New("could not read LiteLLM_ProxyModelTable")
@@ -195,6 +213,30 @@ func readLiteLLMModels(db *sql.DB, salt string) ([]deployment, error) {
 		return nil, errors.New("could not finish reading LiteLLM models")
 	}
 	return models, nil
+}
+
+func readReferencedCredentials(ctx context.Context, tx *sql.Tx, salt string, models []deployment,
+	known map[string]providerCredential) (map[string]providerCredential, error) {
+	imported := make(map[string]providerCredential)
+	for _, model := range models {
+		name := model.Params.CredentialName
+		if name == "" || known[name].Name != "" || imported[name].Name != "" {
+			continue
+		}
+		var values, info []byte
+		if err := tx.QueryRowContext(ctx, `SELECT credential_values, COALESCE(credential_info, '{}'::jsonb)
+			FROM "LiteLLM_CredentialsTable" WHERE credential_name = $1`, name).Scan(&values, &info); err != nil {
+			return nil, fmt.Errorf("could not read the referenced credential for model %q", model.Alias)
+		}
+		decoded, err := decryptLiteLLMParams(values, salt)
+		credential := providerCredential{Name: name}
+		if err != nil || json.Unmarshal(decoded, &credential.Values) != nil ||
+			json.Unmarshal(info, &credential.Info) != nil || credential.validate() != nil {
+			return nil, fmt.Errorf("model %q refers to an incompatible credential", model.Alias)
+		}
+		imported[name] = credential
+	}
+	return imported, nil
 }
 
 func decryptLiteLLMParams(payload []byte, salt string) ([]byte, error) {

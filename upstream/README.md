@@ -21,7 +21,7 @@ The upstream MIT license notice is included with this port. LiteLLM's `enterpris
 | `litellm/proxy/proxy_server.py`, `litellm/utils.py` | Scoped token-count utility with embedded OpenAI tokenizers and native Anthropic and Gemini counting | Exact tool and multimodal accounting, custom Hugging Face tokenizers and additional native providers |
 | `litellm/integrations/generic_api/` | Opt-in generic API callback for inference success or failure, with queued JSON batches and optional message capture | Full StandardLoggingPayload, additional callbacks and transports, stream reconstruction, spend attribution and delivery retries |
 | `litellm/proxy/spend_tracking/` | PostgreSQL inference metadata, token and basic cost records, master-key spend log filtering and pagination, and daily totals | Rich pricing, delegated reporting, retry and per-attempt attribution, queue durability, budgets and migration of historical spend |
-| `litellm/proxy/credential_endpoints/`, `litellm/secret_managers/` | YAML and managed named credentials, deployment credential references, masked lookup and atomic route updates on credential rotation | Additional credential field mappings, external secret managers and migration of the LiteLLM credential table |
+| `litellm/proxy/credential_endpoints/`, `litellm/secret_managers/` | YAML and managed named credentials, masked lookup, atomic route updates on rotation, and import of compatible referenced credentials with their deployments | Additional credential field mappings, external secret managers and import of unused credential records |
 | Other Python provider and feature modules under `litellm/` | Inventory and port by module | Stateful APIs, remaining API families, callbacks and provider modules |
 
 ## Verify protocol behavior

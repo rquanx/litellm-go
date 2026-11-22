@@ -90,6 +90,7 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL);
 		CREATE TEMP TABLE "LiteLLM_ProxyModelTable" (model_id TEXT, model_name TEXT, litellm_params JSONB, model_info JSONB, created_at TIMESTAMP DEFAULT NOW());
+		CREATE TEMP TABLE "LiteLLM_CredentialsTable" (credential_name TEXT, credential_values JSONB, credential_info JSONB);
 		CREATE TEMP TABLE "LiteLLM_VerificationToken" (token TEXT, key_alias TEXT, models TEXT[], expires TIMESTAMP)`)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +102,11 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	var nonce [24]byte
 	nonce[0] = 1
 	encrypted := base64.URLEncoding.EncodeToString(secretbox.Seal(nonce[:], []byte("provider-secret"), &nonce, &key))
-	params, _ := json.Marshal(map[string]string{"model": "openai/fixture", "api_base": "http://example.invalid", "api_key": encrypted})
+	params, _ := json.Marshal(map[string]string{"model": "openai/fixture", "api_base": "http://example.invalid", "litellm_credential_name": "fixture-provider"})
+	values, _ := json.Marshal(map[string]string{"api_key": encrypted})
+	if _, err := db.Exec(`INSERT INTO "LiteLLM_CredentialsTable" VALUES ('fixture-provider',$1::jsonb,NULL)`, string(values)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(`INSERT INTO "LiteLLM_ProxyModelTable" (model_id, model_name, litellm_params) VALUES ($1,$2,$3::jsonb)`,
 		"upstream-deployment", "imported", string(params)); err != nil {
 		t.Fatal(err)
@@ -123,7 +128,8 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	}
 	var models modelState
 	if err := postgresModels(db, master).load(&models); err != nil || len(models.Models) != 1 ||
-		models.Models[0].Params.APIKey != "provider-secret" || models.Models[0].Info.ID != "upstream-deployment" {
+		models.Credentials["fixture-provider"].Values["api_key"] != "provider-secret" ||
+		models.Models[0].Params.CredentialName != "fixture-provider" || models.Models[0].Info.ID != "upstream-deployment" {
 		t.Fatalf("imported configuration could not be restored: %v", err)
 	}
 	registry, err := LoadPostgresKeys(master, db)
