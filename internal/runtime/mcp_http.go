@@ -16,6 +16,7 @@ import (
 
 type MCPServer struct {
 	ID, Name, Alias, URL, Description string
+	Transport                        string
 	Headers                          http.Header
 	AllowAllKeys                     bool
 	AllowedTools                     []string
@@ -34,6 +35,9 @@ type mcpSession struct {
 	output *bufio.Scanner
 	cancel context.CancelFunc
 	closePipes func() bool
+	sseBody io.ReadCloser
+	sseScanner *bufio.Scanner
+	postURL string
 }
 
 func (s *Server) openMCP(ctx context.Context, server MCPServer) (*mcpSession, error) {
@@ -42,6 +46,11 @@ func (s *Server) openMCP(ctx context.Context, server MCPServer) (*mcpSession, er
 	session := &mcpSession{ctx: ctx, client: client, server: server, limit: s.config.MaxBodyBytes, protocol: "2025-03-26"}
 	if server.Command != "" {
 		if err := session.startProcess(); err != nil {
+			return nil, err
+		}
+	}
+	if server.Transport == "sse" {
+		if err := session.openLegacySSE(); err != nil {
 			return nil, err
 		}
 	}
@@ -85,7 +94,11 @@ func (session *mcpSession) send(ctx context.Context, method string, payload any)
 		}
 		body = bytes.NewReader(data)
 	}
-	request, err := http.NewRequestWithContext(ctx, method, session.server.URL, body)
+	address := session.server.URL
+	if method == http.MethodPost && session.postURL != "" {
+		address = session.postURL
+	}
+	request, err := http.NewRequestWithContext(ctx, method, address, body)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +107,9 @@ func (session *mcpSession) send(ctx context.Context, method string, payload any)
 		request.Header = make(http.Header)
 	}
 	request.Header.Set("Accept", "application/json, text/event-stream")
+	if method == http.MethodGet && session.server.Transport == "sse" {
+		request.Header.Set("Accept", "text/event-stream")
+	}
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}
@@ -105,6 +121,9 @@ func (session *mcpSession) send(ctx context.Context, method string, payload any)
 }
 
 func (session *mcpSession) close() {
+	if session.sseBody != nil {
+		session.sseBody.Close()
+	}
 	if session.process != nil {
 		session.cancel()
 		_ = session.process.Wait()
@@ -147,6 +166,17 @@ func (session *mcpSession) rpc(method string, params any) (json.RawMessage, erro
 	}
 	if method == "initialize" {
 		session.id = response.Header.Get("Mcp-Session-Id")
+	}
+	if session.sseScanner != nil {
+		for {
+			_, data, ok := nextMCPEvent(session.sseScanner, session.limit)
+			if !ok {
+				return nil, errors.New("MCP stream closed before its response")
+			}
+			if result, found, err := parseMCPReply(data, id); found {
+				return result, err
+			}
+		}
 	}
 	reader := io.LimitReader(response.Body, session.limit+1)
 	if !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {

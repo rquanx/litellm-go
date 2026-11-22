@@ -30,7 +30,7 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 	identifiers := make(map[string]string)
 	for _, name := range slices.Sorted(maps.Keys(entries)) {
 		entry := entries[name]
-		if strings.TrimSpace(name) == "" || !slices.Contains([]string{"", "http", "streamable_http", "stdio"}, entry.Transport) {
+		if strings.TrimSpace(name) == "" || !slices.Contains([]string{"", "http", "streamable_http", "stdio", "sse"}, entry.Transport) {
 			return nil, fmt.Errorf("unsupported MCP server configuration for %q", name)
 		}
 		base, err := resolveEnv(entry.URL)
@@ -78,7 +78,7 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 			}
 			env = append(env, key+"="+value)
 		}
-		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base,
+		result = append(result, runtime.MCPServer{ID: id, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport,
 			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools, Headers: headers})
 	}
