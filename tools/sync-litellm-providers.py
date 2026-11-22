@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "internal/proxyconfig/openai-compatible.json"
 SETTINGS = ROOT / "internal/proxyconfig/openai-provider-settings.json"
 PRICES = ROOT / "internal/proxyconfig/model-token-prices.json"
+CACHE_PRICES = ROOT / "internal/proxyconfig/model-cache-prices.json"
 
 
 def main():
@@ -46,6 +47,12 @@ def main():
     price_output = "{\n" + ",\n".join(
         f"  {json.dumps(model)}: {json.dumps(prices[model])}" for model in sorted(prices)
     ) + "\n}\n"
+    cache_prices = {}
+    for model, metadata in upstream_prices.items():
+        price = metadata.get("cache_read_input_token_cost")
+        if model != "sample_spec" and type(price) in (int, float):
+            cache_prices[model] = price
+    cache_output = json.dumps(cache_prices, sort_keys=True, indent=2) + "\n"
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
             raise SystemExit("Go provider list differs from the pinned LiteLLM source")
@@ -54,10 +61,14 @@ def main():
         if PRICES.read_text(encoding="utf-8") != price_output:
             raise SystemExit("Go token prices differ from the pinned LiteLLM source")
         print(f"{len(prices)} model prices match LiteLLM {revision}")
+        if CACHE_PRICES.read_text(encoding="utf-8") != cache_output:
+            raise SystemExit("Go cache prices differ from the pinned LiteLLM source")
+        print(f"{len(cache_prices)} cache prices match LiteLLM {revision}")
     else:
         TARGET.write_text(output, encoding="utf-8")
         SETTINGS.write_text(settings_output, encoding="utf-8")
         PRICES.write_text(price_output, encoding="utf-8")
+        CACHE_PRICES.write_text(cache_output, encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -73,6 +73,7 @@ type deployment struct {
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
 		OutputPrice *float64 `yaml:"output_cost_per_token" json:"output_cost_per_token,omitempty"`
+		CacheReadPrice *float64 `yaml:"cache_read_input_token_cost" json:"cache_read_input_token_cost,omitempty"`
 		RPM *int `yaml:"rpm" json:"rpm,omitempty"`
 		TPM *int `yaml:"tpm" json:"tpm,omitempty"`
 		AWSRegion string `yaml:"aws_region_name" json:"aws_region_name,omitempty"`
@@ -637,13 +638,17 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if err != nil {
 		return runtime.Candidate{}, err
 	}
+	cachePrice, err := cacheTokenPrice(entry.Params.Model, entry.Params.CacheReadPrice)
+	if err != nil {
+		return runtime.Candidate{}, err
+	}
 	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
 		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		UseInPassThrough: entry.Params.UseInPassThrough,
-		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex, AzureADToken: azureADToken}, nil
+		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrice, Vertex: vertex, AzureADToken: azureADToken}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

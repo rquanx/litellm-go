@@ -46,6 +46,8 @@ type callbackResponse struct {
 	status int
 	capture bool
 	price [2]*float64
+	cachePrice *float64
+	cachedTokens int
 }
 
 func (recorder *callbackResponse) WriteHeader(status int) {
@@ -78,12 +80,17 @@ func (recorder *callbackResponse) Write(data []byte) (int, error) {
 }
 
 func (recorder *callbackResponse) recordJSON(data []byte) {
+	type tokenDetails struct {
+		Cached int `json:"cached_tokens"`
+	}
 	type usage struct {
 		Prompt int `json:"prompt_tokens"`
 		Completion int `json:"completion_tokens"`
 		Input int `json:"input_tokens"`
 		Output int `json:"output_tokens"`
 		Total int `json:"total_tokens"`
+		PromptDetails tokenDetails `json:"prompt_tokens_details"`
+		InputDetails tokenDetails `json:"input_tokens_details"`
 	}
 	var payload struct {
 		Usage usage `json:"usage"`
@@ -101,6 +108,7 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		recorder.event.Prompt = max(payload.Usage.Prompt, payload.Usage.Input)
 		recorder.event.Completion = max(payload.Usage.Completion, payload.Usage.Output)
 		recorder.event.Total = max(payload.Usage.Total, recorder.event.Prompt+recorder.event.Completion)
+		recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached))
 	}
 	if recorder.capture && len(data) <= maxCallbackMessageBytes &&
 		(!recorder.event.Stream || recorder.status >= 400 || bytes.Contains(data, []byte("response.completed"))) {
@@ -116,12 +124,19 @@ func (recorder *callbackResponse) finish() {
 	if recorder.status >= 400 {
 		recorder.event.Status = "failure"
 	}
+	uncached := recorder.event.Prompt
+	if recorder.cachePrice != nil {
+		uncached -= recorder.cachedTokens
+	}
 	if (recorder.event.Prompt != 0 || recorder.event.Completion != 0) &&
-		(recorder.event.Prompt == 0 || recorder.price[0] != nil) &&
+		(uncached == 0 || recorder.price[0] != nil) &&
 		(recorder.event.Completion == 0 || recorder.price[1] != nil) {
 		cost := 0.0
 		if recorder.price[0] != nil {
-			cost += float64(recorder.event.Prompt) * *recorder.price[0]
+			cost += float64(uncached) * *recorder.price[0]
+		}
+		if recorder.cachePrice != nil {
+			cost += float64(recorder.cachedTokens) * *recorder.cachePrice
 		}
 		if recorder.price[1] != nil {
 			cost += float64(recorder.event.Completion) * *recorder.price[1]

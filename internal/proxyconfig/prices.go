@@ -11,6 +11,34 @@ import (
 //go:embed model-token-prices.json
 var priceSnapshot []byte
 
+//go:embed model-cache-prices.json
+var cachePriceSnapshot []byte
+
+var modelCachePrices = func() map[string]float64 {
+	var prices map[string]float64
+	if err := json.Unmarshal(cachePriceSnapshot, &prices); err != nil {
+		panic("invalid embedded LiteLLM cache prices")
+	}
+	return prices
+}()
+
+func cacheTokenPrice(model string, override *float64) (*float64, error) {
+	price, exists := modelCachePrices[model]
+	if !exists && strings.HasPrefix(model, "openai/") {
+		price, exists = modelCachePrices[strings.TrimPrefix(model, "openai/")]
+	}
+	if override != nil {
+		price, exists = *override, true
+	}
+	if !exists {
+		return nil, nil
+	}
+	if price < 0 || math.IsNaN(price) || math.IsInf(price, 0) {
+		return nil, errors.New("cache token price must be finite and non-negative")
+	}
+	return &price, nil
+}
+
 var modelTokenPrices = func() map[string][2]*float64 {
 	var prices map[string][2]*float64
 	if err := json.Unmarshal(priceSnapshot, &prices); err != nil {
