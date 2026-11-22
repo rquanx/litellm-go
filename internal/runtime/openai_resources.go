@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -75,6 +76,10 @@ func decodeLiteLLMResourceID(id, family string) (alias, original string, ok bool
 }
 
 func (s *Server) resourceCandidate(alias, deployment string, scope []string) (Candidate, bool) {
+	return s.selectResourceCandidate(alias, deployment, "", scope)
+}
+
+func (s *Server) selectResourceCandidate(alias, deployment, provider string, scope []string) (Candidate, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var selected Candidate
@@ -83,7 +88,8 @@ func (s *Server) resourceCandidate(alias, deployment string, scope []string) (Ca
 			continue
 		}
 		for _, candidate := range route.Candidates {
-			if !candidateAllowed(scope, candidate) || (candidate.Provider != "openai" && candidate.Provider != "azure") || candidate.DeploymentID == "" {
+			if !candidateAllowed(scope, candidate) || (candidate.Provider != "openai" && candidate.Provider != "azure") ||
+				(provider != "" && candidate.Provider != provider) || candidate.DeploymentID == "" {
 				continue
 			}
 			if deployment != "" {
@@ -248,10 +254,18 @@ func resourceActionAllowed(family, action, method string) bool {
 
 func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http.Request, candidate Candidate,
 	family, path, contentType string, body []byte) {
+	s.forwardResource(writer, request, candidate, family, path, contentType, body, nil)
+}
+
+func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Request, candidate Candidate,
+	family, path, contentType string, body []byte, transform func([]byte) ([]byte, error)) {
 	base := strings.TrimRight(candidate.APIBase, "/")
 	target := strings.TrimSuffix(base, "/v1") + path
 	if candidate.Provider == "azure" && !strings.HasSuffix(base, "/openai/v1") {
 		target = strings.TrimSuffix(base, "/openai") + "/openai" + strings.TrimPrefix(path, "/v1") + "?api-version=" + url.QueryEscape(candidate.APIVersion)
+		if isContainerPath(path) && slices.Contains([]string{"", "v1", "latest", "preview"}, candidate.APIVersion) {
+			target = strings.TrimSuffix(base, "/openai") + "/openai" + path
+		}
 	}
 	upstream, err := http.NewRequestWithContext(request.Context(), request.Method, target, bytes.NewReader(body))
 	if err != nil {
@@ -304,7 +318,7 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 	}
 	defer response.Body.Close()
 	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.HasSuffix(path, "/content") &&
-		((family == "files" && strings.HasPrefix(path, "/v1/files/")) || family == "videos") {
+		((family == "files" && strings.HasPrefix(path, "/v1/files/")) || family == "videos" || family == "container_files") {
 		writer.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 		writer.WriteHeader(response.StatusCode)
 		_, _ = io.Copy(writer, response.Body)
@@ -315,8 +329,16 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadGateway, "upstream_error", "Could not read upstream resource")
 		return
 	}
-	if response.StatusCode >= 200 && response.StatusCode < 300 && family != "" {
-		body = wrapOpenAIResource(body, family, candidate.DeploymentID)
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if transform != nil {
+			body, err = transform(body)
+			if err != nil {
+				writeError(writer, http.StatusBadGateway, "resource_error", "Could not update resource ownership")
+				return
+			}
+		} else if family != "" {
+			body = wrapOpenAIResource(body, family, candidate.DeploymentID)
+		}
 	}
 	writeRawResponse(writer, response.StatusCode, response.Header, body)
 }
@@ -335,6 +357,11 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 				if id, ok := entry[field].(string); ok && id != "" {
 					entry[field] = encodeResourceID("files", deployment, id)
 				}
+			}
+		}
+		if family == "container_files" {
+			if id, ok := entry["container_id"].(string); ok && id != "" {
+				entry["container_id"] = encodeResourceID("containers", deployment, id)
 			}
 		}
 		if strings.HasPrefix(family, "vector_stores") {

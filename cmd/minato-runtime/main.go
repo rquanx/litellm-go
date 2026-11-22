@@ -161,6 +161,7 @@ func main() {
 		config.AuthorizeSearch = keys.AuthorizeSearch
 		config.AuthorizeMCP = keys.AuthorizeMCP
 		config.AuthorizeMCPToolset = keys.AuthorizeMCPToolset
+		config.ResourceOwnerScopes = keys.ContainerOwnerScopes
 	}
 	if *keyStatePath != "" && keys == nil {
 		log.Fatal("virtual key state requires standalone config and a master key")
@@ -168,11 +169,17 @@ func main() {
 	if stateDB != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		history, err := proxyconfig.OpenHealthHistory(ctx, stateDB)
+		if err != nil {
+			cancel()
+			log.Fatal(err)
+		}
+		config.HealthHistory = history
+		owners, err := proxyconfig.OpenContainerOwners(ctx, stateDB)
 		cancel()
 		if err != nil {
 			log.Fatal(err)
 		}
-		config.HealthHistory = history
+		config.ContainerOwners = owners
 	}
 	if proxy.Callback != nil {
 		config.Callback = proxy.Callback.Start(context.Background())

@@ -35,6 +35,8 @@ type Config struct {
 	AuthorizeSearch    func(string) ([]string, bool)
 	AuthorizeMCP       func(string) (MCPAccess, bool)
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
+	ResourceOwnerScopes func(string) []string
+	ContainerOwners     ContainerOwners
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
@@ -96,6 +98,9 @@ func NewServer(config Config) *Server {
 	}
 	if config.HealthCheckConcurrency <= 0 {
 		config.HealthCheckConcurrency = 8
+	}
+	if config.ContainerOwners == nil && config.AuthorizeInference {
+		config.ContainerOwners = &memoryContainerOwners{owners: make(map[containerKey]string)}
 	}
 	routes := make(map[string]Route, len(config.Routes))
 	for _, route := range config.Routes {
@@ -213,6 +218,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.config.AuthorizeInference && isVectorStorePath(request.URL.Path) {
 		s.vectorStoreResource(writer, request, modelScope)
+		return
+	}
+	if s.config.AuthorizeInference && isContainerPath(request.URL.Path) {
+		s.containerResource(writer, request, modelScope)
 		return
 	}
 	if s.config.AuthorizeInference && isVideoPath(request.URL.Path) {
