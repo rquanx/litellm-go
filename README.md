@@ -36,11 +36,15 @@ Successful responses include `X-Minato-Runtime-Source`, `X-Minato-Runtime-Model`
 
 ## Run with a LiteLLM Proxy config
 
-The Go runtime can start directly from a LiteLLM YAML file for OpenAI-compatible providers. The supported fields cover `model_list`, `model_info.supported_endpoints`, `general_settings.master_key`, and the router's direct `fallbacks`, `timeout` and `num_retries: 0`. Use an explicit `api_base` for each deployment. Credentials can use LiteLLM's `os.environ/VARIABLE` syntax. Unsupported configuration fields produce a startup error.
+The Go runtime can start directly from a LiteLLM YAML file. The supported fields cover `model_list`, `model_info.supported_endpoints`, `general_settings.master_key`, direct `fallbacks`, `timeout` and `num_retries` from 0 to 8. OpenAI-compatible deployments use an explicit `api_base` and bearer credential. Anthropic and Gemini deployments can use their default public API bases. Credentials can use LiteLLM's `os.environ/VARIABLE` syntax. Unsupported configuration fields produce a startup error.
 
 ```bash
 go run ./cmd/minato-runtime --config proxy.yaml --host 127.0.0.1 --port 4000
 ```
+
+Standalone mode supports dynamic deployments through `/model/info`, `/model/new`, `/model/update`, `PATCH /model/{model_id}/update` and `/model/delete`. `--model-state PATH` persists these deployments to a local JSON file. Use credential references in dynamic deployments to keep provider secrets in the environment.
+
+The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. Use `--key-state PATH` to persist hashed virtual keys, scopes and expiry. Use distinct paths for the model and key state files.
 
 ```yaml
 model_list:
@@ -71,9 +75,15 @@ The image is built as a static Go binary and runs as a non-root user. The defaul
 - `GET /healthz`
 - `GET /v1/models`
 - `POST /v1/responses`
+- Standalone native Responses retrieval, deletion, input-item listing, and cancellation
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
+- `POST /v1/completions` and `POST /v1/moderations`
+- `POST /v1/images/generations` and `POST /v1/images/edits`
+- `POST /v1/audio/speech`, `POST /v1/audio/transcriptions` and `POST /v1/audio/translations`
+- `POST /v1/messages` and `POST /v1/messages/count_tokens` for Anthropic
+- `POST /v1beta/models/{model}:generateContent` and `POST /v1beta/models/{model}:streamGenerateContent` for Gemini
 - `PUT /internal/v1/routes/{alias}`
 - `DELETE /internal/v1/routes/{alias}`
 
-Minato remains the source of truth for projects, environments, model catalogs, route versions, audit records, replay and usage attribution. This runtime is deliberately stateless apart from its in-memory route snapshot. A route update replaces the complete snapshot for one alias, making publication idempotent and allowing Minato to roll back by publishing an earlier version.
+Minato manages projects, environments, route versions, audit records, replay and usage attribution. A Minato route update replaces the in-memory snapshot for one alias. In standalone mode, native Responses returns a deployment-tagged response ID for resource operations and follow-up calls. Azure deployments can specify a dated `api_version` or use an explicit `/openai/v1` base.

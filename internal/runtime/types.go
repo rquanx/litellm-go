@@ -13,6 +13,9 @@ type Candidate struct {
 	APIKey           string            `json:"apiKey"`
 	CredentialRef    string            `json:"credentialRef"`
 	Endpoint         string            `json:"endpoint"`
+	APIVersion       string            `json:"apiVersion,omitempty"`
+	Provider         string            `json:"provider,omitempty"`
+	DeploymentID     string            `json:"deploymentId,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 }
 

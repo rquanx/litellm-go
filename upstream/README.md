@@ -6,9 +6,12 @@ The Go port follows the public Python implementation in LiteLLM. The initial ref
 | --- | --- | --- |
 | `litellm/main.py`, `litellm/llms/openai/` | OpenAI-compatible requests and embeddings | Request mapping, response envelopes, errors and usage |
 | `litellm/responses/`, `litellm/completion_extras/litellm_responses_transformation/` | Chat and Responses conversion, structured output, function tools, token usage and SSE | Eight structured-output cases match both Python releases. Go regressions cover interleaved tool arguments, terminal events and token usage. The provider-specific event inventory remains open. |
-| `litellm/router.py`, `litellm/router_strategy/`, `litellm/router_utils/` | Ordered fallback and versioned routes | Retry classification and behavior before and after the first streamed event |
-| `litellm/proxy/`, `litellm/proxy_auth/` | Runtime HTTP endpoints, Minato integration and static Proxy YAML for OpenAI-compatible upstreams | Proxy management APIs, dynamic configuration and other provider settings remain to be mapped. |
-| Other Python provider and feature modules under `litellm/` | Inventory and port by module | Upstream request and response fixtures for each module |
+| `litellm/router.py`, `litellm/router_strategy/`, `litellm/router_utils/` | Ordered fallback, versioned routes and a retry budget with `Retry-After` support | Deployment strategies, specialized fallback policies and retry parity |
+| `litellm/proxy/`, `litellm/proxy_auth/` | Static YAML, model CRUD, key generation and revocation with model scopes, and optional local state | Database-backed entities, richer authorization and configuration, plus remaining management APIs |
+| `litellm/llms/anthropic/`, `litellm/llms/gemini/`, `litellm/llms/azure/` | Native generation, Anthropic token counting, a Chat and Responses bridge for Anthropic, and Azure OpenAI key authentication | Provider-specific payloads, authorization and event parity across the remaining operations |
+| `litellm/responses/utils.py`, `litellm/proxy/response_api_endpoints/` | Deployment-tagged native Responses IDs, retrieval, deletion, input items, cancellation and affinity for follow-ups | Provider-specific resource handlers and state wrapping for other endpoints |
+| `litellm/constants.py` | Generated list of OpenAI-compatible provider names for explicit base URLs and bearer credentials | Provider defaults and specialized adapters |
+| Other Python provider and feature modules under `litellm/` | Inventory and port by module | Stateful APIs, remaining API families, callbacks and provider modules |
 
 ## Verify protocol behavior
 
@@ -24,12 +27,16 @@ Request conversion also covers text and image URL blocks and groups consecutive 
 git clone --no-checkout https://github.com/BerriAI/litellm.git ../litellm-upstream
 git -C ../litellm-upstream fetch --tags origin
 bash tools/litellm-diff.sh ../litellm-upstream v1.85.1
+python tools/litellm-inventory.py ../litellm-upstream
+python tools/sync-litellm-providers.py ../litellm-upstream --check
 python tools/verify-litellm-formats.py ../litellm-upstream
 python tools/verify-litellm-formats.py ../litellm-upstream v1.85.1
 go test ./...
 ```
 
 Run the script from the Go repository. It lists changed Python implementation paths, tests and shared metadata between the pinned commit and the selected tag. Use `git diff <baseline> <target> -- <path>` in the LiteLLM checkout to examine individual changes.
+
+The inventory command reads HTTP route decorators and provider package directories from the selected Git revision. It finds 696 declared method and path pairs and 119 provider or shared package directories at `v1.85.0`. Route declarations are source anchors for parity work. Feature activation, router prefixes and provider capabilities require separate checks.
 
 For each behavior change, record its upstream commit and Python source path, translate the relevant upstream test or run both implementations against the same simulated provider, then apply the Go change. Advance the pinned reference after reviewing the release and recording any remaining parity gaps. Keep the LiteLLM checkout and its test dependencies in the development environment so the Go deployment stays a standalone binary.
 

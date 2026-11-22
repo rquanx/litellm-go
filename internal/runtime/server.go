@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,12 +27,15 @@ type Config struct {
 	HTTPClient         *http.Client
 	MaxBodyBytes       int64
 	MaxConcurrent      int
+	NumRetries         int
+	AuthorizeKey       func(string) ([]string, bool)
 }
 
 type Server struct {
 	config Config
 	mu     sync.RWMutex
 	routes map[string]Route
+	configuredRoutes map[string]Route
 	sem    chan struct{}
 }
 
@@ -51,25 +55,57 @@ func NewServer(config Config) *Server {
 	for _, route := range config.Routes {
 		routes[route.Alias] = route
 	}
-	return &Server{config: config, routes: routes, sem: make(chan struct{}, config.MaxConcurrent)}
+	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes, sem: make(chan struct{}, config.MaxConcurrent)}
+}
+
+// ReplaceConfiguredRoutes publishes a complete standalone configuration.
+func (s *Server) ReplaceConfiguredRoutes(routes []Route) {
+	next := make(map[string]Route, len(routes))
+	for _, route := range routes {
+		next[route.Alias] = route
+	}
+	s.mu.Lock()
+	s.configuredRoutes = next
+	s.mu.Unlock()
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, "/v1/") && !s.authorized(request) {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+	alias, geminiEndpoint := geminiMethod(request.URL.Path)
+	var modelScope []string
+	if s.config.AuthorizeInference && (geminiEndpoint != "" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+		allowed := false
+		if s.config.AuthorizeKey != nil {
+			modelScope, allowed = s.config.AuthorizeKey(inferenceCredential(request))
+		}
+		if !allowed {
+			writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+			return
+		}
+	}
+	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) {
+		s.responseResource(writer, request, modelScope)
 		return
 	}
+	if request.Method == http.MethodPost {
+		if geminiEndpoint != "" {
+			s.infer(writer, request, geminiEndpoint, alias, modelScope)
+			return
+		}
+		endpoint := EndpointFromPath(request.URL.Path)
+		if endpoint != "" {
+			s.infer(writer, request, endpoint, "", modelScope)
+			return
+		}
+		if request.URL.Path == "/v1/messages/count_tokens" {
+			s.infer(writer, request, "anthropic-count-tokens", "", modelScope)
+			return
+		}
+	}
 	switch {
-	case request.Method == http.MethodGet && request.URL.Path == "/healthz":
+	case request.Method == http.MethodGet && (request.URL.Path == "/healthz" || request.URL.Path == "/health/liveliness"):
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
-		s.models(writer)
-	case request.Method == http.MethodPost && request.URL.Path == "/v1/responses":
-		s.infer(writer, request, "responses")
-	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
-		s.infer(writer, request, "chat-completions")
-	case request.Method == http.MethodPost && request.URL.Path == "/v1/embeddings":
-		s.infer(writer, request, "embeddings")
+		s.models(writer, modelScope)
 	case strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
@@ -77,12 +113,19 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func (s *Server) models(writer http.ResponseWriter) {
+func (s *Server) models(writer http.ResponseWriter, modelScope []string) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data := make([]map[string]any, 0, len(s.routes))
+	data := make([]map[string]any, 0, len(s.routes)+len(s.configuredRoutes))
 	for alias := range s.routes {
-		data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "minato-runtime"})
+		if modelAllowed(modelScope, alias) {
+			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "minato-runtime"})
+		}
+	}
+	for alias := range s.configuredRoutes {
+		if _, overridden := s.routes[alias]; !overridden && modelAllowed(modelScope, alias) {
+			data = append(data, map[string]any{"id": alias, "object": "model", "owned_by": "minato-runtime"})
+		}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
@@ -118,12 +161,12 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 			writeError(writer, http.StatusBadRequest, "invalid_candidate", "Every candidate needs an API base, model ID and endpoint")
 			return
 		}
-		if candidate.Endpoint != "responses" && candidate.Endpoint != "chat-completions" && candidate.Endpoint != "embeddings" {
-			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Candidate endpoint must be responses, chat-completions or embeddings")
+		if _, ok := endpoints[candidate.Endpoint]; !ok {
+			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Unsupported candidate endpoint")
 			return
 		}
-		if (candidate.Endpoint == "embeddings") != (route.Candidates[0].Endpoint == "embeddings") {
-			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "A route cannot mix embeddings with text generation")
+		if !CompatibleEndpoints(candidate.Endpoint, route.Candidates[0].Endpoint) {
+			writeError(writer, http.StatusBadRequest, "invalid_endpoint", "Route candidates must support a compatible endpoint")
 			return
 		}
 		if candidate.CredentialRef != "" && !credentialRefPattern.MatchString(candidate.CredentialRef) {
@@ -137,42 +180,78 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]any{"alias": alias, "version": route.Version})
 }
 
-func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoint string) {
+func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoint, alias string, modelScope []string) {
 	body, err := readBody(request, s.config.MaxBodyBytes)
 	if err != nil {
 		writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large")
 		return
 	}
-	var input map[string]any
-	if err := json.Unmarshal(body, &input); err != nil {
-		writeError(writer, http.StatusBadRequest, "invalid_json", "Request body must be JSON")
+	payload, err := decodePayload(request.Header.Get("Content-Type"), body, endpoint)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	alias, _ := input["model"].(string)
+	input := payload.fields
+	if alias == "" {
+		alias, _ = input["model"].(string)
+	}
+	if !modelAllowed(modelScope, alias) {
+		writeError(writer, http.StatusForbidden, "model_not_allowed", "The key does not allow this model")
+		return
+	}
 	s.mu.RLock()
 	route, ok := s.routes[alias]
+	if !ok {
+		route, ok = s.configuredRoutes[alias]
+	}
 	s.mu.RUnlock()
 	if !ok {
 		writer.Header().Set("X-Minato-Runtime-Route-Missing", "1")
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
 		return
 	}
-	if (endpoint == "embeddings") != (route.Candidates[0].Endpoint == "embeddings") {
+	eligible := make([]Candidate, 0, len(route.Candidates))
+	for _, candidate := range route.Candidates {
+		if servesEndpoint(endpoint, candidate.Endpoint) {
+			eligible = append(eligible, candidate)
+		}
+	}
+	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
 	}
-	if request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream") {
-		if endpoint == "embeddings" {
-			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "Embeddings does not support streaming")
+	route.Candidates = eligible
+	if previous, ok := input["previous_response_id"].(string); ok && s.config.AuthorizeInference && endpoint == "responses" {
+		provider, deployment, original, wrapped := unwrapResponseID(previous)
+		if wrapped {
+			route.Candidates = nil
+			for _, candidate := range eligible {
+				if candidate.Provider == provider && candidate.DeploymentID == deployment && candidate.Endpoint == "responses" {
+					route.Candidates = []Candidate{candidate}
+					break
+				}
+			}
+			if len(route.Candidates) == 0 {
+				writeError(writer, http.StatusBadRequest, "response_not_found", "Previous response does not belong to this route")
+				return
+			}
+			input["previous_response_id"] = original
+		}
+	}
+	if endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream") {
+		if !endpoints[endpoint].streaming {
+			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
 			return
 		}
-		s.inferStream(writer, request, endpoint, route, input)
+		s.inferStream(writer, request, endpoint, route, payload)
 		return
 	}
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	for index, candidate := range route.Candidates {
+	plan := attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries}
+	for {
+		candidate := route.Candidates[plan.index]
 		started := time.Now()
-		status, responseBody, responseHeaders, retryable, callErr := s.callJSON(request.Context(), request, endpoint, candidate, input, route.Alias)
+		status, responseBody, responseHeaders, retryable, callErr := s.callJSON(request.Context(), request, endpoint, candidate, payload)
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
 			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
 		if callErr != nil {
@@ -182,15 +261,26 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			var payload map[string]any
 			if json.Unmarshal(responseBody, &payload) == nil {
 				attempt["usage"] = payload["usage"]
+				if isGeminiEndpoint(endpoint) {
+					attempt["usage"] = geminiUsage(payload)
+				}
+				if candidate.Endpoint == "anthropic-messages" && endpoint != "anthropic-count-tokens" {
+					usage, _ := payload["usage"].(map[string]any)
+					attempt["usage"] = anthropicUsage(usage)
+				}
 			}
 		}
 		attempts = append(attempts, attempt)
 		if callErr == nil && status >= 200 && status < 300 {
-			writeRuntimeMeta(writer, candidate, index+1, attempts)
-			writeResponse(writer, status, responseHeaders, normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias))
+			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
+			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
+			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
+				body = wrapResponseBody(body, candidate)
+			}
+			writeResponse(writer, status, responseHeaders, body)
 			return
 		}
-		if !retryable || index == len(route.Candidates)-1 {
+		if !plan.advance(request.Context(), status, responseHeaders, retryable, len(route.Candidates)) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if callErr != nil {
 				writeError(writer, http.StatusBadGateway, "upstream_error", callErr.Error())
@@ -202,12 +292,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 }
 
-func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, input map[string]any) {
+func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload) {
 	eligible := route.Candidates
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	for index, candidate := range eligible {
+	plan := attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries}
+	for {
+		candidate := eligible[plan.index]
 		started := time.Now()
-		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, input)
+		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, payload)
 		var reader *bufio.Reader
 		var firstFrame []byte
 		streamFailure := false
@@ -244,7 +336,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 		attempts = append(attempts, attempt)
 		if err == nil && !streamFailure && status >= 200 && status < 300 {
 			defer response.Body.Close()
-			writeRuntimeMeta(writer, candidate, index+1, attempts)
+			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			for key, values := range response.Header {
 				if strings.EqualFold(key, "Content-Type") || strings.EqualFold(key, "Cache-Control") {
 					writer.Header()[key] = values
@@ -254,7 +346,10 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			writer.Header().Set("X-Accel-Buffering", "no")
 			writer.WriteHeader(status)
 			flush, _ := writer.(http.Flusher)
-			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, input, s.config.MaxBodyBytes)
+			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, payload.fields, s.config.MaxBodyBytes)
+			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
+				convert = func(frame []byte) []byte { return wrapResponseEvent(frame, candidate) }
+			}
 			if len(firstFrame) > 0 && !writeStreamFrame(writer, flush, convert(firstFrame)) {
 				return
 			}
@@ -269,7 +364,11 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			}
 			return
 		}
-		if !retryable || index == len(eligible)-1 {
+		var headers http.Header
+		if response != nil {
+			headers = response.Header
+		}
+		if !plan.advance(request.Context(), status, headers, retryable, len(eligible)) {
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			if streamFailure {
 				writeError(writer, http.StatusBadGateway, "upstream_stream_failure", "Upstream stream failed before data")
@@ -304,6 +403,15 @@ func writeStreamFrame(writer http.ResponseWriter, flush http.Flusher, frame []by
 }
 
 func streamConverter(endpoint, upstream, alias string, input map[string]any, limit int64) func([]byte) []byte {
+	if upstream == "anthropic-messages" && isTextEndpoint(endpoint) {
+		options, _ := input["stream_options"].(map[string]any)
+		bridge := newAnthropicChatStream(alias, endpoint == "responses" || inputBool(options, "include_usage"))
+		if endpoint == "responses" {
+			responses := &chatResponsesStream{alias: alias, limit: limit}
+			return func(frame []byte) []byte { return responses.convert(bridge.convert(frame)) }
+		}
+		return bridge.convert
+	}
 	if endpoint == "responses" && upstream == "chat-completions" {
 		bridge := &chatResponsesStream{alias: alias, limit: limit}
 		return bridge.convert
@@ -316,13 +424,16 @@ func streamConverter(endpoint, upstream, alias string, input map[string]any, lim
 	return func(frame []byte) []byte { return frame }
 }
 
-func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, alias string) (int, []byte, http.Header, bool, error) {
-	response, err := s.send(ctx, request, endpoint, candidate, input, false)
+func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
+	response, err := s.send(ctx, request, endpoint, candidate, payload, false)
 	if err != nil {
 		return 0, nil, nil, true, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes))
+	body, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
+	if int64(len(body)) > s.config.MaxBodyBytes {
+		return response.StatusCode, nil, response.Header, false, errors.New("upstream response exceeds the body limit")
+	}
 	if err != nil {
 		return response.StatusCode, nil, response.Header, true, err
 	}
@@ -332,8 +443,8 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 	return response.StatusCode, body, response.Header, retryableResponse(response.StatusCode, body), nil
 }
 
-func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any) (int, *http.Response, bool, error) {
-	response, err := s.send(ctx, request, endpoint, candidate, input, true)
+func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, *http.Response, bool, error) {
+	response, err := s.send(ctx, request, endpoint, candidate, payload, true)
 	if err != nil {
 		return 0, nil, true, err
 	}
@@ -343,17 +454,21 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 	return response.StatusCode, response, retryableStatus(response.StatusCode), nil
 }
 
-func (s *Server) send(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, input map[string]any, stream bool) (*http.Response, error) {
-	select {
-	case s.sem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
+func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+	if input.form != nil {
+		return input.encodeMultipart(candidate.ModelID, stream)
 	}
-	release := func() { <-s.sem }
 	targetEndpoint := candidate.Endpoint
-	payload := clone(input)
-	payload["model"] = candidate.ModelID
-	payload["stream"] = stream
+	payload := clone(input.fields)
+	if isGeminiEndpoint(targetEndpoint) {
+		delete(payload, "model")
+		delete(payload, "stream")
+	} else {
+		payload["model"] = candidate.ModelID
+	}
+	if endpoints[targetEndpoint].streaming && endpoint != "anthropic-count-tokens" && !isGeminiEndpoint(targetEndpoint) {
+		payload["stream"] = stream
+	}
 	if endpoint == "responses" && targetEndpoint == "chat-completions" {
 		payload = responsesToChat(payload)
 		if stream {
@@ -362,32 +477,67 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	} else if endpoint == "chat-completions" && targetEndpoint == "responses" {
 		payload = chatRequestToResponses(payload)
 	}
-	encoded, err := json.Marshal(payload)
+	if targetEndpoint == "anthropic-messages" && isTextEndpoint(endpoint) {
+		if endpoint == "responses" {
+			payload = responsesToChat(payload)
+		}
+		payload = chatToAnthropicRequest(payload)
+	}
+	body, err := json.Marshal(payload)
+	return body, "application/json", err
+}
+
+func (s *Server) send(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload, stream bool) (*http.Response, error) {
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	release := func() { <-s.sem }
+	encoded, contentType, err := encodePayload(payload, endpoint, candidate, stream)
 	if err != nil {
 		release()
 		return nil, err
 	}
-	path := "/v1/responses"
-	if targetEndpoint == "chat-completions" {
-		path = "/v1/chat/completions"
-	} else if targetEndpoint == "embeddings" {
-		path = "/v1/embeddings"
+	path := endpoints[candidate.Endpoint].path
+	if endpoint == "anthropic-count-tokens" {
+		path = "/v1/messages/count_tokens"
 	}
 	base := strings.TrimRight(candidate.APIBase, "/")
 	if strings.HasSuffix(base, "/v1") {
 		base = strings.TrimSuffix(base, "/v1")
 	}
-	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(encoded))
+	target := base + path
+	if isGeminiEndpoint(endpoint) {
+		target = geminiURL(candidate.APIBase, candidate.ModelID, endpoint)
+	} else if candidate.Provider == "azure" {
+		target = azureTarget(candidate.APIBase, candidate.ModelID, candidate.Endpoint, candidate.APIVersion)
+	}
+	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(encoded))
 	if err != nil {
 		release()
 		return nil, err
 	}
-	upstream.Header.Set("Content-Type", "application/json")
+	upstream.Header.Set("Content-Type", contentType)
 	apiKey := candidate.APIKey
 	if apiKey == "" && candidate.CredentialRef != "" {
 		apiKey = os.Getenv(candidate.CredentialRef)
 	}
-	if apiKey != "" {
+	if candidate.Endpoint == "anthropic-messages" {
+		upstream.Header.Set("anthropic-version", "2023-06-01")
+		for _, header := range []string{"anthropic-version", "anthropic-beta"} {
+			if values := request.Header.Values(header); len(values) != 0 {
+				upstream.Header[http.CanonicalHeaderKey(header)] = values
+			}
+		}
+		if apiKey != "" {
+			upstream.Header.Set("x-api-key", apiKey)
+		}
+	} else if isGeminiEndpoint(candidate.Endpoint) {
+		applyGeminiCredential(upstream, apiKey)
+	} else if candidate.Provider == "azure" && apiKey != "" {
+		upstream.Header.Set("api-key", apiKey)
+	} else if apiKey != "" {
 		upstream.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 	for key, value := range candidate.Headers {
@@ -418,6 +568,21 @@ func (body *releaseBody) Close() error {
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
+	if candidateEndpoint == "anthropic-messages" && isTextEndpoint(endpoint) {
+		var native map[string]any
+		if json.Unmarshal(body, &native) != nil || native == nil {
+			return body
+		}
+		chat := anthropicToChatResponse(native, alias)
+		if endpoint == "responses" {
+			chat = chatToResponses(chat, alias)
+		}
+		encoded, _ := json.Marshal(chat)
+		return encoded
+	}
+	if endpoint == "anthropic-count-tokens" || (endpoint != "responses" && endpoint != "chat-completions" && endpoint != "embeddings" && endpoint != "anthropic-messages" && endpoint != "completions") {
+		return body
+	}
 	if endpoint == "chat-completions" && candidateEndpoint == "responses" {
 		var response map[string]any
 		if json.Unmarshal(body, &response) != nil {
@@ -438,7 +603,28 @@ func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias st
 }
 
 func (s *Server) authorized(request *http.Request) bool {
-	return s.config.Token == "" || request.Header.Get("Authorization") == "Bearer "+s.config.Token
+	return s.config.Token == "" || inferenceCredential(request) == s.config.Token
+}
+
+func inferenceCredential(request *http.Request) string {
+	if _, endpoint := geminiMethod(request.URL.Path); endpoint != "" {
+		if key := request.Header.Get("x-goog-api-key"); key != "" {
+			return key
+		}
+	}
+	if request.URL.Path == "/v1/messages" || request.URL.Path == "/v1/messages/count_tokens" {
+		if key := request.Header.Get("x-api-key"); key != "" {
+			return key
+		}
+	}
+	if token, ok := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer "); ok {
+		return token
+	}
+	return ""
+}
+
+func modelAllowed(scope []string, alias string) bool {
+	return len(scope) == 0 || slices.Contains(scope, "*") || slices.Contains(scope, alias)
 }
 
 func retryableStatus(status int) bool {
@@ -572,7 +758,7 @@ func sseFrameFailure(frame []byte) bool {
 }
 func rewriteModel(body []byte, alias string) []byte {
 	var value map[string]any
-	if json.Unmarshal(body, &value) != nil {
+	if json.Unmarshal(body, &value) != nil || value == nil {
 		return body
 	}
 	value["model"] = alias
