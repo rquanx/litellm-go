@@ -98,7 +98,7 @@ func Load(reader io.Reader) (Config, error) {
 		strategy = "simple-shuffle"
 	}
 	switch strategy {
-	case "simple-shuffle", "least-busy", "cost-based-routing", "latency-based-routing":
+	case "simple-shuffle", "least-busy", "cost-based-routing", "latency-based-routing", "usage-based-routing", "usage-based-routing-v2":
 	default:
 		return Config{}, errors.New("unsupported routing_strategy")
 	}

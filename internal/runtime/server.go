@@ -44,6 +44,8 @@ type Server struct {
 	trafficMu sync.Mutex
 	deploymentTraffic map[string]int
 	deploymentLatency map[latencyKey]*latencyWindow
+	capacityMinute    int64
+	deploymentCapacity map[string]capacityUsage
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -365,7 +367,21 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
-		status, responseBody, responseHeaders, retryable, callErr := s.callJSON(request.Context(), request, endpoint, candidate, payload)
+		reservation, admitted := s.reserveCapacity(candidate, payload)
+		var status int
+		var responseBody []byte
+		var responseHeaders http.Header
+		var retryable bool
+		var callErr error
+		if admitted {
+			status, responseBody, responseHeaders, retryable, callErr = s.callJSON(request.Context(), request, endpoint, candidate, payload)
+			if reservation != nil && status >= 200 && status < 300 {
+				s.settleCapacity(reservation, usageFromJSON(responseBody))
+			}
+		} else {
+			status, responseBody, responseHeaders = capacityError()
+			retryable = plan.index+1 < len(route.Candidates)
+		}
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
 			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}
 		if callErr != nil {
@@ -416,7 +432,18 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
-		status, response, retryable, err := s.callStream(request.Context(), request, endpoint, candidate, payload)
+		reservation, admitted := s.reserveCapacity(candidate, payload)
+		var status int
+		var response *http.Response
+		var retryable bool
+		var err error
+		if admitted {
+			status, response, retryable, err = s.callStream(request.Context(), request, endpoint, candidate, payload)
+		} else {
+			code, body, headers := capacityError()
+			status = code
+			response = &http.Response{StatusCode: code, Header: headers, Body: io.NopCloser(bytes.NewReader(body))}
+		}
 		var reader *bufio.Reader
 		var firstFrame []byte
 		var errorBody []byte
@@ -445,7 +472,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			if readErr != nil {
 				retryable = true
 			} else {
-				retryable = retryableResponse(status, body)
+				retryable = (!admitted && plan.index+1 < len(route.Candidates)) || (admitted && retryableResponse(status, body))
 			}
 		}
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
@@ -470,6 +497,13 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, payload.fields, s.config.MaxBodyBytes)
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				convert = func(frame []byte) []byte { return wrapResponseEvent(frame, candidate) }
+			}
+			if reservation != nil {
+				baseConvert := convert
+				convert = func(frame []byte) []byte {
+					s.settleCapacity(reservation, usageFromJSON(streamErrorBody(frame)))
+					return baseConvert(frame)
+				}
 			}
 			if len(firstFrame) > 0 && !writeStreamFrame(writer, flush, convert(firstFrame)) {
 				return

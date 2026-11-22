@@ -24,6 +24,8 @@ func (s *Server) orderDeployments(candidates []Candidate, stream bool) {
 				switch s.config.RoutingStrategy {
 				case "latency-based-routing":
 					selected = s.lowestLatency(group, stream)
+				case "usage-based-routing", "usage-based-routing-v2":
+					selected = s.lowestUsage(group)
 				case "least-busy":
 					selected = s.leastBusy(group)
 				default:
