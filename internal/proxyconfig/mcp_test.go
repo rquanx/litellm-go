@@ -29,6 +29,11 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 			server_id TEXT, server_name TEXT, transport TEXT, url TEXT, approval_status TEXT,
 			auth_type TEXT, credentials JSONB, static_headers JSONB
 		);
+		CREATE TEMP TABLE "LiteLLM_MCPToolsetTable" (
+			toolset_id TEXT, toolset_name TEXT, description TEXT, tools JSONB, created_at TIMESTAMP, updated_at TIMESTAMP
+		);
+		INSERT INTO "LiteLLM_MCPToolsetTable" VALUES
+			('fixture-set','collection',NULL,'[{"server_id":"fixture-id","tool_name":"echo"}]',now(),now());
 		INSERT INTO "LiteLLM_MCPServerTable" VALUES
 			('fixture-id','fixture','http','http://localhost:1/mcp','active','bearer_token',
 			'{"auth_value":"fixture-import-token"}','{"X-Fixture":"value"}'),
@@ -48,6 +53,10 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 	if entry.ServerID != "fixture-id" || entry.Headers["Authorization"] != "Bearer fixture-import-token" ||
 		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 1 {
 		t.Fatal("stored MCP server did not retain its ID and credentials")
+	}
+	if len(state.MCPToolsets) != 1 || state.MCPToolsets[0].ID != "fixture-set" ||
+		len(state.MCPToolsets[0].Tools) != 1 || state.MCPToolsets[0].Tools[0].ServerID != entry.ServerID {
+		t.Fatal("stored toolset did not retain its ID and server reference")
 	}
 }
 

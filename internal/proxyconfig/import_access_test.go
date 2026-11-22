@@ -24,7 +24,7 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		CREATE TEMP TABLE "LiteLLM_BudgetTable" (budget_id TEXT, max_budget REAL, allowed_models TEXT[]);
 		CREATE TEMP TABLE "LiteLLM_OrganizationTable" (organization_id TEXT, organization_alias TEXT, models TEXT[], budget_id TEXT);
 		CREATE TEMP TABLE "LiteLLM_UserTable" (user_id TEXT, user_role TEXT, models TEXT[]);
-		CREATE TEMP TABLE "LiteLLM_ObjectPermissionTable" (object_permission_id TEXT, search_tools TEXT[], mcp_servers TEXT[], mcp_toolsets TEXT[]);
+		CREATE TEMP TABLE "LiteLLM_ObjectPermissionTable" (object_permission_id TEXT, search_tools TEXT[], mcp_servers TEXT[], mcp_toolsets TEXT[], agents TEXT[]);
 		CREATE TEMP TABLE "LiteLLM_TeamTable" (team_id TEXT, organization_id TEXT, models TEXT[], members_with_roles JSONB, object_permission_id TEXT);
 		CREATE TEMP TABLE "LiteLLM_TeamMembership" (team_id TEXT, user_id TEXT, budget_id TEXT);
 		CREATE TEMP TABLE "LiteLLM_OrganizationMembership" (organization_id TEXT, user_id TEXT, user_role TEXT);
@@ -33,8 +33,8 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		INSERT INTO "LiteLLM_OrganizationTable" VALUES ('org', 'Fixture', ARRAY['allowed','org-only'], 'org-budget');
 		INSERT INTO "LiteLLM_UserTable" VALUES ('user', 'internal_user', ARRAY['allowed','org-only','user-only']);
 		INSERT INTO "LiteLLM_ObjectPermissionTable" VALUES
-			('team-permission', ARRAY['shared','team-search'], ARRAY['fixture-mcp'], NULL),
-			('key-permission', ARRAY['shared','key-search'], NULL, ARRAY['unsupported']);
+			('team-permission', ARRAY['shared','team-search'], ARRAY['fixture-mcp'], ARRAY['toolset'], NULL),
+			('key-permission', ARRAY['shared','key-search'], NULL, NULL, ARRAY['unsupported']);
 		INSERT INTO "LiteLLM_TeamTable" VALUES ('team', 'org', ARRAY['allowed','org-only','team-only'], '[{"user_id":"user","role":"user"}]', 'team-permission');
 		INSERT INTO "LiteLLM_TeamMembership" VALUES ('team', 'user', 'member-budget');
 		INSERT INTO "LiteLLM_OrganizationMembership" VALUES ('org', 'user', 'internal_user');
@@ -57,9 +57,9 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := ImportLiteLLMAccess(db); err == nil {
-		t.Fatal("unsupported MCP restrictions must block migration")
+		t.Fatal("unsupported agent restrictions must block migration")
 	}
-	if _, err := db.Exec(`UPDATE "LiteLLM_ObjectPermissionTable" SET mcp_toolsets = NULL`); err != nil {
+	if _, err := db.Exec(`UPDATE "LiteLLM_ObjectPermissionTable" SET agents = NULL`); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := ImportLiteLLMAccess(db); err != nil || count != 1 {
@@ -79,5 +79,8 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		!access(runtime.MCPServer{ID: "fixture-mcp"}, "") ||
 		access(runtime.MCPServer{ID: "other-mcp"}, "") {
 		t.Fatal("imported key did not inherit the team's MCP server grant")
+	}
+	if grants, _, valid := registry.AuthorizeMCPToolset("fixture-token"); !valid || !slices.Equal(grants, []string{"toolset"}) {
+		t.Fatal("imported key did not inherit the team's MCP toolset grant")
 	}
 }

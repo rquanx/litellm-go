@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 func ImportLiteLLMMCPServers(db *sql.DB, config Config) (int, error) {
@@ -20,6 +22,9 @@ func ImportLiteLLMMCPServers(db *sql.DB, config Config) (int, error) {
 	}
 	if len(state.MCPServers) != 0 {
 		return 0, errors.New("Go proxy state already contains managed MCP servers")
+	}
+	if len(state.MCPToolsets) != 0 {
+		return 0, errors.New("Go proxy state already contains MCP toolsets")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -53,7 +58,12 @@ func ImportLiteLLMMCPServers(db *sql.DB, config Config) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, errors.New("could not finish reading LiteLLM MCP servers")
 	}
-	if len(state.MCPServers) == 0 {
+	toolsets, err := readLiteLLMMCPToolsets(ctx, db)
+	if err != nil {
+		return 0, err
+	}
+	state.MCPToolsets = toolsets
+	if len(state.MCPServers)+len(state.MCPToolsets) == 0 {
 		return 0, nil
 	}
 	registry := modelRegistry{base: config}
@@ -64,6 +74,37 @@ func ImportLiteLLMMCPServers(db *sql.DB, config Config) (int, error) {
 		return 0, errors.New("could not commit imported MCP server state")
 	}
 	return len(state.MCPServers), nil
+}
+
+func readLiteLLMMCPToolsets(ctx context.Context, db *sql.DB) ([]runtime.MCPToolset, error) {
+	var present bool
+	if err := db.QueryRowContext(ctx, `SELECT to_regclass('"LiteLLM_MCPToolsetTable"') IS NOT NULL`).Scan(&present); err != nil || !present {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx, `SELECT toolset_id, toolset_name, COALESCE(description, ''), tools, created_at, updated_at
+		FROM "LiteLLM_MCPToolsetTable" ORDER BY created_at, toolset_id`)
+	if err != nil {
+		return nil, errors.New("could not read LiteLLM_MCPToolsetTable")
+	}
+	defer rows.Close()
+	var result []runtime.MCPToolset
+	for rows.Next() {
+		var set runtime.MCPToolset
+		var tools []byte
+		if err := rows.Scan(&set.ID, &set.Name, &set.Description, &tools, &set.CreatedAt, &set.UpdatedAt); err != nil {
+			return nil, errors.New("invalid LiteLLM MCP toolset")
+		}
+		if decodeLiteLLMSearchField(tools, &set.Tools) != nil || set.ID == "" || set.Name == "" || strings.Contains(set.Name, "/") {
+			return nil, fmt.Errorf("incompatible MCP toolset %q", set.Name)
+		}
+		for _, tool := range set.Tools {
+			if tool.ServerID == "" || tool.Name == "" {
+				return nil, fmt.Errorf("incompatible tool entry in MCP toolset %q", set.Name)
+			}
+		}
+		result = append(result, set)
+	}
+	return result, rows.Err()
 }
 
 func decodeLiteLLMMCPServer(payload []byte, salt string) (string, mcpServerConfig, bool, error) {
