@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/rquanx/minato-runtime/internal/runtime"
 	"go.yaml.in/yaml/v3"
 )
@@ -52,6 +54,7 @@ type deployment struct {
 		AWSAccessKey string `yaml:"aws_access_key_id" json:"aws_access_key_id,omitempty"`
 		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
 		AWSSessionToken string `yaml:"aws_session_token" json:"aws_session_token,omitempty"`
+		AWSProfile string `yaml:"aws_profile_name" json:"aws_profile_name,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
@@ -320,9 +323,6 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
-		if key == "" && (bedrock.AccessKey == "" || bedrock.SecretKey == "") {
-			return runtime.Candidate{}, errors.New("Bedrock requires static AWS credentials or a bearer token")
-		}
 	}
 	if key == "" && rerankProvider(provider) {
 		if provider == "jina_ai" {
@@ -390,9 +390,9 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 		target *string
 	}{
 		{entry.Params.AWSRegion, "AWS_REGION", &config.Region},
-		{entry.Params.AWSAccessKey, "AWS_ACCESS_KEY_ID", &config.AccessKey},
-		{entry.Params.AWSSecretKey, "AWS_SECRET_ACCESS_KEY", &config.SecretKey},
-		{entry.Params.AWSSessionToken, "AWS_SESSION_TOKEN", &config.SessionToken},
+		{entry.Params.AWSAccessKey, "", &config.AccessKey},
+		{entry.Params.AWSSecretKey, "", &config.SecretKey},
+		{entry.Params.AWSSessionToken, "", &config.SessionToken},
 	} {
 		value, err := resolveEnv(field.value)
 		if err != nil {
@@ -405,6 +405,27 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 	}
 	if config.Region == "" {
 		config.Region = os.Getenv("AWS_DEFAULT_REGION")
+	}
+	if (config.AccessKey == "") != (config.SecretKey == "") {
+		return nil, errors.New("Bedrock requires both explicit AWS access and secret keys")
+	}
+	profile, err := resolveEnv(entry.Params.AWSProfile)
+	if err != nil {
+		return nil, err
+	}
+	if config.Region == "" || (config.AccessKey == "" && entry.Params.APIKey == "" && os.Getenv("AWS_BEARER_TOKEN_BEDROCK") == "") {
+		options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(config.Region)}
+		if profile != "" {
+			options = append(options, awsconfig.WithSharedConfigProfile(profile))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		awsConfig, err := awsconfig.LoadDefaultConfig(ctx, options...)
+		if err != nil {
+			return nil, errors.New("could not load the AWS configuration for Bedrock")
+		}
+		config.Region = awsConfig.Region
+		config.Credentials = awsConfig.Credentials
 	}
 	if config.Region == "" {
 		return nil, errors.New("Bedrock requires aws_region_name or AWS_REGION")

@@ -20,6 +20,7 @@ type BedrockConfig struct {
 	AccessKey    string `json:"accessKey"`
 	SecretKey    string `json:"secretKey"`
 	SessionToken string `json:"sessionToken,omitempty"`
+	Credentials aws.CredentialsProvider `json:"-"`
 }
 
 func bedrockURL(base, model string, stream bool) string {
@@ -36,13 +37,24 @@ func authorizeBedrock(ctx context.Context, request *http.Request, candidate Cand
 		return nil
 	}
 	config := candidate.Bedrock
-	if config == nil || config.AccessKey == "" || config.SecretKey == "" || config.Region == "" {
+	if config == nil || config.Region == "" {
 		return errors.New("Bedrock requires a region and AWS credential")
 	}
-	hash := sha256.Sum256(body)
-	return v4.NewSigner().SignHTTP(ctx, aws.Credentials{
+	credentials := aws.Credentials{
 		AccessKeyID: config.AccessKey, SecretAccessKey: config.SecretKey, SessionToken: config.SessionToken,
-	}, request, hex.EncodeToString(hash[:]), "bedrock", config.Region, time.Now())
+	}
+	if !credentials.HasKeys() && config.Credentials != nil {
+		var err error
+		credentials, err = config.Credentials.Retrieve(ctx)
+		if err != nil {
+			return errors.New("could not retrieve AWS credentials for Bedrock")
+		}
+	}
+	if !credentials.HasKeys() {
+		return errors.New("Bedrock requires AWS credentials")
+	}
+	hash := sha256.Sum256(body)
+	return v4.NewSigner().SignHTTP(ctx, credentials, request, hex.EncodeToString(hash[:]), "bedrock", config.Region, time.Now())
 }
 
 func chatToBedrock(chat map[string]any) map[string]any {

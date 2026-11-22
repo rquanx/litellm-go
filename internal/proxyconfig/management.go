@@ -181,6 +181,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSSessionToken == "" {
 			model.Params.AWSSessionToken = existing.Params.AWSSessionToken
 		}
+		if model.Params.AWSProfile == "" {
+			model.Params.AWSProfile = existing.Params.AWSProfile
+		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}
