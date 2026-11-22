@@ -45,6 +45,7 @@ func main() {
 		}
 		config.Routes = proxy.Routes
 		config.SearchTools = proxy.SearchTools
+		config.MCPServers = proxy.MCPServers
 		config.SearchFallbacks = proxy.SearchFallbacks
 		config.PassThrough = proxy.PassThrough
 		config.NumRetries = proxy.NumRetries

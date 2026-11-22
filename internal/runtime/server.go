@@ -52,6 +52,7 @@ type Config struct {
 	HealthRoutingStaleness time.Duration
 	IgnoreTransientHealthErrors bool
 	PassThrough []PassThroughRoute
+	MCPServers []MCPServer
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
@@ -122,6 +123,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
+		return
+	}
+	if s.config.AuthorizeInference && s.serveMCPREST(writer, request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.servePassThrough(writer, request) {

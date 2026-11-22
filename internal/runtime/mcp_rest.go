@@ -1,0 +1,127 @@
+package runtime
+
+import (
+	"encoding/json"
+	"net/http"
+	"path"
+	"strings"
+)
+
+func (s *Server) serveMCPREST(w http.ResponseWriter, r *http.Request) bool {
+	list := r.Method == http.MethodGet && r.URL.Path == "/mcp-rest/tools/list"
+	call := r.Method == http.MethodPost && r.URL.Path == "/mcp-rest/tools/call"
+	if !list && !call {
+		return false
+	}
+	admin := s.authorized(r)
+	if !admin {
+		valid := false
+		if s.config.AuthorizeKey != nil {
+			_, valid = s.config.AuthorizeKey(ProxyCredential(r))
+		}
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+			return true
+		}
+	}
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-r.Context().Done():
+		return true
+	}
+	if list {
+		s.listMCPTools(w, r, admin)
+	} else {
+		s.callMCPTool(w, r, admin)
+	}
+	return true
+}
+
+func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, admin bool) {
+	selector := r.URL.Query().Get("server_id")
+	tools := make([]map[string]any, 0)
+	var listed bool
+	for _, server := range s.config.MCPServers {
+		if (!admin && !server.AllowAllKeys) || (selector != "" && !server.matches(selector)) {
+			continue
+		}
+		listed = true
+		results, err := s.mcpTools(r.Context(), server)
+		if err != nil {
+			if selector != "" {
+				writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": "server_error", "message": "Could not list MCP tools"})
+				return
+			}
+			continue
+		}
+		tools = append(tools, results...)
+	}
+	if !listed && selector != "" {
+		writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": "server_not_found", "message": "MCP server not found"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tools": tools, "error": nil, "message": nil})
+}
+
+func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, admin bool) {
+	var input struct {
+		ServerID string `json:"server_id"`
+		Name string `json:"name"`
+		Arguments map[string]json.RawMessage `json:"arguments"`
+	}
+	body, err := readBody(r, s.config.MaxBodyBytes)
+	if err != nil || json.Unmarshal(body, &input) != nil || input.ServerID == "" || input.Name == "" {
+		writeError(w, http.StatusBadRequest, "missing_parameter", "Supply server_id and name")
+		return
+	}
+	for _, server := range s.config.MCPServers {
+		if !server.matches(input.ServerID) {
+			continue
+		}
+		name := input.Name
+		for _, prefix := range []string{server.Alias, server.Name, server.ID} {
+			if prefix != "" && strings.HasPrefix(name, prefix+"-") {
+				name = strings.TrimPrefix(name, prefix+"-")
+				break
+			}
+		}
+		if (!admin && !server.AllowAllKeys) || !server.allowsTool(name) {
+			writeError(w, http.StatusForbidden, "tool_not_allowed", "MCP tool access denied")
+			return
+		}
+		session, err := s.openMCP(r.Context(), server)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", "Could not open MCP session")
+			return
+		}
+		defer session.close()
+		if input.Arguments == nil {
+			input.Arguments = make(map[string]json.RawMessage)
+		}
+		response, err := session.rpc("tools/call", map[string]any{"name": name, "arguments": input.Arguments})
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "upstream_error", "MCP tool call failed")
+			return
+		}
+		writeRawResponse(w, http.StatusOK, http.Header{"Content-Type": []string{"application/json"}}, response)
+		return
+	}
+	writeError(w, http.StatusNotFound, "server_not_found", "MCP server not found")
+}
+
+func (server MCPServer) matches(id string) bool {
+	return id == server.ID || id == server.Name || (server.Alias != "" && id == server.Alias)
+}
+
+func (server MCPServer) allowsTool(name string) bool {
+	if server.AllowedTools == nil {
+		return true
+	}
+	for _, pattern := range server.AllowedTools {
+		if match, _ := path.Match(pattern, name); pattern == name || match {
+			return true
+		}
+	}
+	return false
+}

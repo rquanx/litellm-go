@@ -20,6 +20,7 @@ import (
 type configFile struct {
 	Models  []deployment `yaml:"model_list"`
 	SearchTools []searchToolConfig `yaml:"search_tools"`
+	MCPServers map[string]mcpServerConfig `yaml:"mcp_servers"`
 	Credentials []providerCredential `yaml:"credential_list"`
 	Callbacks callbackSettings `yaml:"litellm_settings"`
 	General struct {
@@ -93,6 +94,7 @@ type deployment struct {
 type Config struct {
 	Routes    []runtime.Route
 	SearchTools []runtime.SearchTool
+	MCPServers []runtime.MCPServer
 	SearchFallbacks map[string][]string
 	staticSearchTools []searchToolConfig
 	MasterKey string
@@ -139,8 +141,8 @@ func Load(reader io.Reader) (Config, error) {
 	if len(file.SearchTools) == 0 {
 		file.SearchTools = file.General.SearchTools
 	}
-	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
-		return Config{}, errors.New("a model, search tool or pass-through endpoint is required and router settings must use a valid timeout and retry count between zero and eight")
+	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough)+len(file.MCPServers) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
+		return Config{}, errors.New("configure a model, search tool, pass-through endpoint or MCP server and use valid router settings")
 	}
 	strategy := file.Router.Strategy
 	if strategy == "" {
@@ -215,6 +217,10 @@ func Load(reader io.Reader) (Config, error) {
 		config.credentials[credential.Name] = credential
 	}
 	var err error
+	config.MCPServers, err = prepareMCPServers(file.MCPServers)
+	if err != nil {
+		return Config{}, err
+	}
 	config.PassThrough, err = preparePassThrough(file.General.PassThrough)
 	if err != nil {
 		return Config{}, err
