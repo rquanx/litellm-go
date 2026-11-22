@@ -733,6 +733,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if provider == "gemini" || provider == "vertex_ai" {
 		endpoint = "gemini-generate"
+		if entry.Info.Mode == "image_generation" || (entry.Info.Mode == "" && strings.HasPrefix(model, "imagen-")) {
+			endpoint = "image-generation"
+		}
+		if entry.Info.Mode == "image_edit" {
+			endpoint = "image-edit"
+		}
 		if strings.Contains(model, "embedding") {
 			endpoint = "google-embeddings"
 		}
@@ -778,7 +784,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if configured == "embeddings" && (provider == "cohere" || provider == "cohere_chat") {
 			configured = "cohere-embeddings"
 		}
-		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" &&
+		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint) {

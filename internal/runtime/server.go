@@ -819,7 +819,7 @@ func (s *Server) eligibleCandidates(candidates []Candidate, scope []string, endp
 	}
 	eligible := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) {
+		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || !googleImageDeployment(candidate)) {
 			if candidate.DeploymentID != "" {
 				index := slices.IndexFunc(eligible, func(existing Candidate) bool {
 					return existing.DeploymentID == candidate.DeploymentID && existing.RoutingGroup == candidate.RoutingGroup
@@ -889,12 +889,24 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 	if candidate.Endpoint == "google-embeddings" {
 		return s.googleEmbeddings(ctx, request, candidate, payload)
 	}
-	return s.callProviderJSON(ctx, request, endpoint, candidate, payload)
+	status, data, headers, retryable, err := s.callProviderJSON(ctx, request, endpoint, candidate, payload)
+	if err == nil && status/100 == 2 && googleImageDeployment(candidate) {
+		data, err = googleImageResponse(data)
+		if err != nil {
+			return http.StatusBadGateway, nil, headers, true, err
+		}
+	}
+	return status, data, headers, retryable, err
 }
 
 func (s *Server) callProviderJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
 	response, err := s.send(ctx, request, endpoint, candidate, payload, false)
 	if err != nil {
+		var invalid invalidGoogleImageRequest
+		if errors.As(err, &invalid) {
+			body, _ := json.Marshal(map[string]any{"error": map[string]string{"message": invalid.Error(), "type": "invalid_request"}})
+			return http.StatusBadRequest, body, http.Header{"Content-Type": {"application/json"}}, false, nil
+		}
 		return 0, nil, nil, true, err
 	}
 	defer response.Body.Close()
@@ -923,6 +935,20 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+	if googleImageDeployment(candidate) {
+		var payload map[string]any
+		var err error
+		if candidate.Endpoint == "image-edit" {
+			payload, err = googleImageEditPayload(input, candidate)
+		} else {
+			payload, err = googleImagePayload(input.fields, candidate)
+		}
+		if err != nil {
+			return nil, "", invalidGoogleImageRequest{err}
+		}
+		body, err := json.Marshal(payload)
+		return body, "application/json", err
+	}
 	if candidate.Endpoint == "bedrock-embeddings" || candidate.Endpoint == "google-embeddings" {
 		body, err := json.Marshal(input.fields)
 		return body, "application/json", err
@@ -1073,7 +1099,9 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if candidate.RelativeAPIBase {
 		target = strings.TrimRight(candidate.APIBase, "/") + strings.TrimPrefix(path, "/v1")
 	}
-	if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
+	if googleImageDeployment(candidate) {
+		target = googleImageTarget(candidate)
+	} else if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
 		target = geminiTarget(candidate, endpoint)
 	} else if isGeminiEndpoint(candidate.Endpoint) {
 		geminiEndpoint := "gemini-generate"
@@ -1133,7 +1161,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		if apiKey != "" {
 			upstream.Header.Set("x-api-key", apiKey)
 		}
-	} else if isGeminiEndpoint(candidate.Endpoint) || candidate.Endpoint == "google-embeddings" || candidate.Vertex != nil {
+	} else if isGeminiEndpoint(candidate.Endpoint) || candidate.Endpoint == "google-embeddings" || googleImageDeployment(candidate) || candidate.Vertex != nil {
 		if err := applyGeminiCredential(upstream, candidate, apiKey); err != nil {
 			release()
 			return nil, err
