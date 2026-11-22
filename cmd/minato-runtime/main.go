@@ -64,6 +64,7 @@ func main() {
 		proxy.MasterKey = config.Token
 		config.AuthorizeInference = true
 		config.PublicReadinessDetails = proxy.PublicReadinessDetails
+		config.ResponsePolling = proxy.ResponsePolling
 		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
 		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
 		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks

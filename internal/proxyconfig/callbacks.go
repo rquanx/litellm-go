@@ -25,6 +25,13 @@ type callbackSettings struct {
 	PublicModelGroups []string         `yaml:"public_model_groups"`
 	PublicModelLinks  map[string]any   `yaml:"public_model_groups_links"`
 	PublicMCPServers  []string         `yaml:"public_mcp_servers"`
+	Responses struct {
+		Background struct {
+			Polling any `yaml:"polling_via_cache"`
+			Native []string `yaml:"native_background_mode"`
+			TTL int `yaml:"ttl"`
+		} `yaml:"background_mode"`
+	} `yaml:"responses"`
 }
 
 type GenericCallback struct {

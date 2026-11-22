@@ -134,6 +134,7 @@ type Config struct {
 	publicModelGroups []string
 	publicModelLinks map[string]any
 	publicMCPServers []string
+	ResponsePolling runtime.ResponsePollingConfig
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -197,6 +198,34 @@ func Load(reader io.Reader) (Config, error) {
 	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
 	config.publicModelLinks = file.Callbacks.PublicModelLinks
 	config.publicMCPServers = slices.Clone(file.Callbacks.PublicMCPServers)
+	polling := file.Callbacks.Responses.Background
+	config.ResponsePolling.Native = polling.Native
+	if polling.TTL < 0 || polling.TTL > 86400 {
+		return Config{}, errors.New("invalid Responses polling TTL")
+	}
+	config.ResponsePolling.TTL = time.Duration(polling.TTL) * time.Second
+	switch enabled := polling.Polling.(type) {
+	case nil:
+	case bool:
+		if enabled {
+			return Config{}, errors.New("responses polling_via_cache expects all or a provider list")
+		}
+	case string:
+		if enabled != "all" {
+			return Config{}, errors.New("responses polling_via_cache expects all or a provider list")
+		}
+		config.ResponsePolling.All = true
+	case []any:
+		for _, provider := range enabled {
+			name, ok := provider.(string)
+			if !ok || name == "" {
+				return Config{}, errors.New("invalid Responses polling provider")
+			}
+			config.ResponsePolling.Providers = append(config.ResponsePolling.Providers, name)
+		}
+	default:
+		return Config{}, errors.New("invalid Responses polling configuration")
+	}
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
 	if file.General.HealthCheckInterval < 0 || file.General.HealthCheckInterval > 86400 || file.General.HealthCheckConcurrency < 0 ||
 		file.General.HealthCheckConcurrency > 1024 || file.General.HealthCheckStaleness < 0 || file.General.HealthCheckStaleness > 86400 {

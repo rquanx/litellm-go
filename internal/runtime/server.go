@@ -37,6 +37,7 @@ type Config struct {
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
 	ResourceOwnerScopes func(string) []string
 	ContainerOwners     ContainerOwners
+	ResponsePolling     ResponsePollingConfig
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
@@ -82,6 +83,7 @@ type Server struct {
 	capacityMinute    int64
 	deploymentCapacity map[string]capacityUsage
 	deploymentCooldown map[string]cooldownWindow
+	polling *responsePolling
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -106,10 +108,14 @@ func NewServer(config Config) *Server {
 	for _, route := range config.Routes {
 		routes[route.Alias] = route
 	}
-	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
+	server := &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
 		passThrough: config.PassThrough,
 		mcpServers: config.MCPServers,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
+	if config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0 {
+		server.polling = &responsePolling{entries: make(map[string]*pollingEntry)}
+	}
+	return server
 }
 
 // ReplaceConfiguredRouting publishes the model routes and search fallback rules together.
@@ -213,7 +219,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) &&
 		request.URL.Path != endpoints["responses-compact"].path {
-		s.responseResource(writer, request, modelScope)
+		if !s.pollingResource(writer, request, modelScope) {
+			s.responseResource(writer, request, modelScope)
+		}
 		return
 	}
 	if s.config.AuthorizeInference && isVectorStorePath(request.URL.Path) {
@@ -471,7 +479,19 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint, stream)
 	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint, stream)
 	if s.config.AuthorizeInference && endpoint == "responses" {
+		var originalPollingPayload []byte
+		if s.shouldPollResponse(route, input) {
+			originalPollingPayload = body
+		}
 		previous, _ := input["previous_response_id"].(string)
+		if strings.HasPrefix(previous, pollingIDPrefix) {
+			previous = s.resolvePollingParent(request, previous, modelScope)
+			if previous == "" {
+				writeError(writer, http.StatusNotFound, "response_not_found", "Unknown or incomplete polling response")
+				return
+			}
+			input["previous_response_id"] = previous
+		}
 		provider, deployment, original, wrapped := unwrapResponseID(previous)
 		if wrapped {
 			input["previous_response_id"] = original
@@ -493,6 +513,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 		if status, message := s.authorizeResponseContainers(request, &route, deployment, containers); status != 0 {
 			writeError(writer, status, "container_error", message)
+			return
+		}
+		if originalPollingPayload != nil {
+			s.startResponsePolling(writer, request, route.Alias, originalPollingPayload)
 			return
 		}
 	}
