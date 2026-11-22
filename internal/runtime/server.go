@@ -65,6 +65,7 @@ type Server struct {
 	routes map[string]Route
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
+	mcpServers []MCPServer
 	passThrough []PassThroughRoute
 	searchFallbacks map[string][]string
 	healthResults map[string]ModelHealthRecord
@@ -99,6 +100,7 @@ func NewServer(config Config) *Server {
 	}
 	return &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
 		passThrough: config.PassThrough,
+		mcpServers: config.MCPServers,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent)}
 }
 

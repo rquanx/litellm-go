@@ -12,17 +12,17 @@ import (
 )
 
 type mcpServerConfig struct {
-	URL string `yaml:"url"`
-	Transport string `yaml:"transport"`
-	Alias string `yaml:"alias"`
-	ServerID string `yaml:"server_id"`
-	Description string `yaml:"description"`
-	AllowAllKeys bool `yaml:"allow_all_keys"`
-	AllowedTools []string `yaml:"allowed_tools"`
-	Headers map[string]string `yaml:"headers"`
-	Command string `yaml:"command"`
-	Args []string `yaml:"args"`
-	Env map[string]string `yaml:"env"`
+	URL string `yaml:"url" json:"url"`
+	Transport string `yaml:"transport" json:"transport"`
+	Alias string `yaml:"alias" json:"alias,omitempty"`
+	ServerID string `yaml:"server_id" json:"server_id"`
+	Description string `yaml:"description" json:"description,omitempty"`
+	AllowAllKeys bool `yaml:"allow_all_keys" json:"allow_all_keys"`
+	AllowedTools []string `yaml:"allowed_tools" json:"allowed_tools"`
+	Headers map[string]string `yaml:"headers" json:"static_headers,omitempty"`
+	Command string `yaml:"command" json:"command,omitempty"`
+	Args []string `yaml:"args" json:"args,omitempty"`
+	Env map[string]string `yaml:"env" json:"env,omitempty"`
 }
 
 func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer, error) {

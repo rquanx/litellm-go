@@ -75,7 +75,7 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMCPList(w http.ResponseWriter, r *http.Request, req mcpRPCRequest, access MCPAccess) {
 	tools := make([]map[string]any, 0)
-	for _, server := range s.config.MCPServers {
+	for _, server := range s.currentMCPServers() {
 		if !access(server, "") {
 			continue
 		}
@@ -106,7 +106,7 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request, req mcpRP
 		return
 	}
 	var selected MCPServer
-	for _, server := range s.config.MCPServers {
+	for _, server := range s.currentMCPServers() {
 		if strings.HasPrefix(params.Name, server.Name+"-") && len(server.Name) > len(selected.Name) {
 			selected = server
 		}

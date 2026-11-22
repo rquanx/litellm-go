@@ -22,6 +22,7 @@ type modelState struct {
 	Router      routerPatch                   `json:"router_settings,omitempty"`
 	SearchTools []managedSearchTool           `json:"search_tools,omitempty"`
 	PassThrough []passThroughConfig          `json:"pass_through_endpoints,omitempty"`
+	MCPServers map[string]mcpServerConfig     `json:"mcp_servers,omitempty"`
 }
 
 func (state *modelState) UnmarshalJSON(payload []byte) error {

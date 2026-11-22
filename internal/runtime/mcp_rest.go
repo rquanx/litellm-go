@@ -9,6 +9,18 @@ import (
 
 type MCPAccess func(MCPServer, string) bool
 
+func (s *Server) ReplaceMCPServers(servers []MCPServer) {
+	s.mu.Lock()
+	s.mcpServers = servers
+	s.mu.Unlock()
+}
+
+func (s *Server) currentMCPServers() []MCPServer {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.mcpServers
+}
+
 func (s *Server) mcpAccess(r *http.Request) (MCPAccess, bool) {
 	if s.authorized(r) {
 		return func(MCPServer, string) bool { return true }, true
@@ -55,7 +67,7 @@ func (s *Server) listMCPTools(w http.ResponseWriter, r *http.Request, access MCP
 	selector := r.URL.Query().Get("server_id")
 	tools := make([]map[string]any, 0)
 	var listed bool
-	for _, server := range s.config.MCPServers {
+	for _, server := range s.currentMCPServers() {
 		if !access(server, "") || (selector != "" && !server.matches(selector)) {
 			continue
 		}
@@ -92,7 +104,7 @@ func (s *Server) callMCPTool(w http.ResponseWriter, r *http.Request, access MCPA
 		writeError(w, http.StatusBadRequest, "missing_parameter", "Supply server_id and name")
 		return
 	}
-	for _, server := range s.config.MCPServers {
+	for _, server := range s.currentMCPServers() {
 		if !server.matches(input.ServerID) {
 			continue
 		}

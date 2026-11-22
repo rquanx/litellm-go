@@ -95,6 +95,7 @@ type Config struct {
 	Routes    []runtime.Route
 	SearchTools []runtime.SearchTool
 	MCPServers []runtime.MCPServer
+	staticMCPServers map[string]mcpServerConfig
 	SearchFallbacks map[string][]string
 	staticSearchTools []searchToolConfig
 	MasterKey string
@@ -221,6 +222,7 @@ func Load(reader io.Reader) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	config.staticMCPServers = file.MCPServers
 	config.PassThrough, err = preparePassThrough(file.General.PassThrough)
 	if err != nil {
 		return Config{}, err

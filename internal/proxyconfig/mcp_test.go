@@ -4,12 +4,49 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestManagedMCPServersPersistAndPublish(t *testing.T) {
+	const master = "fixture-master"
+	state := filepath.Join(t.TempDir(), "models.json")
+	open := func() (http.Handler, *runtime.Server) {
+		server := runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true})
+		handler, err := WithModelManagement(server, Config{}, master, state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler, server
+	}
+	handler, _ := open()
+	call := func(method, path, payload string, expected int) []byte {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(payload))
+		req.Header.Set("Authorization", "Bearer "+master)
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, req)
+		if result.Code != expected || strings.Contains(result.Body.String(), "fixture-provider-secret") {
+			t.Fatalf("%s %s got %d, want %d: %s", method, path, result.Code, expected, result.Body.String())
+		}
+		return result.Body.Bytes()
+	}
+	var created mcpServerInput
+	raw := call("POST", mcpServerPath, `{"server_name":"fixture","transport":"http","url":"http://localhost:1/mcp","static_headers":{"Authorization":"Bearer fixture-provider-secret"}}`, 200)
+	if json.Unmarshal(raw, &created) != nil || created.ServerID == "" {
+		t.Fatalf("missing managed MCP server ID in %s", raw)
+	}
+	handler, _ = open()
+	call("GET", mcpServerPath+"/"+created.ServerID, "", 200)
+	call("PUT", mcpServerPath, `{"server_id":"`+created.ServerID+`","server_name":"renamed","transport":"http","url":"http://localhost:1/mcp"}`, 200)
+	call("DELETE", mcpServerPath+"/"+created.ServerID, "", 200)
+	handler, _ = open()
+	call("GET", mcpServerPath+"/"+created.ServerID, "", 404)
+}
 
 func TestMCPRESTUsesScopedStreamableHTTPSessions(t *testing.T) {
 	var closed atomic.Int32

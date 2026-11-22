@@ -28,6 +28,7 @@ type modelRegistry struct {
 	router routerPatch
 	searchTools []managedSearchTool
 	passThrough []passThroughConfig
+	mcpServers map[string]mcpServerConfig
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -52,6 +53,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
 		registry.searchTools = state.SearchTools
 		registry.passThrough = state.PassThrough
+		registry.mcpServers = state.MCPServers
 	}
 	config, err := registry.compileConfiguration(registry.models, registry.credentials, registry.router, registry.searchTools)
 	if err != nil {
@@ -60,6 +62,13 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
 	if err := registry.loadPassThrough(); err != nil {
 		return nil, err
+	}
+	if len(registry.mcpServers) > 0 {
+		servers, err := registry.compileMCP(registry.mcpServers)
+		if err != nil {
+			return nil, err
+		}
+		server.ReplaceMCPServers(servers)
 	}
 
 	mux := http.NewServeMux()
@@ -72,6 +81,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	registry.registerCredentialRoutes(mux)
 	registry.registerSearchToolRoutes(mux)
 	registry.registerPassThroughRoutes(mux)
+	registry.registerMCPRoutes(mux)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.HandleFunc("POST /config/update", registry.updateRouter)
@@ -291,7 +301,8 @@ func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, model
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools, PassThrough: registry.passThrough}); err != nil {
+		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools,
+			PassThrough: registry.passThrough, MCPServers: registry.mcpServers}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
