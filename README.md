@@ -54,6 +54,8 @@ Create an internal user with `/user/new` and use the returned key or assign the 
 
 For PostgreSQL storage, set `general_settings.database_url` and omit the local state flags. The Go proxy uses its own `minato_proxy_state` table, and encrypts model state using `MINATO_RUNTIME_STATE_KEY` or the proxy master key. On a copy of a LiteLLM database, `--import-litellm-models` copies compatible model deployments into empty Go state. Run `--import-litellm-keys` separately to import model-scoped keys without changing the token presented by clients. Preserve `LITELLM_SALT_KEY` during model import if the source deployment used a separate salt.
 
+Use `--import-litellm-access` in place of the key-only import when keys belong to teams, internal users or organizations. The command reads a consistent PostgreSQL snapshot and commits only when the imported restrictions can be represented. Supported team-member model scopes are preserved from LiteLLM budget records. Active monetary budgets and unsupported roles or policy bindings cause the entire access import to fail.
+
 ```yaml
 model_list:
   - model_name: summarize

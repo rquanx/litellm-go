@@ -20,6 +20,7 @@ func main() {
 	keyStatePath := flag.String("key-state", os.Getenv("MINATO_RUNTIME_KEY_STATE"), "Optional path for persisted virtual keys")
 	importModels := flag.Bool("import-litellm-models", false, "Copy LiteLLM models into empty Go proxy PostgreSQL state and exit")
 	importKeys := flag.Bool("import-litellm-keys", false, "Copy supported LiteLLM key digests into empty Go proxy state and exit")
+	importAccess := flag.Bool("import-litellm-access", false, "Import supported LiteLLM access records and keys into empty Go PostgreSQL state")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -66,12 +67,20 @@ func main() {
 		}
 		defer stateDB.Close()
 	}
-	if *importModels || *importKeys {
+	if *importModels || *importKeys || *importAccess {
 		if stateDB == nil {
 			log.Fatal("LiteLLM import requires general_settings.database_url")
 		}
-		if *importModels && *importKeys {
-			log.Fatal("Run the model and virtual key imports separately")
+		if (*importModels && (*importKeys || *importAccess)) || (*importKeys && *importAccess) {
+			log.Fatal("Select one LiteLLM import command")
+		}
+		if *importAccess {
+			count, err := proxyconfig.ImportLiteLLMAccess(stateDB)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported LiteLLM access records and %d virtual keys", count)
+			return
 		}
 		if *importKeys {
 			count, err := proxyconfig.ImportLiteLLMKeys(stateDB)

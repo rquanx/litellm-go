@@ -95,6 +95,10 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 }
 
 func decodeLiteLLMKey(payload []byte) (string, virtualKey, bool, error) {
+	return decodeLiteLLMKeyForState(payload, nil)
+}
+
+func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtualKey, bool, error) {
 	var key virtualKey
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(payload, &fields) != nil || fields == nil {
@@ -103,39 +107,36 @@ func decodeLiteLLMKey(payload []byte) (string, virtualKey, bool, error) {
 	if string(fields["blocked"]) == "true" {
 		return "", key, true, nil
 	}
-	expires := fields["expires"]
+	expires, created := fields["expires"], fields["created_at"]
 	delete(fields, "expires")
+	delete(fields, "created_at")
 	keyFields, _ := json.Marshal(fields)
 	if json.Unmarshal(keyFields, &key) != nil {
 		return "", key, false, errors.New("invalid LiteLLM virtual key")
 	}
-	if len(expires) != 0 && string(expires) != "null" {
-		var date string
-		if json.Unmarshal(expires, &date) != nil {
-			return "", key, false, errors.New("invalid LiteLLM key expiration")
-		}
-		instant, err := time.Parse(time.RFC3339Nano, date)
-		if err != nil {
-			instant, err = time.Parse("2006-01-02T15:04:05.999999999", date)
-		}
-		if err != nil {
-			return "", key, false, errors.New("invalid LiteLLM key expiration")
-		}
-		key.Expires = &instant
+	var err error
+	if key.Expires, err = liteLLMTimestamp(expires); err != nil {
+		return "", key, false, errors.New("invalid LiteLLM key expiration")
 	}
-	for _, field := range []string{"team_id", "user_id", "agent_id", "project_id", "organization_id", "budget_id",
+	if key.CreatedAt, err = liteLLMTimestamp(created); err != nil {
+		return "", key, false, errors.New("invalid LiteLLM key creation time")
+	}
+	for _, field := range []string{"agent_id", "project_id", "budget_id",
 		"max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "object_permission_id", "allowed_routes",
 		"allowed_cache_controls", "access_group_ids", "permissions", "policies", "router_settings", "config", "aliases",
-		"model_max_budget", "budget_limits", "auto_rotate"} {
+		"model_max_budget", "budget_limits", "auto_rotate", "budget_duration"} {
 		switch string(fields[field]) {
 		case "", "null", "[]", "{}", "\"\"", "false":
 		default:
 			return "", key, false, fmt.Errorf("virtual key %q uses unsupported field %s", key.Alias, field)
 		}
 	}
-	for _, alias := range []string{"all-team-models", "all-proxy-models"} {
-		if slices.Contains(key.Models, alias) {
-			return "", key, false, fmt.Errorf("virtual key %q uses a dynamic model scope", key.Alias)
+	if slices.Contains(key.Models, "all-proxy-models") || (key.TeamID == "" && slices.Contains(key.Models, "all-team-models")) {
+		return "", key, false, fmt.Errorf("virtual key %q uses an unsupported dynamic model scope", key.Alias)
+	}
+	if key.UserID != "" || key.TeamID != "" || key.OrgID != "" {
+		if state == nil || !state.containsKeyOwners(key) {
+			return "", key, false, fmt.Errorf("virtual key %q refers to a missing or unsupported owner", key.Alias)
 		}
 	}
 	var token string
@@ -147,6 +148,21 @@ func decodeLiteLLMKey(payload []byte) (string, virtualKey, bool, error) {
 		return "", key, false, errors.New("LiteLLM virtual key uses an unsupported digest")
 	}
 	return hex.EncodeToString(digest), key, false, nil
+}
+
+func liteLLMTimestamp(raw json.RawMessage) (*time.Time, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var date string
+	if err := json.Unmarshal(raw, &date); err != nil {
+		return nil, err
+	}
+	instant, err := time.Parse(time.RFC3339Nano, date)
+	if err != nil {
+		instant, err = time.Parse("2006-01-02T15:04:05.999999999", date)
+	}
+	return &instant, err
 }
 
 func readLiteLLMModels(db *sql.DB, salt string) ([]deployment, error) {
