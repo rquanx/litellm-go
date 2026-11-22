@@ -54,6 +54,7 @@ type deployment struct {
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
+		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
 		OutputPrice *float64 `yaml:"output_cost_per_token" json:"output_cost_per_token,omitempty"`
@@ -433,6 +434,17 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_version: %w", err)
 	}
+	var azureADToken string
+	if provider == "azure" {
+		azureADToken, err = resolveEnv(entry.Params.AzureADToken)
+		if err != nil {
+			return runtime.Candidate{}, fmt.Errorf("azure_ad_token: %w", err)
+		}
+		if azureADToken == "" && key == "" && parsed.Scheme == "https" &&
+			strings.HasSuffix(parsed.Hostname(), ".openai.azure.com") {
+			azureADToken = os.Getenv("AZURE_AD_TOKEN")
+		}
+	}
 	if provider == "azure" && version == "" && !strings.HasSuffix(strings.TrimRight(base, "/"), "/openai/v1") {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
@@ -484,7 +496,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
-		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex}, nil
+		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex, AzureADToken: azureADToken}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

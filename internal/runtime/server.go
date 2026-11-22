@@ -834,10 +834,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			release()
 			return nil, err
 		}
-	} else if candidate.Provider == "azure" && apiKey != "" {
-		upstream.Header.Set("api-key", apiKey)
-	} else if apiKey != "" && candidate.Bedrock == nil {
-		upstream.Header.Set("Authorization", "Bearer "+apiKey)
+	} else if candidate.Bedrock == nil {
+		providerKeyHeaders(upstream.Header, candidate, apiKey)
 	}
 	for key, value := range candidate.Headers {
 		upstream.Header.Set(key, value)

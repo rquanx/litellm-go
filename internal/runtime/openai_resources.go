@@ -237,13 +237,7 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	if key != "" {
-		if candidate.Provider == "azure" {
-			upstream.Header.Set("api-key", key)
-		} else {
-			upstream.Header.Set("Authorization", "Bearer "+key)
-		}
-	}
+	providerKeyHeaders(upstream.Header, candidate, key)
 	select {
 	case s.sem <- struct{}{}:
 	case <-request.Context().Done():

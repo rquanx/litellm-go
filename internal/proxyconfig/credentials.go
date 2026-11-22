@@ -44,7 +44,7 @@ func (credential providerCredential) validate() error {
 	}
 	for field := range credential.Values {
 		switch field {
-		case "api_key", "api_base", "api_version", "aws_access_key_id", "aws_secret_access_key", "aws_session_token",
+		case "api_key", "api_base", "api_version", "azure_ad_token", "aws_access_key_id", "aws_secret_access_key", "aws_session_token",
 			"aws_region_name", "aws_profile_name", "vertex_project", "vertex_location":
 		default:
 			return errors.New("unsupported provider credential field")
@@ -63,6 +63,7 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 	}
 	for name, target := range map[string]*string{
 		"api_key": &entry.Params.APIKey, "api_base": &entry.Params.APIBase, "api_version": &entry.Params.APIVersion,
+		"azure_ad_token": &entry.Params.AzureADToken,
 		"aws_access_key_id": &entry.Params.AWSAccessKey, "aws_secret_access_key": &entry.Params.AWSSecretKey,
 		"aws_session_token": &entry.Params.AWSSessionToken, "aws_region_name": &entry.Params.AWSRegion,
 		"aws_profile_name": &entry.Params.AWSProfile, "vertex_project": &entry.Params.VertexProject,

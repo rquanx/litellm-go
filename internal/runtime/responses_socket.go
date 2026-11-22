@@ -104,13 +104,7 @@ func (s *Server) dialProviderSocket(ctx context.Context, candidate Candidate, ad
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	if key != "" {
-		if candidate.Provider == "azure" {
-			headers.Set("api-key", key)
-		} else {
-			headers.Set("Authorization", "Bearer "+key)
-		}
-	}
+	providerKeyHeaders(headers, candidate, key)
 	conn, _, err := websocket.Dial(ctx, address, &websocket.DialOptions{
 		HTTPClient: s.config.HTTPClient, HTTPHeader: headers,
 	})

@@ -167,6 +167,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.APIVersion == "" {
 			model.Params.APIVersion = existing.Params.APIVersion
 		}
+		if model.Params.AzureADToken == "" {
+			model.Params.AzureADToken = existing.Params.AzureADToken
+		}
 		if model.Params.Weight == nil {
 			model.Params.Weight = existing.Params.Weight
 		}

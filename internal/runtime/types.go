@@ -17,6 +17,7 @@ type Candidate struct {
 	CredentialRef    string            `json:"credentialRef"`
 	Endpoint         string            `json:"endpoint"`
 	APIVersion       string            `json:"apiVersion,omitempty"`
+	AzureADToken     string            `json:"-"`
 	Provider         string            `json:"provider,omitempty"`
 	DeploymentID     string            `json:"deploymentId,omitempty"`
 	ParamMappings    map[string]string `json:"paramMappings,omitempty"`
