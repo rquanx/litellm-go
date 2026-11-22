@@ -473,14 +473,21 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
-	mistralOCR := provider == "mistral" && (entry.Info.Mode == "ocr" || strings.HasPrefix(model, "mistral-ocr") ||
-		slices.Contains(entry.Info.Endpoints, "/v1/ocr"))
+	_, explicitOCR := strings.CutPrefix(model, "ocr/")
+	configuredOCR := entry.Info.Mode == "ocr" || explicitOCR || strings.HasPrefix(model, "mistral-ocr") ||
+		slices.Contains(entry.Info.Endpoints, "/v1/ocr")
+	mistralOCR := provider == "mistral" && configuredOCR
+	partnerOCR := configuredOCR && ((provider == "vertex_ai" && !strings.Contains(model, "deepseek")) ||
+		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
 		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !mistralOCR) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
 		model, _ = strings.CutPrefix(model, "chat_completions/")
+	}
+	if mistralOCR || partnerOCR {
+		model = strings.TrimPrefix(model, "ocr/")
 	}
 	if provider == "bedrock" {
 		model, _ = strings.CutPrefix(model, "converse/")
@@ -521,6 +528,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && mistralOCR {
 		base = "https://api.mistral.ai/v1"
+	}
+	if base == "" && partnerOCR && provider == "azure_ai" {
+		base = os.Getenv("AZURE_AI_API_BASE")
 	}
 	if base == "" && entry.rerankConfigured() {
 		switch provider {
@@ -594,6 +604,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if key == "" && mistralOCR {
 		key = os.Getenv("MISTRAL_API_KEY")
+	}
+	if key == "" && partnerOCR && provider == "azure_ai" {
+		key = os.Getenv("AZURE_AI_API_KEY")
 	}
 	if key == "" && entry.rerankConfigured() {
 		switch provider {
@@ -700,6 +713,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = inferred
 		}
 	}
+	if partnerOCR {
+		endpoint = "ocr"
+	}
 	if len(entry.Info.Endpoints) == 1 {
 		configured := runtime.EndpointFromPath(entry.Info.Endpoints[0])
 		if endpoint == "bedrock-converse" && (configured == "chat-completions" || configured == "responses") {
@@ -712,7 +728,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			configured = "cohere-embeddings"
 		}
 		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" &&
-			!(provider == "vertex_ai" && configured == "rerank")) ||
+			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint) {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")

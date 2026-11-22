@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+func usesMistralOCR(provider string) bool {
+	return provider == "mistral" || provider == "azure_ai" || provider == "vertex_ai"
+}
+
 func decodeOCRPayload(contentType string, body []byte) (requestPayload, error) {
 	mediaType, params, _ := mime.ParseMediaType(contentType)
 	if mediaType != "multipart/form-data" {

@@ -547,7 +547,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			s.recordLatency(candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
-			if endpoint == "ocr" && candidate.Provider == "mistral" {
+			if endpoint == "ocr" && usesMistralOCR(candidate.Provider) {
 				body = mistralOCRResponse(responseBody, route.Alias)
 			}
 			if endpoint == "rerank" && candidate.Provider == "voyage" {
@@ -938,7 +938,7 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 	if targetEndpoint == "cohere-embeddings" {
 		payload = cohereEmbeddingRequest(payload)
 	}
-	if targetEndpoint == "ocr" && candidate.Provider == "mistral" {
+	if targetEndpoint == "ocr" && usesMistralOCR(candidate.Provider) {
 		payload = mistralOCRRequest(payload)
 	}
 	body, err := json.Marshal(payload)
@@ -955,6 +955,14 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	release := func() {
 		finished()
 		<-s.sem
+	}
+	if candidate.Endpoint == "ocr" && (candidate.Provider == "azure_ai" || candidate.Vertex != nil) {
+		fields, err := preparePartnerOCR(ctx, payload.fields, s.config.MaxBodyBytes)
+		if err != nil {
+			release()
+			return nil, err
+		}
+		payload.fields = fields
 	}
 	encoded, contentType, err := encodePayload(payload, endpoint, candidate, stream)
 	if err != nil {
@@ -987,6 +995,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = geminiTarget(candidate, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
 		target = azureTarget(candidate.APIBase, candidate.ModelID, pathEndpoint, candidate.APIVersion)
+	} else if candidate.Endpoint == "ocr" && candidate.Provider == "azure_ai" {
+		target = strings.TrimRight(candidate.APIBase, "/") + "/providers/mistral/azure/ocr"
+	} else if candidate.Endpoint == "ocr" && candidate.Vertex != nil {
+		target = base + "/v1/projects/" + url.PathEscape(candidate.Vertex.Project) + "/locations/" +
+			url.PathEscape(candidate.Vertex.Location) + "/publishers/mistralai/models/" + url.PathEscape(candidate.ModelID) + ":rawPredict"
 	} else if candidate.Endpoint == "rerank" && candidate.Vertex != nil {
 		target = vertexRerankTarget(candidate)
 	} else if candidate.Endpoint == "rerank" && candidate.Bedrock != nil {

@@ -17,8 +17,12 @@ func TestMistralOCRRequestForms(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			t.Error(err)
 		}
-		if r.URL.Path != "/v1/ocr" || r.Header.Get("Authorization") != "Bearer fixture-key" ||
-			input["model"] != "mistral-ocr-test" || input["unsupported"] != nil {
+		expectedPath := map[string]string{
+			"mistral-ocr-test": "/v1/ocr", "azure-ocr-test": "/providers/mistral/azure/ocr",
+			"vertex-ocr-test": "/v1/projects/fixture-project/locations/us-central1/publishers/mistralai/models/vertex-ocr-test:rawPredict",
+		}
+		model, _ := input["model"].(string)
+		if r.URL.Path != expectedPath[model] || r.Header.Get("Authorization") != "Bearer fixture-key" || input["unsupported"] != nil {
 			t.Errorf("unexpected OCR request: %s %+v", r.URL.Path, input)
 		}
 		document, _ := input["document"].(map[string]any)
@@ -34,10 +38,16 @@ func TestMistralOCRRequestForms(t *testing.T) {
 	}))
 	defer upstream.Close()
 	t.Setenv("TEST_OCR_BASE", upstream.URL+"/v1")
+	t.Setenv("TEST_OCR_ROOT", upstream.URL)
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: ocr-fixture
     litellm_params: {model: mistral/mistral-ocr-test, api_base: os.environ/TEST_OCR_BASE, api_key: fixture-key}
+  - model_name: ocr-azure
+    litellm_params: {model: azure_ai/azure-ocr-test, api_base: os.environ/TEST_OCR_ROOT, api_key: fixture-key}
+    model_info: {mode: ocr}
+  - model_name: ocr-vertex
+    litellm_params: {model: vertex_ai/ocr/vertex-ocr-test, api_base: os.environ/TEST_OCR_ROOT, api_key: fixture-key, vertex_project: fixture-project}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -52,6 +62,8 @@ model_list:
 	}{
 		{"/v1/ocr", "application/json", `{"model":"ocr-fixture","document":{"type":"document_url","document_url":"https://example.invalid/file.pdf"},"pages":[0],"unsupported":1}`, 200},
 		{"/ocr", "multipart/form-data; boundary=fixture", multipart, 200},
+		{"/ocr", "multipart/form-data; boundary=fixture", strings.Replace(multipart, "ocr-fixture", "ocr-azure", 1), 200},
+		{"/ocr", "multipart/form-data; boundary=fixture", strings.Replace(multipart, "ocr-fixture", "ocr-vertex", 1), 200},
 		{"/v1/ocr", "application/json", `{"model":"ocr-fixture","document":{"type":"file","file":"fixture.pdf"}}`, 400},
 	} {
 		req := httptest.NewRequest("POST", fixture.path, strings.NewReader(fixture.body))
