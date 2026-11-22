@@ -74,6 +74,9 @@ router_settings:
 	call("restricted", `{"model":"primary","messages":[]}`, 400, "context_length_exceeded")
 	call("master", `{"model":"primary","messages":[]}`, 200, "context fallback")
 	call("master", `{"model":"primary","messages":[],"stream":true}`, 200, "policy fallback")
+	call("restricted", `{"model":"primary","messages":[],"router_settings_override":{"context_window_fallbacks":["large"]}}`, 400, "invalid_fallback")
+	call("master", `{"model":"primary","messages":[],"context_window_fallbacks":[]}`, 400, "context_length_exceeded")
+	call("master", `{"model":"primary","messages":[],"router_settings_override":{"context_window_fallbacks":[{"primary":["large"]}]}}`, 200, "context fallback")
 	for token, expect := range map[string]string{"master": `"fallbacks":["large"]`, "restricted": `"fallbacks":[]`} {
 		request := httptest.NewRequest("GET", "/models?include_metadata=true&fallback_type=context_window", nil)
 		request.Header.Set("Authorization", "Bearer "+token)
@@ -83,7 +86,7 @@ router_settings:
 			t.Fatalf("discovery did not respect the fallback scope: %s", response.Body.String())
 		}
 	}
-	if contextCalls.Load() != 1 || policyCalls.Load() != 1 {
+	if contextCalls.Load() != 2 || policyCalls.Load() != 1 {
 		t.Fatal("a specialized fallback ran for the wrong failure or scope")
 	}
 }

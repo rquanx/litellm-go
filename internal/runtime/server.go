@@ -362,6 +362,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		writeError(writer, http.StatusNotFound, "model_not_found", "Unknown runtime route")
 		return
 	}
+	if s.config.AuthorizeInference {
+		var err error
+		route, err = s.requestFallbacks(route, input, modelScope, endpoint)
+		if err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_fallback", err.Error())
+			return
+		}
+	}
 	eligible := s.eligibleCandidates(route.Candidates, modelScope, endpoint, stream)
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
