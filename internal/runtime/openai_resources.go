@@ -114,6 +114,7 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	family := resourceFamily(request.URL.Path)
 	base := "/v1/" + family
 	method := request.Method
+	provider := request.URL.Query().Get("custom_llm_provider")
 	alias := request.URL.Query().Get("model")
 	if alias == "" {
 		alias = strings.TrimSpace(request.URL.Query().Get("target_model_names"))
@@ -138,6 +139,7 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 			alias = cursorAlias
 		}
 	}
+	var formParts []formPart
 	var body []byte
 	contentType := request.Header.Get("Content-Type")
 	targetPath := base
@@ -166,7 +168,13 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 					writeError(writer, http.StatusBadRequest, "invalid_request", "Unsupported file storage")
 					return
 				}
-				body, contentType, err = form.encodeForm("", false, true)
+				formParts = form.form
+				if requested, _ := form.fields["custom_llm_provider"].(string); requested != "" {
+					provider = requested
+				}
+				if provider != "gemini" {
+					body, contentType, err = form.encodeForm("", false, true)
+				}
 			} else {
 				var payload requestPayload
 				payload, err = decodeJSONPayload(incoming)
@@ -215,6 +223,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		} else if strings.HasPrefix(decoded, "minato_") {
 			decoded = ""
 		}
+		if family == "files" && provider == "gemini" {
+			decoded = geminiFileID(decoded)
+		}
 		if !validResourceSegment(decoded) || !resourceActionAllowed(family, action, method) {
 			writeError(writer, http.StatusNotFound, "resource_not_found", "Unknown resource operation")
 			return
@@ -224,7 +235,21 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 			targetPath += "/" + action
 		}
 	}
+	if family == "files" && provider == "gemini" {
+		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
+			s.geminiFile(writer, request, candidate, targetPath, formParts)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "model_required", "Select a configured Gemini file deployment")
+		return
+	}
 	candidate, ok := s.resourceCandidate(alias, deployment, scope)
+	if !ok && family == "files" && provider == "" && (alias != "" || deployment != "") {
+		if gemini, found := s.geminiResourceCandidate(alias, deployment, scope); found {
+			s.geminiFile(writer, request, gemini, targetPath, formParts)
+			return
+		}
+	}
 	if !ok {
 		writeError(writer, http.StatusBadRequest, "model_required", "Select one configured resource deployment")
 		return
