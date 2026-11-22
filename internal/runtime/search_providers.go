@@ -46,7 +46,7 @@ func searchPayload(provider string, input map[string]json.RawMessage, query stri
 	case "firecrawl":
 		copyParam("max_results", "limit")
 		extras = []string{"limit", "country", "sources", "categories", "tbs", "location", "timeout", "ignoreInvalidURLs", "scrapeOptions"}
-	case "serper":
+	case "serper", "searchapi":
 		delete(params, "query")
 		copyParam("max_results", "num")
 		var country string
@@ -55,10 +55,36 @@ func searchPayload(provider string, input map[string]json.RawMessage, query stri
 		}
 		var domains []string
 		if json.Unmarshal(input["search_domain_filter"], &domains) == nil && len(domains) != 0 {
-			query = "(" + query + ") (site:" + strings.Join(domains, " OR site:") + ")"
+			join := ") (site:"
+			if provider == "searchapi" {
+				join = ") AND (site:"
+			}
+			query = "(" + query + join + strings.Join(domains, " OR site:") + ")"
 		}
 		params["q"], _ = json.Marshal(query)
 		extras = []string{"gl", "hl", "location", "num", "page", "tbs", "autocorrect"}
+		if provider == "searchapi" {
+			params["engine"] = json.RawMessage(`"google"`)
+			var limit int
+			if json.Unmarshal(params["num"], &limit) == nil && limit > 10 {
+				params["num"] = json.RawMessage("10")
+			}
+			extras = []string{"gl", "hl", "location", "num", "page", "kgmid", "device", "uule", "google_domain",
+				"lr", "cr", "nfpr", "filter", "safe", "time_period", "time_period_min", "time_period_max", "optimization_strategy"}
+		}
+	case "parallel_ai":
+		delete(params, "query")
+		params["objective"] = queryText
+		policy := make(map[string]json.RawMessage)
+		for source, target := range map[string]string{"search_domain_filter": "allowed_domains", "exclude_domains": "disallowed_domains"} {
+			if value := input[source]; len(value) != 0 && string(value) != "null" {
+				policy[target] = value
+			}
+		}
+		if len(policy) != 0 {
+			params["source_policy"], _ = json.Marshal(policy)
+		}
+		extras = []string{"max_results", "search_queries", "processor", "max_chars_per_result", "source_policy", "exclude_domains"}
 	case "searxng":
 		delete(params, "query")
 		params["q"] = queryText
@@ -117,12 +143,14 @@ type searchProviderResult struct {
 	Description   string  `json:"description"`
 	Link          string  `json:"link"`
 	Pubdate       *string `json:"pubdate"`
+	Excerpts      []string `json:"excerpts"`
 }
 
 func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 	var payload *struct {
 		Results []searchProviderResult `json:"results"`
 		Organic []searchProviderResult `json:"organic"`
+		OrganicResults []searchProviderResult `json:"organic_results"`
 		Data    json.RawMessage        `json:"data"`
 	}
 	if json.Unmarshal(body, &payload) != nil || payload == nil {
@@ -134,6 +162,9 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 	if provider == "serper" {
 		payload.Results = payload.Organic
 	}
+	if provider == "searchapi" {
+		payload.Results = payload.OrganicResults
+	}
 	results := make([]searchResult, 0, len(payload.Results))
 	for _, item := range payload.Results {
 		result := item.searchResult
@@ -142,8 +173,10 @@ func normalizeSearch(provider string, body []byte) ([]searchResult, bool) {
 			result.Snippet, result.Date, result.LastUpdated = item.Content, nil, nil
 		case "exa_ai":
 			result.Snippet, result.Date, result.LastUpdated = item.Text, item.PublishedDate, nil
-		case "serper":
+		case "serper", "searchapi":
 			result.URL, result.LastUpdated = item.Link, nil
+		case "parallel_ai":
+			result.Snippet, result.Date, result.LastUpdated = strings.Join(item.Excerpts, " ... "), nil, nil
 		case "searxng":
 			result.Snippet, result.Date, result.LastUpdated = item.Content, item.PublishedDate, nil
 			if result.Date == nil || *result.Date == "" {

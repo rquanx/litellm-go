@@ -60,6 +60,10 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		defaultBase, baseEnv, keyEnv = "https://google.serper.dev", "SERPER_API_BASE", "SERPER_API_KEY"
 	case "searxng":
 		baseEnv, keyEnv = "SEARXNG_API_BASE", "SEARXNG_API_KEY"
+	case "parallel_ai":
+		defaultBase, baseEnv, keyEnv = "https://api.parallel.ai", "PARALLEL_AI_API_BASE", "PARALLEL_AI_API_KEY"
+	case "searchapi":
+		defaultBase, baseEnv, keyEnv = "https://www.searchapi.io/api/v1/search", "SEARCHAPI_API_BASE", "SEARCHAPI_API_KEY"
 	default:
 		return runtime.SearchTool{}, fmt.Errorf("unsupported search_provider %q", params.Provider)
 	}
@@ -78,8 +82,12 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 		target.User != nil || target.Fragment != "" {
 		return runtime.SearchTool{}, fmt.Errorf("invalid search API base")
 	}
-	if !strings.HasSuffix(strings.TrimRight(target.Path, "/"), "/search") {
-		target = target.JoinPath("search")
+	suffix := "/search"
+	if params.Provider == "parallel_ai" {
+		suffix = "/v1beta/search"
+	}
+	if params.Provider != "searchapi" && !strings.HasSuffix(strings.TrimRight(target.Path, "/"), suffix) {
+		target = target.JoinPath(suffix)
 	}
 	key, err := resolveEnv(params.APIKey)
 	if err != nil {
@@ -87,6 +95,9 @@ func (entry searchToolConfig) prepare() (runtime.SearchTool, error) {
 	}
 	if key == "" {
 		key = os.Getenv(keyEnv)
+	}
+	if key == "" && params.Provider == "parallel_ai" {
+		key = os.Getenv("PARALLEL_API_KEY")
 	}
 	if key == "" && params.Provider != "searxng" {
 		return runtime.SearchTool{}, fmt.Errorf("missing search API key (%s)", keyEnv)

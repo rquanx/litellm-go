@@ -172,14 +172,14 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 	}
 	method := http.MethodPost
 	var bodyReader io.Reader = bytes.NewReader(payload)
-	if tool.Provider == "searxng" {
+	if tool.Provider == "searxng" || tool.Provider == "searchapi" {
 		method, bodyReader = http.MethodGet, nil
 	}
 	request, err := http.NewRequestWithContext(ctx, method, tool.URL, bodyReader)
 	if err != nil {
 		return http.StatusBadGateway, nil, nil
 	}
-	if tool.Provider == "searxng" {
+	if method == http.MethodGet {
 		var params map[string]json.RawMessage
 		if json.Unmarshal(payload, &params) != nil {
 			return http.StatusBadGateway, nil, nil
@@ -193,12 +193,22 @@ func (s *Server) callSearch(ctx context.Context, tool SearchTool, payload []byte
 				query.Set(key, string(value))
 			}
 		}
+		if tool.Provider == "searchapi" {
+			query.Set("api_key", tool.APIKey)
+		}
 		request.URL.RawQuery = query.Encode()
 	}
-	if tool.Provider == "exa_ai" || tool.Provider == "serper" {
+	switch tool.Provider {
+	case "parallel_ai":
+		request.Header.Set("Parallel-Beta", "search-extract-2025-10-10")
+		fallthrough
+	case "exa_ai", "serper":
 		request.Header.Set("X-API-Key", tool.APIKey)
-	} else if tool.APIKey != "" {
-		request.Header.Set("Authorization", "Bearer "+tool.APIKey)
+	case "searchapi":
+	default:
+		if tool.APIKey != "" {
+			request.Header.Set("Authorization", "Bearer "+tool.APIKey)
+		}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	client := *s.config.HTTPClient

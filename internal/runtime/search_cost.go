@@ -22,6 +22,8 @@ func searchCost(provider string, input map[string]json.RawMessage, queryCount in
 		rate = 0.001
 	case "searxng":
 		rate = 0
+	case "parallel_ai":
+		rate = 0.004
 	case "exa_ai":
 		rate = 0.025
 		if limit >= 0 && limit <= 25 {
