@@ -25,6 +25,7 @@ type modelRegistry struct {
 	mu     sync.Mutex
 	models []deployment
 	credentials map[string]providerCredential
+	router routerPatch
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -46,7 +47,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		if err := store.load(&state); err != nil {
 			return nil, errors.New("could not load dynamic model state")
 		}
-		registry.models, registry.credentials = state.Models, state.Credentials
+		registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
 	}
 	routes, err := registry.compile(registry.models)
 	if err != nil {
@@ -64,6 +65,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	registry.registerCredentialRoutes(mux)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
+	mux.HandleFunc("POST /config/update", registry.updateRouter)
 	mux.Handle("/", server)
 	return mux, nil
 }
@@ -73,6 +75,10 @@ func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, er
 }
 
 func (registry *modelRegistry) compileState(models []deployment, credentials map[string]providerCredential) ([]runtime.Route, error) {
+	return registry.compileRouter(models, credentials, registry.router)
+}
+
+func (registry *modelRegistry) compileRouter(models []deployment, credentials map[string]providerCredential, router routerPatch) ([]runtime.Route, error) {
 	all := append(slices.Clone(registry.base.models), models...)
 	seen := make(map[string]bool, len(all))
 	for _, model := range all {
@@ -81,7 +87,7 @@ func (registry *modelRegistry) compileState(models []deployment, credentials map
 		}
 		seen[model.Info.ID] = true
 	}
-	config := registry.base
+	config := router.apply(registry.base)
 	config.credentials = combinedCredentials(config.credentials, credentials)
 	return config.buildRoutes(all)
 }
@@ -252,18 +258,22 @@ func (registry *modelRegistry) apply(w http.ResponseWriter, next []deployment) b
 }
 
 func (registry *modelRegistry) applyState(w http.ResponseWriter, models []deployment, credentials map[string]providerCredential) bool {
-	routes, err := registry.compileState(models, credentials)
+	return registry.publish(w, models, credentials, registry.router)
+}
+
+func (registry *modelRegistry) publish(w http.ResponseWriter, models []deployment, credentials map[string]providerCredential, router routerPatch) bool {
+	routes, err := registry.compileRouter(models, credentials, router)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, err.Error())
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: models, Credentials: credentials}); err != nil {
+		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
 	}
-	registry.models, registry.credentials = models, credentials
+	registry.models, registry.credentials, registry.router = models, credentials, router
 	registry.server.ReplaceConfiguredRoutes(routes)
 	return true
 }

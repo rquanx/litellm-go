@@ -52,6 +52,8 @@ model_list:
 	}
 	send("POST", "/credentials", `{"credential_name":"named","credential_values":{"api_key":"fixture-one"}}`, 200)
 	send("POST", "/model/new", fmt.Sprintf(`{"model_name":"demo","model_info":{"id":"dynamic"},"litellm_params":{"model":"openai/fixture","api_base":%q,"litellm_credential_name":"named"}}`, upstream.URL), 200)
+	send("POST", "/config/update", `{"router_settings":{"fallbacks":[{"fixed":["unknown"]}]}}`, 400)
+	send("POST", "/config/update", `{"router_settings":{"fallbacks":[{"fixed":["demo"]}]}}`, 200)
 	if body := send("POST", "/v1/chat/completions", `{"model":"demo","messages":[]}`, 200); !strings.Contains(body, "fixture-one") {
 		t.Fatal("dynamic model did not use the named credential")
 	}
@@ -62,9 +64,14 @@ model_list:
 	send("PATCH", "/credentials/named", `{"credential_values":{"api_key":"fixture-two"}}`, 200)
 	send("DELETE", "/credentials/named", "", 400)
 	handler = newHandler()
+	if settings := send("GET", "/router/settings", "", 200); !strings.Contains(settings, `"fallbacks":[{"fixed":["demo"]}]`) {
+		t.Fatalf("router configuration did not survive restart: %s", settings)
+	}
 	if body := send("POST", "/v1/chat/completions", `{"model":"demo","messages":[]}`, 200); !strings.Contains(body, "fixture-two") {
 		t.Fatal("credential rotation did not survive restart")
 	}
+	send("POST", "/model/delete", `{"id":"dynamic"}`, 400)
+	send("POST", "/config/update", `{"router_settings":{"fallbacks":[]}}`, 200)
 	send("POST", "/model/delete", `{"id":"dynamic"}`, 200)
 	send("DELETE", "/credentials/named", "", 200)
 }

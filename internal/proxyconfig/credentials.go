@@ -19,6 +19,7 @@ type providerCredential struct {
 type modelState struct {
 	Models      []deployment                 `json:"models"`
 	Credentials map[string]providerCredential `json:"credentials,omitempty"`
+	Router      routerPatch                   `json:"router_settings,omitempty"`
 }
 
 func (state *modelState) UnmarshalJSON(payload []byte) error {

@@ -20,7 +20,9 @@ func (registry *modelRegistry) routerSettings(w http.ResponseWriter, r *http.Req
 	if !registry.allowed(w, r) {
 		return
 	}
-	config := registry.base
+	registry.mu.Lock()
+	config := registry.router.apply(registry.base)
+	registry.mu.Unlock()
 	values := map[string]any{
 		"routing_strategy": config.RoutingStrategy,
 		"timeout": config.Timeout.Seconds(),
