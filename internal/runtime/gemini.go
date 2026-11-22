@@ -57,6 +57,9 @@ func geminiURL(base, model, endpoint string) string {
 	base = strings.TrimSuffix(strings.TrimRight(base, "/"), "/v1beta")
 	model = strings.TrimPrefix(model, "models/")
 	target := base + "/v1beta/models/" + url.PathEscape(model)
+	if endpoint == "google-embeddings" {
+		return target + ":batchEmbedContents"
+	}
 	if endpoint == "gemini-stream" {
 		return target + ":streamGenerateContent?alt=sse"
 	}
@@ -76,6 +79,9 @@ func geminiTarget(candidate Candidate, endpoint string) string {
 	model := strings.TrimPrefix(candidate.ModelID, "models/")
 	target := base + "/v1/projects/" + url.PathEscape(vertex.Project) + "/locations/" + url.PathEscape(vertex.Location) +
 		"/publishers/google/models/" + url.PathEscape(model)
+	if endpoint == "google-embeddings" {
+		return target + ":predict"
+	}
 	if endpoint == "gemini-stream" {
 		return target + ":streamGenerateContent?alt=sse"
 	}

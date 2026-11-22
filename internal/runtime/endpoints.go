@@ -24,6 +24,7 @@ var endpoints = map[string]endpointSpec{
 	"anthropic-messages": {"/v1/messages", "anthropic", true},
 	"gemini-generate":    {"", "gemini", false},
 	"gemini-stream":      {"", "gemini", true},
+	"google-embeddings":  {"", "embeddings", false},
 	"bedrock-converse":   {"", "bedrock", true},
 	"bedrock-embeddings": {"", "embeddings", false},
 }

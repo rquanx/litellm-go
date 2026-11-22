@@ -357,6 +357,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if provider == "gemini" || provider == "vertex_ai" {
 		endpoint = "gemini-generate"
+		if strings.Contains(model, "embedding") {
+			endpoint = "google-embeddings"
+		}
 	}
 	if provider == "bedrock" {
 		endpoint = "bedrock-converse"
@@ -378,10 +381,11 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if endpoint == "bedrock-converse" && (configured == "chat-completions" || configured == "responses") {
 			configured = endpoint
 		}
-		if configured == "embeddings" && endpoint == "bedrock-embeddings" {
+		if configured == "embeddings" && (endpoint == "bedrock-embeddings" || endpoint == "google-embeddings") {
 			configured = endpoint
 		}
-		if configured == "" || provider == "gemini" || provider == "vertex_ai" || (configured == "anthropic-messages") != (provider == "anthropic") ||
+		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings") ||
+			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint) {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
 		}

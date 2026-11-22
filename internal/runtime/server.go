@@ -575,6 +575,9 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 	if candidate.Endpoint == "bedrock-embeddings" {
 		return s.bedrockEmbeddings(ctx, request, candidate, payload)
 	}
+	if candidate.Endpoint == "google-embeddings" {
+		return s.googleEmbeddings(ctx, request, candidate, payload)
+	}
 	return s.callProviderJSON(ctx, request, endpoint, candidate, payload)
 }
 
@@ -609,7 +612,7 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
-	if candidate.Endpoint == "bedrock-embeddings" {
+	if candidate.Endpoint == "bedrock-embeddings" || candidate.Endpoint == "google-embeddings" {
 		body, err := json.Marshal(input.fields)
 		return body, "application/json", err
 	}
@@ -720,6 +723,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
 	} else if candidate.Endpoint == "bedrock-embeddings" {
 		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
+	} else if candidate.Endpoint == "google-embeddings" {
+		target = geminiTarget(candidate, "google-embeddings")
 	}
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(encoded))
 	if err != nil {
@@ -741,7 +746,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		if apiKey != "" {
 			upstream.Header.Set("x-api-key", apiKey)
 		}
-	} else if isGeminiEndpoint(candidate.Endpoint) {
+	} else if isGeminiEndpoint(candidate.Endpoint) || candidate.Endpoint == "google-embeddings" {
 		if err := applyGeminiCredential(upstream, candidate, apiKey); err != nil {
 			release()
 			return nil, err
