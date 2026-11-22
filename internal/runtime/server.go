@@ -245,7 +245,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
-		writeError(writer, http.StatusNotFound, "not_found", "Route not found")
+		if !s.config.AuthorizeInference || !s.serveProviderPassThrough(writer, request) {
+			writeError(writer, http.StatusNotFound, "not_found", "Route not found")
+		}
 	}
 }
 

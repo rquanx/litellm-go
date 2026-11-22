@@ -20,6 +20,7 @@ type PassThroughRoute struct {
 	Target url.URL
 	Headers http.Header
 	DefaultQuery url.Values
+	UpstreamQuery url.Values
 	Methods []string
 	Public, IncludeSubpath, ForwardHeaders, MergeQuery bool
 	Cost *float64
@@ -116,6 +117,9 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		for k, v := range r.URL.Query() {
 			query[k] = v
 		}
+	}
+	for k, v := range route.UpstreamQuery {
+		query[k] = v
 	}
 	target.RawQuery = query.Encode()
 	if target.Scheme == "ws" || target.Scheme == "wss" {
