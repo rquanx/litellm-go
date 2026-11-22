@@ -41,7 +41,7 @@ func preparePassThrough(entries []passThroughConfig) ([]runtime.PassThroughRoute
 			return nil, err
 		}
 		address, err := url.Parse(target)
-		if err != nil || address.Hostname() == "" || (address.Scheme != "https" && address.Scheme != "http") ||
+		if err != nil || address.Hostname() == "" || !slices.Contains([]string{"https", "http", "ws", "wss"}, address.Scheme) ||
 			address.User != nil || address.Fragment != "" {
 			return nil, fmt.Errorf("invalid target for pass-through path %q", name)
 		}

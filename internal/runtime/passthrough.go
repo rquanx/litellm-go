@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/coder/websocket"
 )
 
 type PassThroughRoute struct {
@@ -115,6 +118,14 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		}
 	}
 	target.RawQuery = query.Encode()
+	if target.Scheme == "ws" || target.Scheme == "wss" {
+		if r.Method != http.MethodGet || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Expected a WebSocket upgrade")
+			return
+		}
+		s.passThroughSocket(w, r, route, target.String())
+		return
+	}
 	body, err := readBody(r, s.config.MaxBodyBytes)
 	if err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large")
@@ -125,24 +136,7 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid pass-through request")
 		return
 	}
-	if route.ForwardHeaders {
-		for name, values := range r.Header {
-			if !protectedPassHeader(name) && !connectionHeader(r.Header, name) && !strings.HasPrefix(strings.ToLower(name), "x-pass-") {
-				upstream.Header[name] = values
-			}
-		}
-	}
-	if value := r.Header.Get("Content-Type"); value != "" {
-		upstream.Header.Set("Content-Type", value)
-	}
-	for name, values := range route.Headers {
-		upstream.Header[name] = values
-	}
-	for name, values := range r.Header {
-		if actual, ok := strings.CutPrefix(strings.ToLower(name), "x-pass-"); ok && actual != "" && !protectedPassHeader(actual) {
-			upstream.Header[http.CanonicalHeaderKey(actual)] = values
-		}
-	}
+	upstream.Header = passThroughHeaders(r, route)
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -174,13 +168,105 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 	s.recordPassThrough(r, event, response.StatusCode, stream, route.Cost)
 }
 
+func passThroughHeaders(r *http.Request, route PassThroughRoute) http.Header {
+	headers := make(http.Header)
+	if route.ForwardHeaders {
+		for name, values := range r.Header {
+			if !protectedPassHeader(name) && !connectionHeader(r.Header, name) && !strings.HasPrefix(strings.ToLower(name), "x-pass-") {
+				headers[name] = values
+			}
+		}
+	}
+	if value := r.Header.Get("Content-Type"); value != "" {
+		headers.Set("Content-Type", value)
+	}
+	for name, values := range route.Headers {
+		headers[name] = values
+	}
+	for name, values := range r.Header {
+		if actual, ok := strings.CutPrefix(strings.ToLower(name), "x-pass-"); ok && actual != "" && !protectedPassHeader(actual) {
+			headers[http.CanonicalHeaderKey(actual)] = values
+		}
+	}
+	return headers
+}
+
+func (s *Server) passThroughSocket(w http.ResponseWriter, r *http.Request, route PassThroughRoute, target string) {
+	ctx := r.Context()
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		return
+	}
+	event := newInferenceEvent("pass_through_endpoint", route.Path, true)
+	headers := passThroughHeaders(r, route)
+	var protocols []string
+	for _, header := range r.Header.Values("Sec-WebSocket-Protocol") {
+		for _, protocol := range strings.Split(header, ",") {
+			if protocol = strings.TrimSpace(protocol); protocol != "" {
+				protocols = append(protocols, protocol)
+			}
+		}
+	}
+	client := *s.config.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	upstream, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{
+		HTTPClient: &client, HTTPHeader: headers, Subprotocols: protocols,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not open pass-through WebSocket")
+		s.recordPassThrough(r, event, http.StatusBadGateway, true, route.Cost)
+		return
+	}
+	defer upstream.CloseNow()
+	protocols = nil
+	if negotiated := upstream.Subprotocol(); negotiated != "" {
+		protocols = []string{negotiated}
+	}
+	downstream, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: protocols})
+	if err != nil {
+		return
+	}
+	defer downstream.CloseNow()
+	upstream.SetReadLimit(s.config.MaxBodyBytes)
+	downstream.SetReadLimit(s.config.MaxBodyBytes)
+	runSocketRelay(ctx, func(ctx context.Context) {
+		for {
+			kind, data, err := downstream.Read(ctx)
+			if err != nil {
+				return
+			}
+			if !route.Public && !s.authorized(r) {
+				if s.config.AuthorizeKey == nil {
+					return
+				}
+				if _, valid := s.config.AuthorizeKey(ProxyCredential(r)); !valid {
+					return
+				}
+			}
+			if upstream.Write(ctx, kind, data) != nil {
+				return
+			}
+		}
+	}, func(ctx context.Context) {
+		for {
+			kind, data, err := upstream.Read(ctx)
+			if err != nil || downstream.Write(ctx, kind, data) != nil {
+				return
+			}
+		}
+	})
+	s.recordPassThrough(r, event, http.StatusOK, true, route.Cost)
+}
+
 func protectedPassHeader(name string) bool {
 	lower := strings.ToLower(name)
 	switch lower {
 	case "authorization", "api-key", "x-api-key", "x-goog-api-key", "ocp-apim-subscription-key", "x-litellm-api-key", "host", "content-length":
 		return true
 	}
-	return hopHeader(name) || strings.HasPrefix(lower, "x-amz-")
+	return hopHeader(name) || strings.HasPrefix(lower, "x-amz-") || strings.HasPrefix(lower, "sec-websocket-")
 }
 
 func hopHeader(name string) bool {

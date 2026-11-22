@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,9 +9,64 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/coder/websocket"
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestConfiguredPassThroughWebSocket(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/upstream/room" || r.Header.Get("Authorization") != "Bearer fixture-provider" {
+			t.Error("incorrect upstream WebSocket address or authorization")
+		}
+		socket, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"fixture"}})
+		if err != nil {
+			return
+		}
+		defer socket.CloseNow()
+		kind, body, err := socket.Read(r.Context())
+		if err == nil {
+			_ = socket.Write(r.Context(), kind, body)
+		}
+	}))
+	defer origin.Close()
+	t.Setenv("TEST_PASS_SOCKET", "ws"+strings.TrimPrefix(origin.URL, "http")+"/upstream")
+	cfg, err := Load(strings.NewReader(`
+general_settings:
+  master_key: fixture-master
+  pass_through_endpoints:
+    - path: /vendor-socket
+      target: os.environ/TEST_PASS_SOCKET
+      include_subpath: true
+      forward_headers: true
+      headers: {Authorization: Bearer fixture-provider}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: cfg.MasterKey, PassThrough: cfg.PassThrough}))
+	defer proxy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	socket, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(proxy.URL, "http")+"/vendor-socket/room", &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer fixture-master"}}, Subprotocols: []string{"fixture"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer socket.CloseNow()
+	if socket.Subprotocol() != "fixture" {
+		t.Fatal("subprotocol was lost")
+	}
+	if err := socket.Write(ctx, websocket.MessageBinary, []byte{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+	kind, body, err := socket.Read(ctx)
+	if err != nil || kind != websocket.MessageBinary || string(body) != "\x01\x02\x03" {
+		t.Fatalf("WebSocket payload changed: %v %v %v", kind, body, err)
+	}
+}
 
 func TestManagedPassThroughSurvivesRestart(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
