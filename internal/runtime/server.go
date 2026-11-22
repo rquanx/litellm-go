@@ -90,7 +90,8 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if s.config.AuthorizeInference && geminiEndpoint == "" {
 		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
 		path := request.URL.Path
-		if unversioned := proxyAlias(path); unversioned || path == "/openai/v1/responses/compact" {
+		azureResponses := path == "/openai/v1/responses" || strings.HasPrefix(path, "/openai/v1/responses/")
+		if unversioned := proxyAlias(path); unversioned || azureResponses {
 			normalized := *request.URL
 			if unversioned {
 				normalized.Path = "/v1" + path
@@ -99,7 +100,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				}
 			} else {
 				normalized.Path = strings.TrimPrefix(path, "/openai")
-				normalized.RawPath = ""
+				normalized.RawPath = strings.TrimPrefix(normalized.RawPath, "/openai")
 			}
 			copy := request.WithContext(request.Context())
 			copy.URL = &normalized

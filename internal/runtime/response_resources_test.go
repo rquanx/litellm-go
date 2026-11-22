@@ -72,6 +72,7 @@ func TestResponseResourcesKeepDeploymentAffinity(t *testing.T) {
 	resource := "/v1/responses/" + url.PathEscape(id)
 	assertRequest("GET", resource, "", "restricted", 404)
 	assertRequest("GET", resource+"/input_items?limit=5", "", "fixture-master", 200)
+	assertRequest("GET", "/openai"+resource+"/input_items?limit=5", "", "fixture-master", 200)
 	if response := assertRequest("GET", resource, "", "fixture-master", 200); !strings.Contains(response, id) {
 		t.Fatal("retrieval changed the managed response ID")
 	}
@@ -79,6 +80,7 @@ func TestResponseResourcesKeepDeploymentAffinity(t *testing.T) {
 	assertRequest("DELETE", resource, "", "fixture-master", 200)
 	followUp := `{"model":"demo","input":"follow-up","previous_response_id":"` + id + `"}`
 	assertRequest("POST", "/v1/responses", followUp, "fixture-master", 200)
+	assertRequest("POST", "/openai/v1/responses", followUp, "fixture-master", 200)
 	compact := `{"model":"demo","input":"conversation"}`
 	assertRequest("POST", "/openai/v1/responses/compact", compact, "unknown", 401)
 	assertRequest("POST", "/responses/compact", compact, "restricted", 403)
