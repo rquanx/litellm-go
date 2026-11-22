@@ -30,6 +30,7 @@ type modelRegistry struct {
 	passThrough []passThroughConfig
 	mcpServers map[string]mcpServerConfig
 	mcpToolsets []runtime.MCPToolset
+	publicHub publicModelHubState
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
@@ -56,6 +57,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		registry.passThrough = state.PassThrough
 		registry.mcpServers = state.MCPServers
 		registry.mcpToolsets = state.MCPToolsets
+		registry.publicHub = state.PublicHub
 	}
 	config, err := registry.compileConfiguration(registry.models, registry.credentials, registry.router, registry.searchTools)
 	if err != nil {
@@ -308,7 +310,7 @@ func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, model
 	}
 	if registry.store != nil {
 		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools,
-			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets}); err != nil {
+			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}

@@ -33,6 +33,11 @@ type modelHubCatalog struct {
 	Models           map[string]map[string]any `json:"models"`
 }
 
+type publicModelHubState struct {
+	Groups []string       `json:"model_groups"`
+	Links  map[string]any `json:"useful_links"`
+}
+
 func publicDeploymentMetadata(candidate runtime.Candidate) (map[string]any, []string) {
 	catalog := loadModelHubMetadata()
 	metadata := catalog.Models[candidate.Provider+"/"+candidate.ModelID]
@@ -52,21 +57,83 @@ func publicDeploymentMetadata(candidate runtime.Candidate) (map[string]any, []st
 
 func (registry *modelRegistry) registerPublicModelHub(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/model_hub", func(w http.ResponseWriter, r *http.Request) {
-		groups := registry.server.PublicModelGroups(r.Context(), registry.base.publicModelGroups, publicDeploymentMetadata)
-		modelJSON(w, http.StatusOK, groups)
+		registry.mu.Lock()
+		names := registry.publicHub.Groups
+		registry.mu.Unlock()
+		if names == nil {
+			names = registry.base.publicModelGroups
+		}
+		modelJSON(w, http.StatusOK, registry.server.PublicModelGroups(r.Context(), names, publicDeploymentMetadata))
 	})
 	info := servePublicCatalog(publicModelHubInfo)
-	if len(registry.base.publicModelLinks) > 0 {
+	mux.HandleFunc("GET /public/model_hub/info", func(w http.ResponseWriter, r *http.Request) {
+		registry.mu.Lock()
+		links := registry.publicHub.Links
+		registry.mu.Unlock()
+		if links == nil {
+			links = registry.base.publicModelLinks
+		}
+		if len(links) == 0 {
+			info(w, r)
+			return
+		}
 		reader, err := gzip.NewReader(bytes.NewReader(publicModelHubInfo))
-		if err == nil {
-			var fields map[string]any
-			err = json.NewDecoder(reader).Decode(&fields)
-			reader.Close()
-			if err == nil {
-				fields["useful_links"] = registry.base.publicModelLinks
-				info = func(w http.ResponseWriter, _ *http.Request) { modelJSON(w, http.StatusOK, fields) }
-			}
+		if err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not read the model hub metadata")
+			return
+		}
+		defer reader.Close()
+		var fields map[string]any
+		if err := json.NewDecoder(reader).Decode(&fields); err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not read the model hub metadata")
+			return
+		}
+		fields["useful_links"] = links
+		modelJSON(w, http.StatusOK, fields)
+	})
+	mux.HandleFunc("POST /model_group/make_public", registry.updatePublicModelHub)
+	mux.HandleFunc("POST /model_hub/update_useful_links", registry.updatePublicModelHub)
+}
+
+func (registry *modelRegistry) updatePublicModelHub(w http.ResponseWriter, r *http.Request) {
+	if !registry.allowed(w, r) {
+		return
+	}
+	var input publicModelHubState
+	updateGroups := r.URL.Path == "/model_group/make_public"
+	if decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input) != nil ||
+		(updateGroups && input.Groups == nil) || (!updateGroups && input.Links == nil) {
+		modelError(w, http.StatusUnprocessableEntity, "Invalid public model hub configuration")
+		return
+	}
+	for _, link := range input.Links {
+		switch link.(type) {
+		case string, map[string]any:
+		default:
+			modelError(w, http.StatusUnprocessableEntity, "Each useful link must be a string or object")
+			return
 		}
 	}
-	mux.HandleFunc("GET /public/model_hub/info", info)
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	next := registry.publicHub
+	result := map[string]any{"updated_by": "default_user_id"}
+	if updateGroups {
+		next.Groups = input.Groups
+		result["message"], result["public_model_groups"] = "Successfully updated public model groups", next.Groups
+	} else {
+		next.Links = input.Links
+		result["message"], result["useful_links"] = "Successfully updated useful links", next.Links
+	}
+	if registry.store != nil {
+		if err := registry.store.save(modelState{
+			Models: registry.models, Credentials: registry.credentials, Router: registry.router, SearchTools: registry.searchTools,
+			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: next,
+		}); err != nil {
+			stateWriteError(w, err)
+			return
+		}
+	}
+	registry.publicHub = next
+	modelJSON(w, http.StatusOK, result)
 }

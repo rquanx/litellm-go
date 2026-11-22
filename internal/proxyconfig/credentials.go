@@ -26,6 +26,7 @@ type modelState struct {
 	PassThrough []passThroughConfig          `json:"pass_through_endpoints,omitempty"`
 	MCPServers map[string]mcpServerConfig     `json:"mcp_servers,omitempty"`
 	MCPToolsets []runtime.MCPToolset          `json:"mcp_toolsets,omitempty"`
+	PublicHub publicModelHubState             `json:"public_model_hub,omitzero"`
 }
 
 func (state *modelState) UnmarshalJSON(payload []byte) error {

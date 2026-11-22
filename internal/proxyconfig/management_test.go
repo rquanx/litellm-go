@@ -16,6 +16,9 @@ model_list:
   - model_name: static-model
     litellm_params: {model: openai/static, api_base: http://example.invalid}
 general_settings: {master_key: local-master}
+litellm_settings:
+  public_model_groups: [static-model]
+  public_model_groups_links: {Static: "https://example.invalid/static"}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +45,9 @@ general_settings: {master_key: local-master}
 	}
 	handler := buildHandler()
 	request(handler, "GET", "/model/info", "", "wrong", 401)
+	request(handler, "POST", "/model_group/make_public", `{"model_groups":[]}`, "wrong", 401)
+	request(handler, "POST", "/model_group/make_public", `{"model_groups":[]}`, config.MasterKey, 200)
+	request(handler, "POST", "/model_hub/update_useful_links", `{"useful_links":{"Managed":{"url":"https://example.invalid/managed","index":0}}}`, config.MasterKey, 200)
 	model := `{"model_name":"dynamic-model","litellm_params":{"model":"openai/dynamic","api_base":"http://example.invalid","api_key":"fixture-credential"},"model_info":{"id":"managed-1"}}`
 	request(handler, "POST", "/model/new", model, config.MasterKey, 200)
 	request(handler, "POST", "/model/new", model, config.MasterKey, 400)
@@ -50,6 +56,13 @@ general_settings: {master_key: local-master}
 		t.Fatal("model was not published alongside the static configuration")
 	}
 	handler = buildHandler()
+	if groups := request(handler, "GET", "/public/model_hub", "", "", 200); strings.TrimSpace(groups) != "[]" {
+		t.Fatalf("public group clearing was not persisted: %s", groups)
+	}
+	hub := request(handler, "GET", "/public/model_hub/info", "", "", 200)
+	if !strings.Contains(hub, "example.invalid/managed") || strings.Contains(hub, "example.invalid/static") {
+		t.Fatalf("public links were not restored: %s", hub)
+	}
 	info := request(handler, "GET", "/v1/model/info?litellm_model_id=managed-1", "", config.MasterKey, 200)
 	if !strings.Contains(info, "dynamic-model") || strings.Contains(info, "fixture-credential") || strings.Contains(info, "example.invalid") {
 		t.Fatal("model info did not restore or redacted fields were exposed")

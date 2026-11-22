@@ -133,7 +133,7 @@ func (registry *modelRegistry) savePassThrough(entries []passThroughConfig) erro
 	}
 	return registry.store.save(modelState{Models: registry.models, Credentials: registry.credentials,
 		Router: registry.router, SearchTools: registry.searchTools, PassThrough: entries,
-		MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets})
+		MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub})
 }
 
 func validatePassThroughIDs(entries []passThroughConfig) error {
