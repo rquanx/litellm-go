@@ -89,6 +89,20 @@ func TestMCPRESTUsesScopedStreamableHTTPSessions(t *testing.T) {
 				t.Error("unexpected MCP tool call")
 			}
 			result = json.RawMessage(`{"content":[{"type":"text","text":"fixture"}],"isError":false}`)
+		case "prompts/list":
+			result = json.RawMessage(`{"prompts":[{"name":"sample","description":"fixture"}]}`)
+		case "prompts/get":
+			if message.Params["name"] != "sample" {
+				t.Error("unexpected MCP prompt name")
+			}
+			result = json.RawMessage(`{"messages":[{"role":"user","content":{"type":"text","text":"fixture prompt"}}]}`)
+		case "resources/list":
+			result = json.RawMessage(`{"resources":[{"name":"manual","uri":"file:///fixture"}]}`)
+		case "resources/read":
+			if message.Params["uri"] != "file:///fixture" {
+				t.Error("unexpected MCP resource URI")
+			}
+			result = json.RawMessage(`{"contents":[{"uri":"file:///fixture","text":"fixture resource"}]}`)
 		default:
 			t.Error("unexpected MCP request")
 		}
@@ -150,7 +164,19 @@ mcp_servers:
 	if result := call("POST", "/mcp", "fixture-key", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture-echo"}}`, 200); !strings.Contains(result, "fixture") {
 		t.Fatalf("unexpected MCP tool response %s", result)
 	}
-	if closed.Load() != 4 {
+	for _, tc := range []struct {
+		body, expected string
+	}{
+		{`{"jsonrpc":"2.0","id":4,"method":"prompts/list"}`, "fixture-sample"},
+		{`{"jsonrpc":"2.0","id":5,"method":"prompts/get","params":{"name":"fixture-sample"}}`, "fixture prompt"},
+		{`{"jsonrpc":"2.0","id":6,"method":"resources/list"}`, "fixture-manual"},
+		{`{"jsonrpc":"2.0","id":7,"method":"resources/read","params":{"uri":"file:///fixture"}}`, "fixture resource"},
+	} {
+		if result := call("POST", "/mcp", "fixture-key", tc.body, 200); !strings.Contains(result, tc.expected) {
+			t.Fatalf("unexpected MCP response %s", result)
+		}
+	}
+	if closed.Load() != 8 {
 		t.Fatalf("closed %d MCP sessions", closed.Load())
 	}
 }

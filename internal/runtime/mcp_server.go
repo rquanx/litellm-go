@@ -52,21 +52,24 @@ func (s *Server) serveMCP(w http.ResponseWriter, r *http.Request) {
 			params.ProtocolVersion = "2025-03-26"
 		}
 		writeMCPResult(w, req.ID, map[string]any{"protocolVersion": params.ProtocolVersion,
-			"capabilities": map[string]any{"tools": map[string]any{}},
+			"capabilities": map[string]any{"tools": map[string]any{}, "prompts": map[string]any{}, "resources": map[string]any{}},
 			"serverInfo": map[string]string{"name": "minato-runtime", "version": "1"}})
 	case "ping":
 		writeMCPResult(w, req.ID, map[string]any{})
-	case "tools/list", "tools/call":
+	case "tools/list", "tools/call", "prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read":
 		select {
 		case s.sem <- struct{}{}:
 			defer func() { <-s.sem }()
 		case <-r.Context().Done():
 			return
 		}
-		if req.Method == "tools/list" {
+		switch req.Method {
+		case "tools/list":
 			writeMCPResult(w, req.ID, map[string]any{"tools": s.listProtocolTools(r, access)})
-		} else {
+		case "tools/call":
 			s.handleMCPCall(w, r, req, access)
+		default:
+			s.handleMCPContent(w, r, req, access)
 		}
 	default:
 		writeMCPError(w, http.StatusOK, req.ID, -32601, "Method not found")
