@@ -68,4 +68,22 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	call("master", "/spend/logs/v2?project_id=fixture-project", 200, `"total_count":1`)
 	call("master", "/spend/logs/v2?team_id=fixture-team", 200, `"total_count":1`)
 	call("master", "/global/spend/logs", 200, `"total_tokens":5`)
+	if _, err := db.Exec(`CREATE TEMP TABLE "LiteLLM_SpendLogs" (
+		request_id TEXT, "startTime" TIMESTAMP, "endTime" TIMESTAMP, api_key TEXT, metadata JSONB,
+		"user" TEXT, team_id TEXT, model TEXT, model_group TEXT, model_id TEXT, custom_llm_provider TEXT,
+		call_type TEXT, status TEXT, prompt_tokens INT, completion_tokens INT, total_tokens INT, spend DOUBLE PRECISION);
+		INSERT INTO "LiteLLM_SpendLogs" VALUES ('historical', '2026-01-01 12:00:00', '2026-01-01 12:00:01',
+		'sk-plaintext-fixture', '{"project_id":"imported"}','fixture-user','fixture-team','fixture-model','fixture-group',
+		'fixture-id','openai','acompletion','success',2,3,5,0.015);`); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []int64{1, 0} {
+		if count, err := ImportLiteLLMSpend(db); err != nil || count != expected {
+			t.Fatalf("imported %d, want %d: %v", count, expected, err)
+		}
+	}
+	historical := call("master", "/spend/logs/v2?project_id=imported", 200, `"total_count":1`)
+	if strings.Contains(historical, "sk-plaintext-fixture") || !strings.Contains(historical, `"total_tokens":5`) {
+		t.Fatalf("unexpected historical spend %s", historical)
+	}
 }

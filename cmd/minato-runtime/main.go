@@ -24,6 +24,7 @@ func main() {
 	importAccess := flag.Bool("import-litellm-access", false, "Import supported LiteLLM access records and keys into empty Go PostgreSQL state")
 	importSearch := flag.Bool("import-litellm-search-tools", false, "Import LiteLLM search tools into Go PostgreSQL state")
 	importMCP := flag.Bool("import-litellm-mcp-servers", false, "Import supported LiteLLM MCP servers into Go PostgreSQL state")
+	importSpend := flag.Bool("import-litellm-spend", false, "Import LiteLLM spend metadata into Go PostgreSQL state")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -86,7 +87,7 @@ func main() {
 		config.DatabasePing = stateDB.PingContext
 	}
 	importCount := 0
-	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch, *importMCP} {
+	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend} {
 		if requested {
 			importCount++
 		}
@@ -97,6 +98,14 @@ func main() {
 		}
 		if importCount != 1 {
 			log.Fatal("Select one LiteLLM import command")
+		}
+		if *importSpend {
+			count, err := proxyconfig.ImportLiteLLMSpend(stateDB)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM spend records", count)
+			return
 		}
 		if *importSearch {
 			count, err := proxyconfig.ImportLiteLLMSearchTools(stateDB, proxy)
