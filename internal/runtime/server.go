@@ -693,13 +693,13 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = strings.TrimRight(candidate.APIBase, "/") + strings.TrimPrefix(path, "/v1")
 	}
 	if isGeminiEndpoint(endpoint) {
-		target = geminiURL(candidate.APIBase, candidate.ModelID, endpoint)
+		target = geminiTarget(candidate, endpoint)
 	} else if isGeminiEndpoint(candidate.Endpoint) {
 		geminiEndpoint := "gemini-generate"
 		if stream {
 			geminiEndpoint = "gemini-stream"
 		}
-		target = geminiURL(candidate.APIBase, candidate.ModelID, geminiEndpoint)
+		target = geminiTarget(candidate, geminiEndpoint)
 	} else if candidate.Provider == "azure" {
 		target = azureTarget(candidate.APIBase, candidate.ModelID, pathEndpoint, candidate.APIVersion)
 	} else if candidate.Endpoint == "rerank" {
@@ -728,7 +728,10 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			upstream.Header.Set("x-api-key", apiKey)
 		}
 	} else if isGeminiEndpoint(candidate.Endpoint) {
-		applyGeminiCredential(upstream, apiKey)
+		if err := applyGeminiCredential(upstream, candidate, apiKey); err != nil {
+			release()
+			return nil, err
+		}
 	} else if candidate.Provider == "azure" && apiKey != "" {
 		upstream.Header.Set("api-key", apiKey)
 	} else if apiKey != "" && candidate.Endpoint != "bedrock-converse" {

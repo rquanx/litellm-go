@@ -1,10 +1,19 @@
 package runtime
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"golang.org/x/oauth2"
 )
+
+type VertexConfig struct {
+	Project     string
+	Location    string
+	TokenSource oauth2.TokenSource
+}
 
 func geminiMethod(path string) (alias, endpoint string) {
 	path, ok := strings.CutPrefix(path, "/v1beta/models/")
@@ -58,8 +67,38 @@ func isGeminiEndpoint(endpoint string) bool {
 	return endpoint == "gemini-generate" || endpoint == "gemini-stream"
 }
 
-func applyGeminiCredential(request *http.Request, key string) {
+func geminiTarget(candidate Candidate, endpoint string) string {
+	if candidate.Vertex == nil {
+		return geminiURL(candidate.APIBase, candidate.ModelID, endpoint)
+	}
+	base := strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1")
+	vertex := candidate.Vertex
+	model := strings.TrimPrefix(candidate.ModelID, "models/")
+	target := base + "/v1/projects/" + url.PathEscape(vertex.Project) + "/locations/" + url.PathEscape(vertex.Location) +
+		"/publishers/google/models/" + url.PathEscape(model)
+	if endpoint == "gemini-stream" {
+		return target + ":streamGenerateContent?alt=sse"
+	}
+	return target + ":generateContent"
+}
+
+func applyGeminiCredential(request *http.Request, candidate Candidate, key string) error {
+	if candidate.Vertex != nil {
+		if key == "" && candidate.Vertex.TokenSource != nil {
+			token, err := candidate.Vertex.TokenSource.Token()
+			if err != nil {
+				return errors.New("could not retrieve a Vertex AI access token")
+			}
+			key = token.AccessToken
+		}
+		if key == "" {
+			return errors.New("Vertex AI requires an access token")
+		}
+		request.Header.Set("Authorization", "Bearer "+key)
+		return nil
+	}
 	if key != "" {
 		request.Header.Set("x-goog-api-key", key)
 	}
+	return nil
 }

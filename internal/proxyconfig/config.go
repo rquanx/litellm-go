@@ -55,6 +55,8 @@ type deployment struct {
 		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
 		AWSSessionToken string `yaml:"aws_session_token" json:"aws_session_token,omitempty"`
 		AWSProfile string `yaml:"aws_profile_name" json:"aws_profile_name,omitempty"`
+		VertexProject string `yaml:"vertex_project" json:"vertex_project,omitempty"`
+		VertexLocation string `yaml:"vertex_location" json:"vertex_location,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
@@ -253,7 +255,7 @@ func compileSpecialFallbacks(entries []map[string][]string, deployments map[stri
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider)) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider)) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -273,6 +275,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	base, err := resolveEnv(entry.Params.APIBase)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_base: %w", err)
+	}
+	var vertex *runtime.VertexConfig
+	if provider == "vertex_ai" {
+		vertex, base, err = entry.vertexConfig(base)
+		if err != nil {
+			return runtime.Candidate{}, err
+		}
 	}
 	if base == "" && hasSettings {
 		base = os.Getenv(settings.APIBaseEnv)
@@ -346,7 +355,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if provider == "anthropic" {
 		endpoint = "anthropic-messages"
 	}
-	if provider == "gemini" {
+	if provider == "gemini" || provider == "vertex_ai" {
 		endpoint = "gemini-generate"
 	}
 	if provider == "bedrock" {
@@ -366,7 +375,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if provider == "bedrock" && (configured == "chat-completions" || configured == "responses") {
 			configured = endpoint
 		}
-		if configured == "" || provider == "gemini" || (configured == "anthropic-messages") != (provider == "anthropic") ||
+		if configured == "" || provider == "gemini" || provider == "vertex_ai" || (configured == "anthropic-messages") != (provider == "anthropic") ||
 			(configured == "bedrock-converse") != (provider == "bedrock") {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
 		}
@@ -380,7 +389,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
-		TokenPrice: price}, nil
+		TokenPrice: price, Vertex: vertex}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

@@ -12,9 +12,11 @@ require (
 	github.com/lib/pq v1.10.9
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/crypto v0.45.0
+	golang.org/x/oauth2 v0.30.0
 )
 
 require (
+	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.9 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect

@@ -184,6 +184,12 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSProfile == "" {
 			model.Params.AWSProfile = existing.Params.AWSProfile
 		}
+		if model.Params.VertexProject == "" {
+			model.Params.VertexProject = existing.Params.VertexProject
+		}
+		if model.Params.VertexLocation == "" {
+			model.Params.VertexLocation = existing.Params.VertexLocation
+		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}
