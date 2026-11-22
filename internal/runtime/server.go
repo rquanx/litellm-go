@@ -538,6 +538,8 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 					body = hostedRerankResponse(body, candidate.Provider)
 				case "deepinfra":
 					body = deepInfraRerankResponse(body)
+				case "nvidia_nim":
+					body = nvidiaRerankResponse(body, payload.fields)
 				case "infinity", "together_ai":
 					body = cohereStyleRerankResponse(body, candidate.Provider)
 				}
@@ -883,6 +885,8 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 			payload = hostedRerankRequest(payload, candidate.Provider)
 		case "deepinfra":
 			payload = deepInfraRerankRequest(payload)
+		case "nvidia_nim":
+			payload = nvidiaRerankRequest(payload)
 		case "infinity":
 			payload = hostedRerankRequest(payload, candidate.Provider)
 			if input.fields["max_chunks_per_doc"] != nil {

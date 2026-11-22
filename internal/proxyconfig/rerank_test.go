@@ -17,6 +17,15 @@ func TestProviderRerank(t *testing.T) {
 			t.Error(err)
 		}
 		switch r.URL.Path {
+		case "/v1/retrieval/nvidia/ranker-3_2/reranking", "/v1/ranking":
+			query, _ := request["query"].(map[string]any)
+			passages, _ := request["passages"].([]any)
+			if query["text"] != "fixture" || len(passages) != 1 || request["model"] != "nvidia/ranker-3.2" ||
+				request["top_k"] != float64(1) || r.Header.Get("Authorization") != "Bearer fixture-nvidia" {
+				t.Errorf("unexpected NVIDIA NIM request: %+v", request)
+			}
+			w.Write([]byte(`{"id":"nvidia-job","rankings":[{"index":0,"logit":0.9}],"usage":{"total_tokens":5}}`))
+			return
 		case "/deep/v1/inference/org/ranker":
 			queries, _ := request["queries"].([]any)
 			if len(queries) != 1 || queries[0] != "fixture" || request["model"] != nil ||
@@ -95,6 +104,8 @@ func TestProviderRerank(t *testing.T) {
 	t.Setenv("DEEPINFRA_API_KEY", "fixture-deepinfra")
 	t.Setenv("TEST_TOGETHER_RERANK_BASE", upstream.URL+"/together")
 	t.Setenv("TOGETHERAI_API_KEY", "fixture-together")
+	t.Setenv("NVIDIA_NIM_API_BASE", upstream.URL+"/v1")
+	t.Setenv("NVIDIA_NIM_API_KEY", "fixture-nvidia")
 	config, err := Load(strings.NewReader(`
 model_list:
   - model_name: cohere
@@ -122,12 +133,18 @@ model_list:
   - model_name: together
     litellm_params: {model: together_ai/org/together-ranker, api_base: os.environ/TEST_TOGETHER_RERANK_BASE}
     model_info: {mode: rerank}
+  - model_name: nvidia
+    litellm_params: {model: nvidia_nim/nvidia/ranker-3_2}
+    model_info: {mode: rerank}
+  - model_name: nvidia-ranking
+    litellm_params: {model: nvidia_nim/ranking/nvidia/ranker-3_2}
+    model_info: {mode: rerank}
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
-	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together"} {
+	for _, model := range []string{"cohere", "jina", "voyage", "vertex", "bedrock", "fireworks", "local", "infinity", "deepinfra", "together", "nvidia", "nvidia-ranking"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/rerank", strings.NewReader(`{"model":"`+model+`","query":"fixture","documents":["document"],"rank_fields":["text"],"top_n":1}`))
 		result := httptest.NewRecorder()
 		server.ServeHTTP(result, req)
@@ -146,6 +163,8 @@ model_list:
 			expected = `{"id":"deep-job","meta":{"billed_units":{"total_tokens":3},"tokens":{"input_tokens":3,"output_tokens":0}},"results":[{"index":0,"relevance_score":0.9}]}`
 		case "together":
 			expected = `{"id":"together-job","meta":{"billed_units":{"total_tokens":4},"tokens":{"input_tokens":3,"output_tokens":1}},"results":[{"document":{"text":"fixture"},"index":0,"relevance_score":0.9}]}`
+		case "nvidia", "nvidia-ranking":
+			expected = `{"id":"nvidia-job","meta":{"billed_units":{"total_tokens":5}},"results":[{"document":{"text":"document"},"index":0,"relevance_score":0.9}]}`
 		}
 		if expected != "" && strings.TrimSpace(result.Body.String()) != expected {
 			t.Fatalf("unexpected %s response: %s", model, result.Body.String())

@@ -519,6 +519,11 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = os.Getenv("DEEPINFRA_API_BASE")
 		case "together_ai":
 			base = "https://api.together.xyz"
+		case "nvidia_nim":
+			base = os.Getenv("NVIDIA_NIM_API_BASE")
+			if base == "" {
+				base = "https://ai.api.nvidia.com"
+			}
 		}
 	}
 	var bedrock *runtime.BedrockConfig
@@ -580,6 +585,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			key = os.Getenv("DEEPINFRA_API_KEY")
 		case "together_ai":
 			key = os.Getenv("TOGETHERAI_API_KEY")
+		case "nvidia_nim":
+			key = os.Getenv("NVIDIA_NIM_API_KEY")
 		}
 	}
 	if key == "" && rerankProvider(provider) {

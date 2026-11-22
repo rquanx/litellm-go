@@ -181,6 +181,8 @@ func rerankTarget(candidate Candidate) string {
 			model[i] = url.PathEscape(segment)
 		}
 		return base + "/inference/" + strings.Join(model, "/")
+	case "nvidia_nim":
+		return nvidiaRerankTarget(base, candidate.ModelID)
 	case "hosted_vllm", "infinity":
 		if provider == "hosted_vllm" {
 			if root, ok := strings.CutSuffix(base, "/v1/rerank"); ok {
