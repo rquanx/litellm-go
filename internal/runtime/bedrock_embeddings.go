@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -34,7 +35,14 @@ func (s *Server) bedrockEmbeddings(ctx context.Context, request *http.Request, c
 	if len(texts) == 0 {
 		return http.StatusBadRequest, []byte(`{"error":{"code":"invalid_request","message":"Supply a string or a list of strings"}}`), headers, false, nil
 	}
+	if strings.Contains(candidate.ModelID, "cohere.embed-") {
+		return s.bedrockCohereEmbeddings(ctx, request, candidate, input.fields, texts)
+	}
 	base := make(map[string]any)
+	multimodal := strings.Contains(candidate.ModelID, "amazon.titan-embed-image-")
+	if multimodal && input.fields["dimensions"] != nil {
+		base["embeddingConfig"] = map[string]any{"outputEmbeddingLength": input.fields["dimensions"]}
+	}
 	encoding, _ := input.fields["encoding_format"].(string)
 	if strings.Contains(candidate.ModelID, "embed-text-v2") {
 		for _, name := range []string{"dimensions", "normalize"} {
@@ -49,11 +57,26 @@ func (s *Server) bedrockEmbeddings(ctx context.Context, request *http.Request, c
 		}
 	}
 	data := make([]map[string]any, 0, len(texts))
+	requests := make([]map[string]any, 0, len(texts))
 	total := 0
+	images := 0
 	var vectorBytes int64
-	for index, text := range texts {
-		base["inputText"] = text
-		status, response, upstreamHeaders, retryable, err := s.callProviderJSON(ctx, request, "embeddings", candidate, requestPayload{fields: base})
+	for _, text := range texts {
+		params := clone(base)
+		if meta, content, ok := strings.Cut(text, ","); multimodal && ok &&
+			strings.HasPrefix(meta, "data:image/") && strings.HasSuffix(meta, ";base64") {
+			if _, err := base64.StdEncoding.DecodeString(content); err != nil || content == "" {
+				return http.StatusBadRequest, []byte(`{"error":{"code":"invalid_request","message":"Invalid base64 embedding image"}}`), headers, false, nil
+			}
+			params["inputImage"] = content
+			images++
+		} else {
+			params["inputText"] = text
+		}
+		requests = append(requests, params)
+	}
+	for index, params := range requests {
+		status, response, upstreamHeaders, retryable, err := s.callProviderJSON(ctx, request, "embeddings", candidate, requestPayload{fields: params})
 		if err != nil || status < 200 || status >= 300 {
 			return status, response, upstreamHeaders, retryable, err
 		}
@@ -81,8 +104,11 @@ func (s *Server) bedrockEmbeddings(ctx context.Context, request *http.Request, c
 		data = append(data, map[string]any{"object": "embedding", "index": index, "embedding": vector})
 		total += result.Tokens
 	}
-	body, err := json.Marshal(map[string]any{"object": "list", "model": candidate.ModelID, "data": data,
-		"usage": map[string]int{"prompt_tokens": total, "completion_tokens": 0, "total_tokens": total}})
+	usage := map[string]any{"prompt_tokens": total, "completion_tokens": 0, "total_tokens": total}
+	if images > 0 {
+		usage["prompt_tokens_details"] = map[string]int{"image_count": images}
+	}
+	body, err := json.Marshal(map[string]any{"object": "list", "model": candidate.ModelID, "data": data, "usage": usage})
 	if int64(len(body)) > s.config.MaxBodyBytes {
 		return 0, nil, nil, false, errors.New("aggregated Bedrock embedding response exceeds the body limit")
 	}
