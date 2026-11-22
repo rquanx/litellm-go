@@ -60,6 +60,9 @@ func main() {
 		proxy.MasterKey = config.Token
 		config.AuthorizeInference = true
 		config.PublicReadinessDetails = proxy.PublicReadinessDetails
+		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
+		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
+		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks
 		if proxy.Timeout > 0 {
 			config.HTTPClient.Timeout = proxy.Timeout
 		}
@@ -190,6 +193,9 @@ func main() {
 		handler = spend.Handler(handler)
 	}
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
+	if config.BackgroundHealthInterval > 0 {
+		go server.RunBackgroundHealthChecks(context.Background())
+	}
 	log.Printf("minato-runtime listening on %s", address)
 	if err := http.ListenAndServe(address, handler); err != nil {
 		log.Fatal(err)

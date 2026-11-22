@@ -46,6 +46,9 @@ type Config struct {
 	ModelRetryPolicies map[string]RetryPolicy
 	DatabasePing       func(context.Context) error
 	HealthHistory      HealthHistory
+	BackgroundHealthInterval time.Duration
+	HealthCheckConcurrency int
+	SkipDisabledHealthChecks bool
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }
@@ -58,6 +61,8 @@ type Server struct {
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
 	searchFallbacks map[string][]string
+	healthResults map[string]ModelHealthRecord
+	configGeneration uint64
 	sem    chan struct{}
 	trafficMu sync.Mutex
 	deploymentTraffic map[string]int
@@ -79,6 +84,9 @@ func NewServer(config Config) *Server {
 	if config.MaxConcurrent == 0 {
 		config.MaxConcurrent = 128
 	}
+	if config.HealthCheckConcurrency <= 0 {
+		config.HealthCheckConcurrency = 8
+	}
 	routes := make(map[string]Route, len(config.Routes))
 	for _, route := range config.Routes {
 		routes[route.Alias] = route
@@ -97,6 +105,8 @@ func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTo
 	s.configuredRoutes = next
 	s.searchTools = searchTools
 	s.searchFallbacks = searchFallbacks
+	s.healthResults = nil
+	s.configGeneration++
 	s.mu.Unlock()
 }
 

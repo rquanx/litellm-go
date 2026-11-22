@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProxyHealthProbesAndDiagnostics(t *testing.T) {
@@ -45,6 +46,50 @@ func TestProxyHealthProbesAndDiagnostics(t *testing.T) {
 	}
 	if body := request(http.MethodGet, "/health/backlog", true, 200).Body.String(); !strings.Contains(body, `"in_flight_requests":1`) {
 		t.Fatalf("unexpected backlog body %q", body)
+	}
+}
+
+func TestBackgroundHealthCachesEnabledDeployments(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/disabled/") {
+			t.Error("disabled deployment was probed")
+		}
+		w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer upstream.Close()
+	candidates := []Candidate{
+		{DeploymentID: "enabled", ModelID: "fixture", Endpoint: "chat-completions", APIBase: upstream.URL},
+		{DeploymentID: "disabled", ModelID: "fixture", Endpoint: "chat-completions", APIBase: upstream.URL + "/disabled", DisableBackgroundHealthCheck: true},
+	}
+	server := NewServer(Config{AuthorizeInference: true, BackgroundHealthInterval: time.Hour,
+		Routes: []Route{{Alias: "demo", Candidates: candidates}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		server.RunBackgroundHealthChecks(ctx)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	deadline := time.After(time.Second)
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, httptest.NewRequest(http.MethodGet, "/health?model=demo", nil))
+		if output.Code == http.StatusOK {
+			if strings.Contains(output.Body.String(), "disabled") || !strings.Contains(output.Body.String(), `"healthy_count":1`) {
+				t.Fatalf("unexpected health cache %s", output.Body.String())
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("background health did not populate the cache")
+		case <-ticker.C:
+		}
 	}
 }
 

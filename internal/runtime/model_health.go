@@ -17,6 +17,50 @@ type healthDeployment struct {
 func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []string, admin bool) {
 	query := r.URL.Query()
 	model, id := query.Get("model"), query.Get("model_id")
+	background := s.config.BackgroundHealthInterval > 0
+	deployments := s.healthDeployments(model, id, scope, background || s.config.SkipDisabledHealthChecks)
+	var results []ModelHealthRecord
+	if background {
+		s.mu.RLock()
+		cache := s.healthResults
+		s.mu.RUnlock()
+		checked := deployments[:0]
+		for _, dep := range deployments {
+			if entry, exists := cache[dep.candidate.DeploymentID]; exists {
+				checked = append(checked, dep)
+				results = append(results, entry)
+			}
+		}
+		deployments = checked
+	} else {
+		results = s.runHealthChecks(r, deployments)
+	}
+	healthy, unhealthy := make([]map[string]any, 0), make([]map[string]any, 0)
+	for i, dep := range deployments {
+		candidate := dep.candidate
+		entry := map[string]any{"model": candidate.ModelID, "model_id": candidate.DeploymentID, "model_name": dep.alias}
+		if admin {
+			entry["api_base"] = candidate.APIBase
+			entry["api_version"] = candidate.APIVersion
+		}
+		if results[i].HealthyCount != 0 {
+			healthy = append(healthy, entry)
+		} else {
+			unhealthy = append(unhealthy, entry)
+		}
+	}
+	status := http.StatusOK
+	if (model != "" || id != "") && len(healthy) == 0 {
+		status = http.StatusServiceUnavailable
+	}
+	if !admin {
+		w.Header().Set("Litellm-Health-Field-Notice", "api_base and api_version are admin-only on this endpoint")
+	}
+	writeJSON(w, status, map[string]any{"healthy_endpoints": healthy, "unhealthy_endpoints": unhealthy,
+		"healthy_count": len(healthy), "unhealthy_count": len(unhealthy)})
+}
+
+func (s *Server) healthDeployments(model, id string, scope []string, skipDisabled bool) []healthDeployment {
 	var deployments []healthDeployment
 	s.mu.RLock()
 	for alias, route := range s.configuredRoutes {
@@ -27,6 +71,7 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		for _, candidate := range route.Candidates {
 			if (candidate.RoutingGroup != "" && candidate.RoutingGroup != alias) ||
 				(id != "" && candidate.DeploymentID != id) ||
+				(skipDisabled && candidate.DisableBackgroundHealthCheck) ||
 				candidate.DeploymentID == "" || seen[candidate.DeploymentID] {
 				continue
 			}
@@ -41,11 +86,15 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		}
 		return strings.Compare(a.candidate.DeploymentID, b.candidate.DeploymentID)
 	})
+	return deployments
+}
+
+func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment) []ModelHealthRecord {
 	results := make([]ModelHealthRecord, len(deployments))
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	var workers sync.WaitGroup
-	concurrency := min(8, len(deployments))
+	concurrency := min(s.config.HealthCheckConcurrency, len(deployments))
 	for worker := range concurrency {
 		workers.Add(1)
 		go func() {
@@ -64,20 +113,6 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		}()
 	}
 	workers.Wait()
-	healthy, unhealthy := make([]map[string]any, 0), make([]map[string]any, 0)
-	for i, dep := range deployments {
-		candidate := dep.candidate
-		entry := map[string]any{"model": candidate.ModelID, "model_id": candidate.DeploymentID, "model_name": dep.alias}
-		if admin {
-			entry["api_base"] = candidate.APIBase
-			entry["api_version"] = candidate.APIVersion
-		}
-		if results[i].HealthyCount != 0 {
-			healthy = append(healthy, entry)
-		} else {
-			unhealthy = append(unhealthy, entry)
-		}
-	}
 	if s.config.HealthHistory != nil {
 		saved := make([]ModelHealthRecord, 0, len(results))
 		for _, result := range results {
@@ -89,15 +124,40 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		defer cancelStore()
 		s.config.HealthHistory.Record(storeCtx, saved)
 	}
-	status := http.StatusOK
-	if (model != "" || id != "") && len(healthy) == 0 {
-		status = http.StatusServiceUnavailable
+	return results
+}
+
+func (s *Server) RunBackgroundHealthChecks(ctx context.Context) {
+	interval := s.config.BackgroundHealthInterval
+	if interval <= 0 {
+		return
 	}
-	if !admin {
-		w.Header().Set("Litellm-Health-Field-Notice", "api_base and api_version are admin-only on this endpoint")
+	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/health", nil)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for ctx.Err() == nil {
+		s.mu.RLock()
+		generation := s.configGeneration
+		s.mu.RUnlock()
+		deployments := s.healthDeployments("", "", nil, true)
+		results := s.runHealthChecks(request, deployments)
+		cache := make(map[string]ModelHealthRecord, len(results))
+		for _, entry := range results {
+			if entry.ID != "" {
+				cache[entry.ModelID] = entry
+			}
+		}
+		s.mu.Lock()
+		if s.configGeneration == generation {
+			s.healthResults = cache
+		}
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
-	writeJSON(w, status, map[string]any{"healthy_endpoints": healthy, "unhealthy_endpoints": unhealthy,
-		"healthy_count": len(healthy), "unhealthy_count": len(unhealthy)})
 }
 
 func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) bool {

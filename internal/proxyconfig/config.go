@@ -28,6 +28,10 @@ type configFile struct {
 		StoreModels bool `yaml:"store_model_in_db"`
 		DisableSpendLogs bool `yaml:"disable_spend_logs"`
 		PublicReadinessDetails bool `yaml:"allow_public_health_readiness_details"`
+		BackgroundHealthChecks bool `yaml:"background_health_checks"`
+		HealthCheckInterval int `yaml:"health_check_interval"`
+		HealthCheckConcurrency int `yaml:"health_check_concurrency"`
+		SkipDisabledHealthChecks bool `yaml:"health_check_skip_disabled_background_models"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
@@ -77,6 +81,7 @@ type deployment struct {
 		ID        string   `yaml:"id" json:"id,omitempty"`
 		Endpoints []string `yaml:"supported_endpoints" json:"supported_endpoints,omitempty"`
 		Mode      string   `yaml:"mode" json:"mode,omitempty"`
+		DisableBackgroundHealthCheck bool `yaml:"disable_background_health_check" json:"disable_background_health_check,omitempty"`
 	} `yaml:"model_info" json:"model_info"`
 }
 
@@ -98,6 +103,9 @@ type Config struct {
 	DatabaseURL string
 	DisableSpendLogs bool
 	PublicReadinessDetails bool
+	BackgroundHealthInterval time.Duration
+	HealthCheckConcurrency int
+	SkipDisabledHealthChecks bool
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -168,6 +176,19 @@ func Load(reader io.Reader) (Config, error) {
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
+	if file.General.HealthCheckInterval < 0 || file.General.HealthCheckInterval > 86400 || file.General.HealthCheckConcurrency < 0 ||
+		file.General.HealthCheckConcurrency > 1024 {
+		return Config{}, errors.New("invalid health check interval or concurrency")
+	}
+	config.HealthCheckConcurrency = file.General.HealthCheckConcurrency
+	config.SkipDisabledHealthChecks = file.General.SkipDisabledHealthChecks
+	if file.General.BackgroundHealthChecks {
+		interval := file.General.HealthCheckInterval
+		if interval == 0 {
+			interval = 300
+		}
+		config.BackgroundHealthInterval = time.Duration(interval) * time.Second
+	}
 	for _, credential := range file.Credentials {
 		if err := credential.validate(); err != nil {
 			return Config{}, err
@@ -591,6 +612,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
+		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		TokenPrice: price, UsagePrice: usagePrice, Vertex: vertex, AzureADToken: azureADToken}, nil
 }
 
