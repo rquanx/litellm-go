@@ -25,6 +25,7 @@ type virtualKey struct {
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
+	RotationTarget string     `json:"rotation_target,omitempty"`
 }
 
 type accessState struct {
@@ -86,6 +87,12 @@ func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {
 	key, exists := registry.state.Keys[keyDigest(token)]
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
 		return nil, false
+	}
+	if key.RotationTarget != "" {
+		key, exists = registry.state.Keys[key.RotationTarget]
+		if !exists || key.Blocked || key.RotationTarget != "" || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
+			return nil, false
+		}
 	}
 	scope := unrestrictedScope(key.Models)
 	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
@@ -153,6 +160,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /key/info", registry.info)
 	mux.HandleFunc("POST /key/delete", registry.remove)
 	mux.HandleFunc("POST /key/update", registry.updateKey)
+	mux.HandleFunc("POST /key/regenerate", registry.regenerateKey)
 	mux.HandleFunc("POST /key/block", func(w http.ResponseWriter, r *http.Request) {
 		registry.setKeyBlocked(w, r, true)
 	})
@@ -253,6 +261,13 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 		if _, exists := next.Keys[digest]; exists {
 			delete(next.Keys, digest)
 			removed++
+		}
+	}
+	if removed > 0 {
+		for digest, key := range next.Keys {
+			if _, exists := next.Keys[key.RotationTarget]; key.RotationTarget != "" && !exists {
+				delete(next.Keys, digest)
+			}
 		}
 	}
 	if registry.apply(w, next) {

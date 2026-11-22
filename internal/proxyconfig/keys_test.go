@@ -88,8 +88,18 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	if !strings.Contains(keys, digest) || !strings.Contains(keys, "Fixture") || strings.Contains(keys, generated.Key) || strings.Contains(keys, "expires") {
 		t.Fatalf("unexpected key list: %s", keys)
 	}
-	send(handler, "POST", "/key/delete", master, `{"keys":["`+digest+`"]}`, 200)
-	send(buildHandler(), "GET", "/v1/models", generated.Key, "", 401)
+	const rotated = "sk-rotated-fixture-key"
+	send(handler, "POST", "/key/regenerate", master, `{"key":"`+digest+`","new_key":"`+rotated+`","grace_period":"1h"}`, 200)
+	handler = buildHandler()
+	send(handler, "GET", "/v1/models", generated.Key, "", 200)
+	send(handler, "GET", "/v1/models", rotated, "", 200)
+	send(handler, "POST", "/key/block", master, `{"key":"`+rotated+`"}`, 200)
+	send(handler, "GET", "/v1/models", generated.Key, "", 401)
+	send(handler, "POST", "/key/unblock", master, `{"key":"`+rotated+`"}`, 200)
+	send(handler, "POST", "/key/delete", master, `{"keys":["`+keyDigest(rotated)+`"]}`, 200)
+	handler = buildHandler()
+	send(handler, "GET", "/v1/models", generated.Key, "", 401)
+	send(handler, "GET", "/v1/models", rotated, "", 401)
 }
 
 func TestKeyExpiryCalendarUnits(t *testing.T) {

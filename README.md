@@ -46,6 +46,8 @@ Standalone mode supports dynamic deployments through `/model/info`, `/model/new`
 
 The master key can issue, inspect and revoke model-scoped virtual keys through `/key/generate`, `/key/info` and `/key/delete`. It can also list keys, change their scopes and validity, or temporarily block them through `/key/list`, `/key/update`, `/key/block` and `/key/unblock`. Use `--key-state PATH` to persist hashed virtual keys, teams and access settings. Use distinct paths for the model and key state files.
 
+`/key/regenerate` rotates a virtual key. A `grace_period` keeps the old key valid for a bounded interval. During that interval the old key follows the replacement key's scopes and block status.
+
 The master key can also create teams at `/team/new` and bind new virtual keys with `team_id`. Bound keys use the intersection of their own model list and the team's list. A key with `models: ["all-team-models"]` follows the team's model list. Changes made through `/team/update`, `/team/block` and `/team/unblock` apply to subsequent requests. `/team/delete` revokes the team's keys, including when another team is later created with the same ID.
 
 Use `/organization/new` to create an organization, then assign its `organization_id` to a team or virtual key. The organization's model list further restricts the models that a key can use. Use `/organization/info`, `/organization/list` and `/organization/update` to view and modify organizations. Deleting an organization also removes its teams and revokes their keys and any keys directly bound to the organization.

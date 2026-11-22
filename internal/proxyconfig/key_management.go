@@ -120,7 +120,7 @@ func (registry *KeyRegistry) updateKey(w http.ResponseWriter, r *http.Request) {
 	defer registry.mu.Unlock()
 	digest := registry.resolveKey(input.Key)
 	key, exists := registry.state.Keys[digest]
-	if !exists {
+	if !exists || key.RotationTarget != "" {
 		modelError(w, http.StatusNotFound, "Virtual key not found")
 		return
 	}
