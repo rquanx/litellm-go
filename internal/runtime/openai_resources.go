@@ -216,10 +216,10 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		return
 	}
 	query := upstream.URL.Query()
-	for _, key := range []string{"after", "limit", "order", "purpose"} {
+	for _, key := range []string{"after", "before", "limit", "order", "purpose", "filter"} {
 		for _, value := range request.URL.Query()[key] {
-			if key == "after" && strings.HasPrefix(value, "minato_") {
-				id, ok := decodeResourceID(value, family)
+			if (key == "after" || key == "before") && strings.HasPrefix(value, "minato_") {
+				id, ok := decodeResourceID(value, resourceResultKind(family))
 				if !ok || id.Deployment != candidate.DeploymentID {
 					writeError(writer, http.StatusBadRequest, "invalid_cursor", "Resource cursor belongs to a different deployment")
 					return
@@ -256,7 +256,8 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		return
 	}
 	defer response.Body.Close()
-	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.HasSuffix(path, "/content") {
+	if response.StatusCode >= 200 && response.StatusCode < 300 && family == "files" &&
+		strings.HasPrefix(path, "/v1/files/") && strings.HasSuffix(path, "/content") {
 		writer.Header().Set("Content-Type", response.Header.Get("Content-Type"))
 		writer.WriteHeader(response.StatusCode)
 		_, _ = io.Copy(writer, response.Body)
@@ -267,7 +268,7 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusBadGateway, "upstream_error", "Could not read upstream resource")
 		return
 	}
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
+	if response.StatusCode >= 200 && response.StatusCode < 300 && family != "" {
 		body = wrapOpenAIResource(body, family, candidate.DeploymentID)
 	}
 	writeRawResponse(writer, response.StatusCode, response.Header, body)
@@ -279,8 +280,8 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 		return body
 	}
 	wrap := func(entry map[string]any) {
-		if id, ok := entry["id"].(string); ok && id != "" {
-			entry["id"] = encodeResourceID(family, deployment, id)
+		if id, ok := entry["id"].(string); ok && id != "" && family != "vector_stores_search" {
+			entry["id"] = encodeResourceID(resourceResultKind(family), deployment, id)
 		}
 		if family == "batches" {
 			for _, field := range []string{"input_file_id", "output_file_id", "error_file_id"} {
@@ -289,11 +290,18 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 				}
 			}
 		}
+		if strings.HasPrefix(family, "vector_stores") {
+			for field, kind := range map[string]string{"vector_store_id": "vector_stores", "file_id": "files"} {
+				if id, ok := entry[field].(string); ok && id != "" {
+					entry[field] = encodeResourceID(kind, deployment, id)
+				}
+			}
+		}
 	}
 	wrap(response)
 	for _, field := range []string{"first_id", "last_id"} {
 		if id, ok := response[field].(string); ok && id != "" {
-			response[field] = encodeResourceID(family, deployment, id)
+			response[field] = encodeResourceID(resourceResultKind(family), deployment, id)
 		}
 	}
 	if entries, ok := response["data"].([]any); ok {
@@ -305,4 +313,11 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 	}
 	encoded, _ := json.Marshal(response)
 	return encoded
+}
+
+func resourceResultKind(family string) string {
+	if family == "vector_stores_files" {
+		return "files"
+	}
+	return family
 }

@@ -1,0 +1,182 @@
+package runtime
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strings"
+)
+
+const vectorStorePath = "/v1/vector_stores"
+
+func isVectorStorePath(path string) bool {
+	return path == vectorStorePath || strings.HasPrefix(path, vectorStorePath+"/")
+}
+
+func nativeResourceID(id, family string, deployment *string) (string, error) {
+	if strings.HasPrefix(id, "minato_") {
+		resource, ok := decodeResourceID(id, family)
+		if !ok || (*deployment != "" && *deployment != resource.Deployment) {
+			return "", errors.New("invalid or mismatched resource ID")
+		}
+		*deployment = resource.Deployment
+		id = resource.Original
+	}
+	if !validResourceSegment(id) {
+		return "", errors.New("invalid resource ID")
+	}
+	return id, nil
+}
+
+func vectorStoreOperation(path, method string, deployment *string) (string, string, error) {
+	const stores = "vector_stores"
+	if path == vectorStorePath && (method == http.MethodGet || method == http.MethodPost) {
+		return path, stores, nil
+	}
+	parts := strings.Split(strings.TrimPrefix(path, vectorStorePath+"/"), "/")
+	id, err := url.PathUnescape(parts[0])
+	if err == nil {
+		id, err = nativeResourceID(id, stores, deployment)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	target := vectorStorePath + "/" + url.PathEscape(id)
+	switch {
+	case len(parts) == 1 && (method == http.MethodGet || method == http.MethodPost || method == http.MethodDelete):
+		return target, stores, nil
+	case len(parts) == 2 && parts[1] == "search" && method == http.MethodPost:
+		return target + "/search", "vector_stores_search", nil
+	case len(parts) == 2 && parts[1] == "files" && (method == http.MethodGet || method == http.MethodPost):
+		return target + "/files", "vector_stores_files", nil
+	case len(parts) >= 3 && len(parts) <= 4 && parts[1] == "files":
+		fileID, err := url.PathUnescape(parts[2])
+		if err == nil {
+			fileID, err = nativeResourceID(fileID, "files", deployment)
+		}
+		if err != nil {
+			return "", "", err
+		}
+		target += "/files/" + url.PathEscape(fileID)
+		if len(parts) == 3 && (method == http.MethodGet || method == http.MethodPost || method == http.MethodDelete) {
+			return target, "vector_stores_files", nil
+		}
+		if len(parts) == 4 && parts[3] == "content" && method == http.MethodGet {
+			return target + "/content", "vector_stores_files", nil
+		}
+	}
+	return "", "", errors.New("unknown vector store operation")
+}
+
+func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Request, scope []string) {
+	var deployment string
+	path, family, err := vectorStoreOperation(request.URL.EscapedPath(), request.Method, &deployment)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "resource_not_found", "Unknown vector store operation or resource ID")
+		return
+	}
+	query := request.URL.Query()
+	cursorFamily := resourceResultKind(family)
+	for _, name := range []string{"after", "before"} {
+		for _, id := range query[name] {
+			if _, err := nativeResourceID(id, cursorFamily, &deployment); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_cursor", "Invalid or mismatched vector store cursor")
+				return
+			}
+		}
+	}
+	alias := query.Get("model")
+	if alias == "" {
+		alias = query.Get("target_model_names")
+	}
+	var body []byte
+	contentType := ""
+	if request.Method == http.MethodPost {
+		incoming, err := readBody(request, s.config.MaxBodyBytes)
+		if err != nil {
+			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large")
+			return
+		}
+		payload, err := decodeJSONPayload(incoming)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Expected a vector store JSON request")
+			return
+		}
+		bodyAlias, err := vectorStoreModel(payload.fields)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if bodyAlias != "" {
+			if alias != "" && bodyAlias != alias {
+				writeError(w, http.StatusBadRequest, "invalid_request", "Conflicting vector store model selectors")
+				return
+			}
+			alias = bodyAlias
+		}
+		if err := rewriteVectorStoreFiles(payload.fields, &deployment); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		body, _ = json.Marshal(payload.fields)
+		contentType = "application/json"
+	}
+	candidate, ok := s.resourceCandidate(alias, deployment, scope)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "model_required", "Select one configured vector store deployment")
+		return
+	}
+	s.forwardOpenAIResource(w, request, candidate, family, path, contentType, body)
+}
+
+func vectorStoreModel(fields map[string]any) (string, error) {
+	model, _ := fields["model"].(string)
+	delete(fields, "model")
+	if target, ok := fields["target_model_names"]; ok && target != nil {
+		var targetModel string
+		switch value := target.(type) {
+		case string:
+			targetModel = strings.TrimSpace(value)
+		case []any:
+			if len(value) == 1 {
+				targetModel, _ = value[0].(string)
+			}
+		}
+		if targetModel == "" || strings.Contains(targetModel, ",") {
+			return "", errors.New("select one target model for the vector store")
+		}
+		if model != "" && model != targetModel {
+			return "", errors.New("conflicting vector store model selectors")
+		}
+		model = targetModel
+	}
+	delete(fields, "target_model_names")
+	return model, nil
+}
+
+func rewriteVectorStoreFiles(fields map[string]any, deployment *string) error {
+	if value, present := fields["file_id"]; present && value != nil {
+		id, _ := value.(string)
+		resolved, err := nativeResourceID(id, "files", deployment)
+		if err != nil {
+			return err
+		}
+		fields["file_id"] = resolved
+	}
+	if value, present := fields["file_ids"]; present && value != nil {
+		files, ok := value.([]any)
+		if !ok {
+			return errors.New("file_ids must be an array")
+		}
+		for index, value := range files {
+			id, _ := value.(string)
+			resolved, err := nativeResourceID(id, "files", deployment)
+			if err != nil {
+				return err
+			}
+			files[index] = resolved
+		}
+	}
+	return nil
+}

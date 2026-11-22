@@ -113,6 +113,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.responseResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && isVectorStorePath(request.URL.Path) {
+		s.vectorStoreResource(writer, request, modelScope)
+		return
+	}
 	if s.config.AuthorizeInference && resourceFamily(request.URL.Path) != "" {
 		s.openAIResource(writer, request, modelScope)
 		return
