@@ -98,10 +98,14 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		NativeCacheCreation int `json:"cache_creation_input_tokens"`
 	}
 	var payload struct {
+		Type string `json:"type"`
 		Usage usage `json:"usage"`
 		Response struct {
 			Usage usage `json:"usage"`
 		} `json:"response"`
+		Message struct {
+			Usage usage `json:"usage"`
+		} `json:"message"`
 	}
 	if json.Unmarshal(data, &payload) != nil {
 		return
@@ -109,14 +113,20 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	if payload.Response.Usage != (usage{}) {
 		payload.Usage = payload.Response.Usage
 	}
+	if payload.Type == "message_start" && payload.Message.Usage != (usage{}) {
+		payload.Usage = payload.Message.Usage
+	}
 	if payload.Usage != (usage{}) {
-		recorder.event.Prompt = max(0, payload.Usage.Prompt, payload.Usage.Input +
-			max(0, payload.Usage.NativeCacheRead) + max(0, payload.Usage.NativeCacheCreation))
+		if payload.Type != "message_delta" || payload.Usage.Input > 0 || payload.Usage.NativeCacheRead > 0 ||
+			payload.Usage.NativeCacheCreation > 0 {
+			recorder.event.Prompt = max(0, payload.Usage.Prompt, payload.Usage.Input +
+				max(0, payload.Usage.NativeCacheRead) + max(0, payload.Usage.NativeCacheCreation))
+			recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached, payload.Usage.NativeCacheRead))
+			recorder.cacheCreationTokens = min(recorder.event.Prompt-recorder.cachedTokens, max(0,
+				payload.Usage.PromptDetails.Creation, payload.Usage.InputDetails.Creation, payload.Usage.NativeCacheCreation))
+		}
 		recorder.event.Completion = max(payload.Usage.Completion, payload.Usage.Output)
 		recorder.event.Total = max(payload.Usage.Total, recorder.event.Prompt+recorder.event.Completion)
-		recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached, payload.Usage.NativeCacheRead))
-		recorder.cacheCreationTokens = min(recorder.event.Prompt-recorder.cachedTokens, max(0,
-			payload.Usage.PromptDetails.Creation, payload.Usage.InputDetails.Creation, payload.Usage.NativeCacheCreation))
 	}
 	if recorder.capture && len(data) <= maxCallbackMessageBytes &&
 		(!recorder.event.Stream || recorder.status >= 400 || bytes.Contains(data, []byte("response.completed"))) {

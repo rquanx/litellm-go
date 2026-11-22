@@ -642,6 +642,15 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 					return baseConvert(frame)
 				}
 			}
+			if recorder, ok := writer.(*callbackResponse); ok && candidate.Endpoint == "anthropic-messages" && endpoint != candidate.Endpoint {
+				baseConvert := convert
+				convert = func(frame []byte) []byte {
+					if raw := streamErrorBody(frame); len(raw) != 0 {
+						recorder.recordJSON(raw)
+					}
+					return baseConvert(frame)
+				}
+			}
 			if len(firstFrame) > 0 && !writeStreamFrame(writer, flush, convert(firstFrame)) {
 				return
 			}

@@ -26,3 +26,13 @@ func TestCallbackPricesNativeCacheCreation(t *testing.T) {
 		t.Fatalf("unexpected callback spend and usage: %+v", recorder.event)
 	}
 }
+
+func TestAnthropicStreamPreservesInputAccountingAcrossDeltas(t *testing.T) {
+	recorder := &callbackResponse{ResponseWriter: httptest.NewRecorder(), event: InferenceEvent{Stream: true}}
+	recorder.recordJSON([]byte(`{"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":10,"cache_creation_input_tokens":5,"output_tokens":1}}}`))
+	recorder.recordJSON([]byte(`{"type":"message_delta","usage":{"output_tokens":3}}`))
+	if recorder.event.Prompt != 20 || recorder.event.Completion != 3 || recorder.event.Total != 23 ||
+		recorder.cachedTokens != 10 || recorder.cacheCreationTokens != 5 {
+		t.Fatalf("unexpected stream accounting: %+v", recorder.event)
+	}
+}
