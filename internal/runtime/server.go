@@ -34,6 +34,7 @@ type Config struct {
 	AuthorizeKey       func(string) ([]string, bool)
 	AuthorizeSearch    func(string) ([]string, bool)
 	AuthorizeMCP       func(string) (MCPAccess, bool)
+	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
@@ -66,6 +67,7 @@ type Server struct {
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
 	mcpServers []MCPServer
+	mcpToolsets []MCPToolset
 	mcpSSESessions map[string]*clientMCPSession
 	passThrough []PassThroughRoute
 	searchFallbacks map[string][]string

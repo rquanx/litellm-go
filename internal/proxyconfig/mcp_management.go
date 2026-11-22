@@ -174,7 +174,8 @@ func (registry *modelRegistry) writeMCPServer(w http.ResponseWriter, r *http.Req
 	}
 	if registry.store != nil {
 		if err := registry.store.save(modelState{Models: registry.models, Credentials: registry.credentials,
-			Router: registry.router, SearchTools: registry.searchTools, PassThrough: registry.passThrough, MCPServers: next}); err != nil {
+			Router: registry.router, SearchTools: registry.searchTools, PassThrough: registry.passThrough,
+			MCPServers: next, MCPToolsets: registry.mcpToolsets}); err != nil {
 			stateWriteError(w, err)
 			return
 		}

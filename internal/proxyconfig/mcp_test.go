@@ -173,7 +173,7 @@ mcp_servers:
 	}}
 	registry.state.Keys[keyDigest("fixture-key")] = virtualKey{TeamID: "fixture-team"}
 	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "fixture-master", MCPServers: cfg.MCPServers,
-		AuthorizeMCP: registry.AuthorizeMCP})
+		AuthorizeMCP: registry.AuthorizeMCP, AuthorizeMCPToolset: registry.AuthorizeMCPToolset})
 	call := func(method, p, key, body string, status int) string {
 		t.Helper()
 		request := httptest.NewRequest(method, p, strings.NewReader(body))
@@ -223,6 +223,24 @@ mcp_servers:
 	handler, err := WithModelManagement(server, cfg, "fixture-master", "")
 	if err != nil {
 		t.Fatal(err)
+	}
+	setRequest := httptest.NewRequest(http.MethodPost, mcpToolsetPath, strings.NewReader(`{"toolset_name":"collection","tools":[{"server_id":"fixture","tool_name":"echo"}]}`))
+	setRequest.Header.Set("Authorization", "Bearer fixture-master")
+	setResponse := httptest.NewRecorder()
+	handler.ServeHTTP(setResponse, setRequest)
+	var toolset runtime.MCPToolset
+	if setResponse.Code != 201 || json.Unmarshal(setResponse.Body.Bytes(), &toolset) != nil || toolset.ID == "" {
+		t.Fatalf("could not create toolset: %d %s", setResponse.Code, setResponse.Body.String())
+	}
+	const setPath = "/toolset/collection/mcp"
+	const listSet = `{"jsonrpc":"2.0","id":8,"method":"tools/list"}`
+	call(http.MethodPost, setPath, "fixture-key", listSet, 404)
+	registry.state.Keys[keyDigest("fixture-key")] = virtualKey{ObjectPermission: &objectPermission{MCPToolsets: []string{toolset.ID}}}
+	if got := call(http.MethodPost, setPath, "fixture-key", listSet, 200); !strings.Contains(got, "fixture-echo") {
+		t.Fatalf("toolset grant did not expose the selected tool: %s", got)
+	}
+	if got := call(http.MethodPost, setPath, "fixture-key", `{"jsonrpc":"2.0","id":9,"method":"prompts/list"}`, 200); !strings.Contains(got, "-32601") {
+		t.Fatalf("toolset permitted prompt enumeration: %s", got)
 	}
 	for _, p := range []string{"/mcp-rest/test/connection", "/mcp-rest/test/tools/list"} {
 		request := httptest.NewRequest(http.MethodPost, p, strings.NewReader(`{"url":"`+upstream.URL+`","transport":"http","static_headers":{"Authorization":"Bearer mcp-fixture"}}`))

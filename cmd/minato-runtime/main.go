@@ -151,6 +151,7 @@ func main() {
 		config.AuthorizeKey = keys.Authorize
 		config.AuthorizeSearch = keys.AuthorizeSearch
 		config.AuthorizeMCP = keys.AuthorizeMCP
+		config.AuthorizeMCPToolset = keys.AuthorizeMCPToolset
 	}
 	if *keyStatePath != "" && keys == nil {
 		log.Fatal("virtual key state requires standalone config and a master key")

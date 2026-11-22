@@ -112,6 +112,24 @@ type objectPermission struct {
 	MCPServers []string `json:"mcp_servers"`
 	MCPTools map[string][]string `json:"mcp_tool_permissions,omitempty"`
 	MCPAccessGroups []string `json:"mcp_access_groups,omitempty"`
+	MCPToolsets []string `json:"mcp_toolsets,omitempty"`
+}
+
+func (registry *KeyRegistry) AuthorizeMCPToolset(token string) ([]string, runtime.MCPAccess, bool) {
+	_, permissions, valid := registry.authorize(token)
+	if !valid {
+		return nil, nil, false
+	}
+	var key, team []string
+	if permissions.key != nil && len(permissions.key.MCPToolsets) != 0 {
+		key = permissions.key.MCPToolsets
+	}
+	if permissions.team != nil && len(permissions.team.MCPToolsets) != 0 {
+		team = permissions.team.MCPToolsets
+	}
+	return intersectScopes(key, team), func(server runtime.MCPServer, tool string) bool {
+		return permissions.key.allowsMCPTool(server, tool) && permissions.team.allowsMCPTool(server, tool)
+	}, true
 }
 
 func (permission *objectPermission) hasMCPGrants() bool {

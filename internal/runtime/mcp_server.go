@@ -19,6 +19,10 @@ func (s *Server) serveMCPEndpoint(w http.ResponseWriter, r *http.Request) bool {
 		s.serveMCP(w, r)
 		return true
 	}
+	if name, ok := strings.CutPrefix(path, "/toolset/"); ok && strings.HasSuffix(name, "/mcp") {
+		s.serveMCPForToolset(w, r, strings.TrimSuffix(name, "/mcp"))
+		return true
+	}
 	name, ok := strings.CutSuffix(strings.TrimPrefix(path, "/"), "/mcp")
 	if !ok || name == "" || strings.Contains(name, "/") {
 		return false
@@ -48,6 +52,10 @@ func (s *Server) serveMCPForServer(w http.ResponseWriter, r *http.Request, serve
 			return server.ID == serverID && original(server, name)
 		}
 	}
+	s.dispatchMCP(w, r, access, false)
+}
+
+func (s *Server) dispatchMCP(w http.ResponseWriter, r *http.Request, access MCPAccess, toolsOnly bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", "POST")
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -80,12 +88,21 @@ func (s *Server) serveMCPForServer(w http.ResponseWriter, r *http.Request, serve
 		default:
 			params.ProtocolVersion = "2025-03-26"
 		}
+		capabilities := map[string]any{"tools": map[string]any{}}
+		if !toolsOnly {
+			capabilities["prompts"] = map[string]any{}
+			capabilities["resources"] = map[string]any{}
+		}
 		writeMCPResult(w, req.ID, map[string]any{"protocolVersion": params.ProtocolVersion,
-			"capabilities": map[string]any{"tools": map[string]any{}, "prompts": map[string]any{}, "resources": map[string]any{}},
+			"capabilities": capabilities,
 			"serverInfo": map[string]string{"name": "minato-runtime", "version": "1"}})
 	case "ping":
 		writeMCPResult(w, req.ID, map[string]any{})
 	case "tools/list", "tools/call", "prompts/list", "prompts/get", "resources/list", "resources/templates/list", "resources/read":
+		if toolsOnly && !strings.HasPrefix(req.Method, "tools/") {
+			writeMCPError(w, http.StatusOK, req.ID, -32601, "Method not found")
+			return
+		}
 		select {
 		case s.sem <- struct{}{}:
 			defer func() { <-s.sem }()

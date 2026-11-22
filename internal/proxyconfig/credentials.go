@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 type providerCredential struct {
@@ -23,6 +25,7 @@ type modelState struct {
 	SearchTools []managedSearchTool           `json:"search_tools,omitempty"`
 	PassThrough []passThroughConfig          `json:"pass_through_endpoints,omitempty"`
 	MCPServers map[string]mcpServerConfig     `json:"mcp_servers,omitempty"`
+	MCPToolsets []runtime.MCPToolset          `json:"mcp_toolsets,omitempty"`
 }
 
 func (state *modelState) UnmarshalJSON(payload []byte) error {
