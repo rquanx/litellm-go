@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,45 @@ import (
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestPostgresImportsLiteLLMSearchTools(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TEMP TABLE "LiteLLM_SearchToolsTable" (
+		search_tool_id TEXT, search_tool_name TEXT, litellm_params JSONB, search_tool_info JSONB,
+		created_at TIMESTAMP, updated_at TIMESTAMP
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	params := `{"search_provider":"perplexity","api_key":"fixture-imported-search-secret"}`
+	if _, err := db.Exec(`INSERT INTO "LiteLLM_SearchToolsTable" VALUES
+		('fixture-id', 'imported-search', to_jsonb($1::text), '{"description":"fixture"}'::jsonb, now(), now())`, params); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{MasterKey: "fixture-master"}
+	if count, err := ImportLiteLLMSearchTools(db, cfg); err != nil || count != 1 {
+		t.Fatalf("import count %d: %v", count, err)
+	}
+	var state modelState
+	if err := postgresModels(db, cfg.MasterKey).load(&state); err != nil || len(state.SearchTools) != 1 ||
+		state.SearchTools[0].ID != "fixture-id" || state.SearchTools[0].Params.APIKey != "fixture-imported-search-secret" {
+		t.Fatalf("search tool state did not round-trip: %v", err)
+	}
+	if _, err := ImportLiteLLMSearchTools(db, cfg); err == nil {
+		t.Fatal("import must not overwrite existing search tools")
+	}
+}
 
 func TestSearchUsesEffectiveKeyAndTeamPermissions(t *testing.T) {
 	var calls atomic.Int32

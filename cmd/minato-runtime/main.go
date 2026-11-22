@@ -22,6 +22,7 @@ func main() {
 	importModels := flag.Bool("import-litellm-models", false, "Copy LiteLLM models into empty Go proxy PostgreSQL state and exit")
 	importKeys := flag.Bool("import-litellm-keys", false, "Copy supported LiteLLM key digests into empty Go proxy state and exit")
 	importAccess := flag.Bool("import-litellm-access", false, "Import supported LiteLLM access records and keys into empty Go PostgreSQL state")
+	importSearch := flag.Bool("import-litellm-search-tools", false, "Import LiteLLM search tools into Go PostgreSQL state")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -74,12 +75,26 @@ func main() {
 		}
 		defer stateDB.Close()
 	}
-	if *importModels || *importKeys || *importAccess {
+	importCount := 0
+	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch} {
+		if requested {
+			importCount++
+		}
+	}
+	if importCount != 0 {
 		if stateDB == nil {
 			log.Fatal("LiteLLM import requires general_settings.database_url")
 		}
-		if (*importModels && (*importKeys || *importAccess)) || (*importKeys && *importAccess) {
+		if importCount != 1 {
 			log.Fatal("Select one LiteLLM import command")
+		}
+		if *importSearch {
+			count, err := proxyconfig.ImportLiteLLMSearchTools(stateDB, proxy)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM search tools", count)
+			return
 		}
 		if *importAccess {
 			count, err := proxyconfig.ImportLiteLLMAccess(stateDB)
