@@ -68,7 +68,7 @@ func readMultipart(body []byte, boundary string) (requestPayload, error) {
 		}
 		if part.FileName() == "" {
 			switch name {
-			case "model":
+			case "model", "target_model_names", "custom_llm_provider", "target_storage":
 				if _, present := payload.fields[name]; present {
 					return requestPayload{}, errors.New("duplicate model field")
 				}
@@ -83,10 +83,20 @@ func readMultipart(body []byte, boundary string) (requestPayload, error) {
 }
 
 func (payload requestPayload) encodeMultipart(model string, stream bool) ([]byte, string, error) {
+	return payload.encodeForm(model, stream, false)
+}
+
+func (payload requestPayload) encodeForm(model string, stream, resource bool) ([]byte, string, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	hasStream := false
 	for _, part := range payload.form {
+		if resource {
+			switch part.name {
+			case "model", "target_model_names", "custom_llm_provider", "target_storage", "litellm_metadata":
+				continue
+			}
+		}
 		destination, err := writer.CreatePart(part.header)
 		if err != nil {
 			return nil, "", err

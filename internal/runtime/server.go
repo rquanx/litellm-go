@@ -86,6 +86,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.responseResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && resourceFamily(request.URL.Path) != "" {
+		s.openAIResource(writer, request, modelScope)
+		return
+	}
 	if request.Method == http.MethodPost {
 		if geminiEndpoint != "" {
 			s.infer(writer, request, geminiEndpoint, alias, modelScope)

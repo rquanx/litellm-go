@@ -83,6 +83,7 @@ The image is built as a static Go binary and runs as a non-root user. The defaul
 - `POST /v1/audio/speech`, `POST /v1/audio/transcriptions` and `POST /v1/audio/translations`
 - `POST /v1/messages` and `POST /v1/messages/count_tokens` for Anthropic
 - `POST /v1beta/models/{model}:generateContent` and `POST /v1beta/models/{model}:streamGenerateContent` for Gemini
+- Standalone `/v1/files` and `/v1/batches` for OpenAI and Azure deployments. Set `target_model_names` to one alias when uploading to a proxy with multiple eligible deployments. The Go proxy preserves deployment affinity for batch input and output files using its own resource ID format.
 - `PUT /internal/v1/routes/{alias}`
 - `DELETE /internal/v1/routes/{alias}`
 

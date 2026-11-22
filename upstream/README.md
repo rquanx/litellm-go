@@ -10,6 +10,7 @@ The Go port follows the public Python implementation in LiteLLM. The initial ref
 | `litellm/proxy/`, `litellm/proxy_auth/` | Static YAML, model CRUD, key generation and revocation with model scopes, and optional local state | Database-backed entities, richer authorization and configuration, plus remaining management APIs |
 | `litellm/llms/anthropic/`, `litellm/llms/gemini/`, `litellm/llms/azure/` | Native generation, Anthropic token counting, a Chat and Responses bridge for Anthropic, and Azure OpenAI key authentication | Provider-specific payloads, authorization and event parity across the remaining operations |
 | `litellm/responses/utils.py`, `litellm/proxy/response_api_endpoints/` | Deployment-tagged native Responses IDs, retrieval, deletion, input items, cancellation and affinity for follow-ups | Provider-specific resource handlers and state wrapping for other endpoints |
+| `litellm/proxy/openai_files_endpoints/`, `litellm/proxy/batches_endpoints/` | OpenAI and Azure file upload, listing, metadata, content and deletion, plus batch creation, listing, retrieval and cancellation. This uses Go resource IDs. | LiteLLM-managed file identifiers, multi-deployment storage and other batch providers |
 | `litellm/constants.py` | Generated list of OpenAI-compatible provider names for explicit base URLs and bearer credentials | Provider defaults and specialized adapters |
 | Other Python provider and feature modules under `litellm/` | Inventory and port by module | Stateful APIs, remaining API families, callbacks and provider modules |
 
