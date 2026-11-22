@@ -47,6 +47,8 @@ func main() {
 		config.RoutingStrategy = proxy.RoutingStrategy
 		config.LatencyBuffer = proxy.LatencyBuffer
 		config.LatencySamples = proxy.LatencySamples
+		config.AllowedFails = proxy.AllowedFails
+		config.Cooldown = proxy.Cooldown
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}

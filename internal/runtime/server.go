@@ -36,6 +36,8 @@ type Config struct {
 	LatencySamples     int
 	Callback           func(InferenceEvent)
 	LogMessages        bool
+	Cooldown           time.Duration
+	AllowedFails       int
 }
 
 type Server struct {
@@ -49,6 +51,7 @@ type Server struct {
 	deploymentLatency map[latencyKey]*latencyWindow
 	capacityMinute    int64
 	deploymentCapacity map[string]capacityUsage
+	deploymentCooldown map[string]cooldownWindow
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -397,7 +400,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
-		reservation, admitted := s.reserveCapacity(candidate, payload)
+		reservation, admitted := s.admitDeployment(candidate, payload)
 		var status int
 		var responseBody []byte
 		var responseHeaders http.Header
@@ -405,6 +408,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		var callErr error
 		if admitted {
 			status, responseBody, responseHeaders, retryable, callErr = s.callJSON(request.Context(), request, endpoint, candidate, payload)
+			s.recordCooldown(candidate, status, retryable, responseHeaders)
 			if reservation != nil && status >= 200 && status < 300 {
 				s.settleCapacity(reservation, usageFromJSON(responseBody))
 			}
@@ -462,7 +466,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 	for {
 		candidate := route.Candidates[plan.index]
 		started := time.Now()
-		reservation, admitted := s.reserveCapacity(candidate, payload)
+		reservation, admitted := s.admitDeployment(candidate, payload)
 		var status int
 		var response *http.Response
 		var retryable bool
@@ -504,6 +508,13 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			} else {
 				retryable = (!admitted && plan.index+1 < len(route.Candidates)) || (admitted && retryableResponse(status, body))
 			}
+		}
+		if admitted {
+			var headers http.Header
+			if response != nil {
+				headers = response.Header
+			}
+			s.recordCooldown(candidate, status, retryable, headers)
 		}
 		attempt := map[string]any{"id": newUUID(), "sourceId": candidate.SourceID, "modelId": candidate.ModelID,
 			"status": status, "durationMs": time.Since(started).Milliseconds(), "retryable": retryable}

@@ -39,6 +39,9 @@ type configFile struct {
 		} `yaml:"routing_strategy_args"`
 		Timeout   int                  `yaml:"timeout"`
 		Retries   int                  `yaml:"num_retries"`
+		AllowedFails *int `yaml:"allowed_fails"`
+		CooldownTime *float64 `yaml:"cooldown_time"`
+		DisableCooldowns bool `yaml:"disable_cooldowns"`
 	} `yaml:"router_settings"`
 }
 
@@ -76,6 +79,8 @@ type Config struct {
 	RoutingStrategy string
 	LatencyBuffer float64
 	LatencySamples int
+	AllowedFails int
+	Cooldown time.Duration
 	DatabaseURL string
 	DisableSpendLogs bool
 	models    []deployment
@@ -114,11 +119,26 @@ func Load(reader io.Reader) (Config, error) {
 	if args.Buffer < 0 || math.IsNaN(args.Buffer) || math.IsInf(args.Buffer, 0) || args.Samples < 0 || args.Samples > 1000 {
 		return Config{}, errors.New("invalid latency routing settings")
 	}
+	allowedFails := 0
+	if file.Router.AllowedFails != nil {
+		allowedFails = *file.Router.AllowedFails
+	}
+	cooldownSeconds := 60.0
+	if file.Router.CooldownTime != nil {
+		cooldownSeconds = *file.Router.CooldownTime
+	}
+	if allowedFails < 0 || cooldownSeconds < 0 || cooldownSeconds > 86400 || math.IsNaN(cooldownSeconds) {
+		return Config{}, errors.New("invalid cooldown settings")
+	}
+	if file.Router.DisableCooldowns || (file.Router.AllowedFails == nil && file.Router.CooldownTime == nil) {
+		cooldownSeconds = 0
+	}
 	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
-		DisableSpendLogs: file.General.DisableSpendLogs}
+		DisableSpendLogs: file.General.DisableSpendLogs, AllowedFails: allowedFails,
+		Cooldown: time.Duration(cooldownSeconds * float64(time.Second))}
 	var err error
 	config.Callback, config.LogMessages, err = prepareCallback(file.Callbacks)
 	if err != nil {
