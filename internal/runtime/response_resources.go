@@ -13,6 +13,19 @@ import (
 
 const responseResourcePrefix = "/v1/responses/"
 
+func (route *Route) pinResponseDeployment(provider, deployment string) bool {
+	for _, candidate := range route.Candidates {
+		if candidate.DeploymentID == deployment && candidate.Endpoint == "responses" &&
+			(provider == "" || candidate.Provider == provider) {
+			route.Candidates = []Candidate{candidate}
+			route.ContextFallback = []Candidate{}
+			route.PolicyFallback = []Candidate{}
+			return true
+		}
+	}
+	return false
+}
+
 func wrapResponseID(id string, candidate Candidate) string {
 	managed := "litellm:custom_llm_provider:" + candidate.Provider + ";model_id:" + candidate.DeploymentID + ";response_id:" + id
 	return "resp_" + base64.StdEncoding.EncodeToString([]byte(managed))

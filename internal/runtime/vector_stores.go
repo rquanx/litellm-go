@@ -180,3 +180,26 @@ func rewriteVectorStoreFiles(fields map[string]any, deployment *string) error {
 	}
 	return nil
 }
+
+func rewriteResponseVectorStores(fields map[string]any, deployment *string) error {
+	tools, _ := fields["tools"].([]any)
+	for _, tool := range tools {
+		value, _ := tool.(map[string]any)
+		if value["type"] != "file_search" {
+			continue
+		}
+		stores, _ := value["vector_store_ids"].([]any)
+		for index, store := range stores {
+			id, _ := store.(string)
+			if !strings.HasPrefix(id, "minato_") {
+				continue
+			}
+			original, err := nativeResourceID(id, "vector_stores", deployment)
+			if err != nil {
+				return err
+			}
+			stores[index] = original
+		}
+	}
+	return nil
+}

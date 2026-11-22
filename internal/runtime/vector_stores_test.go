@@ -16,6 +16,17 @@ func TestVectorStoreRequestsKeepFileAndStoreAffinity(t *testing.T) {
 			t.Error("vector store request did not use the provider credential")
 		}
 		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/responses":
+			var payload struct {
+				Tools []struct {
+					Stores []string `json:"vector_store_ids"`
+				} `json:"tools"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || len(payload.Tools) != 1 ||
+				len(payload.Tools[0].Stores) != 1 || payload.Tools[0].Stores[0] != "vs-original" {
+				t.Errorf("unexpected file_search references: %+v, err=%v", payload.Tools, err)
+			}
+			io.WriteString(w, `{"id":"resp-original","object":"response"}`)
 		case "POST /v1/vector_stores":
 			var payload struct {
 				Files []string `json:"file_ids"`
@@ -41,8 +52,8 @@ func TestVectorStoreRequestsKeepFileAndStoreAffinity(t *testing.T) {
 		}
 	}))
 	defer upstream.Close()
-	primary := Candidate{Provider: "openai", DeploymentID: "primary", APIBase: upstream.URL, APIKey: "provider-key"}
-	secondary := Candidate{Provider: "openai", DeploymentID: "secondary", APIBase: "http://example.invalid"}
+	primary := Candidate{Provider: "openai", DeploymentID: "primary", APIBase: upstream.URL, APIKey: "provider-key", Endpoint: "responses"}
+	secondary := Candidate{Provider: "openai", DeploymentID: "secondary", APIBase: "http://example.invalid", Endpoint: "responses"}
 	server := NewServer(Config{AuthorizeInference: true, Token: "master",
 		AuthorizeKey: func(key string) ([]string, bool) { return []string{"secondary"}, key == "restricted" },
 		Routes: []Route{
@@ -82,4 +93,9 @@ func TestVectorStoreRequestsKeepFileAndStoreAffinity(t *testing.T) {
 	foreign := encodeResourceID("files", "secondary", "file-other")
 	send("GET", path+"/files/"+foreign, "master", "", 404)
 	send("POST", path+"/files", "master", `{"file_id":"`+foreign+`"}`, 400)
+	searchTool := `"tools":[{"type":"file_search","vector_store_ids":["` + store + `"]}]`
+	send("POST", "/v1/responses", "master", `{"model":"primary",`+searchTool+`}`, 200)
+	send("POST", "/v1/responses", "master", `{"model":"secondary",`+searchTool+`}`, 400)
+	previous := wrapResponseID("resp-other", secondary)
+	send("POST", "/v1/responses", "master", `{"model":"primary","previous_response_id":"`+previous+`",`+searchTool+`}`, 400)
 }

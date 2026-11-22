@@ -258,23 +258,21 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route.Candidates = eligible
 	route.ContextFallback = s.eligibleCandidates(route.ContextFallback, modelScope, endpoint, stream)
 	route.PolicyFallback = s.eligibleCandidates(route.PolicyFallback, modelScope, endpoint, stream)
-	if previous, ok := input["previous_response_id"].(string); ok && s.config.AuthorizeInference && endpoint == "responses" {
+	if s.config.AuthorizeInference && endpoint == "responses" {
+		previous, _ := input["previous_response_id"].(string)
 		provider, deployment, original, wrapped := unwrapResponseID(previous)
 		if wrapped {
-			route.Candidates = nil
-			route.ContextFallback = []Candidate{}
-			route.PolicyFallback = []Candidate{}
-			for _, candidate := range eligible {
-				if candidate.Provider == provider && candidate.DeploymentID == deployment && candidate.Endpoint == "responses" {
-					route.Candidates = []Candidate{candidate}
-					break
-				}
-			}
-			if len(route.Candidates) == 0 {
-				writeError(writer, http.StatusBadRequest, "response_not_found", "Previous response does not belong to this route")
-				return
-			}
 			input["previous_response_id"] = original
+		} else {
+			provider, deployment = "", ""
+		}
+		if err := rewriteResponseVectorStores(input, &deployment); err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if deployment != "" && !route.pinResponseDeployment(provider, deployment) {
+			writeError(writer, http.StatusBadRequest, "response_not_found", "Response resources do not belong to this route")
+			return
 		}
 	}
 	if stream {
