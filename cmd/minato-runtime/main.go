@@ -205,6 +205,16 @@ func main() {
 			}
 		}
 	}
+	if proxy.PollingRedisURL != "" && (config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cache, err := proxyconfig.OpenRedisPollingStore(ctx, proxy.PollingRedisURL)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer cache.Close()
+		config.PollingStore = cache
+	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {

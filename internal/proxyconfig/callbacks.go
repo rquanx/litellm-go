@@ -30,6 +30,7 @@ type callbackSettings struct {
 			Polling any `yaml:"polling_via_cache"`
 			Native []string `yaml:"native_background_mode"`
 			TTL int `yaml:"ttl"`
+			RedisURL string `yaml:"redis_url"`
 		} `yaml:"background_mode"`
 	} `yaml:"responses"`
 }

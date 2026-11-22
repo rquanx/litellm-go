@@ -22,6 +22,20 @@ type ResponsePollingConfig struct {
 	TTL                time.Duration
 }
 
+type PollingSnapshot struct {
+	Owner [32]byte `json:"owner"`
+	Model string `json:"model"`
+	UpstreamID string `json:"upstream_id,omitempty"`
+	Body map[string]any `json:"body"`
+}
+
+type PollingStore interface {
+	Save(ctx context.Context, id string, snapshot PollingSnapshot, ttl time.Duration, create bool) (bool, error)
+	Read(ctx context.Context, id string) (*PollingSnapshot, error)
+	Cancel(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string) error
+}
+
 type responsePolling struct {
 	mu      sync.Mutex
 	entries map[string]*pollingEntry
@@ -35,6 +49,10 @@ type pollingEntry struct {
 	timer   *time.Timer
 	upstreamID string
 	body    map[string]any
+}
+
+func (entry *pollingEntry) snapshot() PollingSnapshot {
+	return PollingSnapshot{Owner: entry.owner, Model: entry.model, UpstreamID: entry.upstreamID, Body: entry.body}
 }
 
 func (s *Server) shouldPollResponse(route Route, input map[string]any) bool {
@@ -103,15 +121,32 @@ func (s *Server) startResponsePolling(w http.ResponseWriter, r *http.Request, mo
 		cache.mu.Unlock()
 	})
 	cache.mu.Unlock()
+	if store := s.config.PollingStore; store != nil {
+		saved, err := store.Save(r.Context(), id, entry.snapshot(), ttl, true)
+		if err != nil || !saved {
+			cache.mu.Lock()
+			delete(cache.entries, id)
+			entry.timer.Stop()
+			cache.mu.Unlock()
+			cancel()
+			writeError(w, http.StatusServiceUnavailable, "polling_unavailable", "Could not initialize response polling")
+			return
+		}
+	}
 	go func() {
 		defer cancel()
-		sink := &pollingWriter{cache: cache, id: id, entry: entry, headers: make(http.Header), limit: int(min(s.config.MaxBodyBytes, 512<<10))}
+		if store := s.config.PollingStore; store != nil {
+			go watchPollingCancellation(ctx, store, id, cancel)
+		}
+		sink := &pollingWriter{cache: cache, id: id, entry: entry, store: s.config.PollingStore, ctx: ctx,
+			headers: make(http.Header), limit: int(min(s.config.MaxBodyBytes, 512<<10))}
 		s.ServeHTTP(sink, work)
 		cache.mu.Lock()
 		defer cache.mu.Unlock()
 		if cache.entries[id] == entry && (entry.body["status"] == "queued" || entry.body["status"] == "in_progress") {
 			entry.body["status"] = "failed"
 			entry.body["error"] = map[string]string{"code": "upstream_error", "message": "The upstream stream ended without a final response"}
+			_, _ = sink.persist(0)
 		}
 	}()
 	writeJSON(w, http.StatusOK, initial)
@@ -124,6 +159,10 @@ func (s *Server) pollingResource(w http.ResponseWriter, r *http.Request, scope [
 	}
 	if s.polling == nil {
 		writeError(w, http.StatusNotFound, "response_not_found", "Unknown polling response")
+		return true
+	}
+	if s.config.PollingStore != nil {
+		s.sharedPollingResource(w, r, id, action, scope)
 		return true
 	}
 	cache := s.polling
@@ -165,6 +204,13 @@ func (s *Server) resolvePollingParent(r *http.Request, id string, scope []string
 	if s.polling == nil {
 		return ""
 	}
+	if store := s.config.PollingStore; store != nil {
+		entry, err := store.Read(r.Context(), id)
+		if err == nil && s.pollingSnapshotAllowed(r, scope, entry) && entry.Body["status"] == "completed" {
+			return entry.UpstreamID
+		}
+		return ""
+	}
 	s.polling.mu.Lock()
 	defer s.polling.mu.Unlock()
 	entry := s.polling.entries[id]
@@ -185,6 +231,8 @@ type pollingWriter struct {
 	headers http.Header
 	status  int
 	limit   int
+	store   PollingStore
+	ctx     context.Context
 }
 
 func (w *pollingWriter) Header() http.Header     { return w.headers }
@@ -204,7 +252,7 @@ func (w *pollingWriter) Write(data []byte) (int, error) {
 		if len(data) <= w.limit && json.Unmarshal(data, &failure) == nil {
 			entry.body["error"] = failure["error"]
 		}
-		return len(data), nil
+		return w.persist(len(data))
 	}
 	for _, line := range bytes.Split(data, []byte{'\n'}) {
 		raw, ok := bytes.CutPrefix(line, []byte("data:"))
@@ -230,7 +278,24 @@ func (w *pollingWriter) Write(data []byte) (int, error) {
 			return w.tooLarge()
 		}
 	}
-	return len(data), nil
+	return w.persist(len(data))
+}
+
+func (w *pollingWriter) persist(size int) (int, error) {
+	if w.store == nil {
+		return size, nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(w.ctx), 2*time.Second)
+	defer cancel()
+	snapshot := w.entry.snapshot()
+	w.cache.mu.Unlock()
+	saved, err := w.store.Save(ctx, w.id, snapshot, 0, false)
+	w.cache.mu.Lock()
+	if err != nil || !saved {
+		w.entry.cancel()
+		return 0, context.Canceled
+	}
+	return size, nil
 }
 
 func (w *pollingWriter) tooLarge() (int, error) {
@@ -240,6 +305,7 @@ func (w *pollingWriter) tooLarge() (int, error) {
 		"error": map[string]string{"code": "response_too_large", "message": "The response exceeds the polling cache limit"},
 	}
 	w.entry.cancel()
+	_, _ = w.persist(0)
 	return 0, errors.New("response exceeds polling cache limit")
 }
 

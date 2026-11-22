@@ -135,6 +135,7 @@ type Config struct {
 	publicModelLinks map[string]any
 	publicMCPServers []string
 	ResponsePolling runtime.ResponsePollingConfig
+	PollingRedisURL string
 }
 
 func Load(reader io.Reader) (Config, error) {
@@ -204,6 +205,11 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, errors.New("invalid Responses polling TTL")
 	}
 	config.ResponsePolling.TTL = time.Duration(polling.TTL) * time.Second
+	redisURL, err := resolveEnv(polling.RedisURL)
+	if err != nil {
+		return Config{}, errors.New("invalid Responses polling Redis configuration")
+	}
+	config.PollingRedisURL = redisURL
 	switch enabled := polling.Polling.(type) {
 	case nil:
 	case bool:
@@ -256,7 +262,6 @@ func Load(reader io.Reader) (Config, error) {
 		}
 		config.credentials[credential.Name] = credential
 	}
-	var err error
 	config.MCPServers, err = prepareMCPServers(file.MCPServers)
 	if err != nil {
 		return Config{}, err

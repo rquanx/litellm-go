@@ -38,6 +38,7 @@ type Config struct {
 	ResourceOwnerScopes func(string) []string
 	ContainerOwners     ContainerOwners
 	ResponsePolling     ResponsePollingConfig
+	PollingStore        PollingStore
 	SearchTools        []SearchTool
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
