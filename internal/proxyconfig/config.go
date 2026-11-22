@@ -441,7 +441,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 	}
 	if base == "" && rerankProvider(provider) {
-		if provider == "jina_ai" {
+		if provider == "voyage" {
+			base = "https://api.voyageai.com"
+		} else if provider == "jina_ai" {
 			base = "https://api.jina.ai"
 		} else {
 			base = "https://api.cohere.ai"
@@ -466,7 +468,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
 	if key == "" && rerankProvider(provider) {
-		if provider == "jina_ai" {
+		if provider == "voyage" {
+			key = os.Getenv("VOYAGE_API_KEY")
+		} else if provider == "jina_ai" {
 			key = os.Getenv("JINA_AI_API_KEY")
 		} else {
 			key = os.Getenv("COHERE_API_KEY")
@@ -598,7 +602,7 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 }
 
 func rerankProvider(name string) bool {
-	return name == "cohere" || name == "cohere_chat" || name == "jina_ai"
+	return name == "cohere" || name == "cohere_chat" || name == "jina_ai" || name == "voyage"
 }
 
 func resolveEnv(value string) (string, error) {

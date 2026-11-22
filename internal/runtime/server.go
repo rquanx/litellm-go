@@ -471,6 +471,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			s.recordLatency(candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
+			if endpoint == "rerank" && candidate.Provider == "voyage" {
+				body = voyageRerankResponse(body)
+			}
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				body = wrapResponseBody(body, candidate)
 			}
@@ -785,6 +788,9 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 				delete(payload, key)
 			}
 		}
+	}
+	if targetEndpoint == "rerank" && candidate.Provider == "voyage" {
+		payload = voyageRerankRequest(payload)
 	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
