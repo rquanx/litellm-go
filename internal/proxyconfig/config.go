@@ -700,7 +700,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if provider == "bedrock" {
 		endpoint = "bedrock-converse"
-		if strings.Contains(model, "amazon.titan-embed-") || strings.Contains(model, "cohere.embed-") {
+		if strings.Contains(model, "amazon.titan-embed-") || strings.Contains(model, "cohere.embed-") ||
+			strings.Contains(model, "amazon.nova-2-multimodal-embeddings") {
 			endpoint = "bedrock-embeddings"
 		}
 		if entry.bedrockRerank() {

@@ -38,6 +38,9 @@ func (s *Server) bedrockEmbeddings(ctx context.Context, request *http.Request, c
 	if strings.Contains(candidate.ModelID, "cohere.embed-") {
 		return s.bedrockCohereEmbeddings(ctx, request, candidate, input.fields, texts)
 	}
+	if strings.Contains(candidate.ModelID, "amazon.nova-2-multimodal-embeddings") {
+		return s.bedrockNovaEmbeddings(ctx, request, candidate, input.fields, texts)
+	}
 	base := make(map[string]any)
 	multimodal := strings.Contains(candidate.ModelID, "amazon.titan-embed-image-")
 	if multimodal && input.fields["dimensions"] != nil {

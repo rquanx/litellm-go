@@ -584,6 +584,11 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				body = wrapResponseBody(body, candidate, s.responseContainerEncoder(request, candidate))
 			}
+			if candidate.Endpoint == "bedrock-embeddings" && strings.HasPrefix(candidate.ModelID, "async_invoke/") {
+				if arn := responseHeaders.Get("X-LiteLLM-Invocation-ARN"); arn != "" {
+					writer.Header().Set("X-LiteLLM-Invocation-ARN", arn)
+				}
+			}
 			writeResponse(writer, status, responseHeaders, body)
 			return
 		}
@@ -1028,7 +1033,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	} else if candidate.Endpoint == "bedrock-converse" {
 		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
 	} else if candidate.Endpoint == "bedrock-embeddings" {
-		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
+		target = strings.TrimRight(candidate.APIBase, "/")
+		if strings.HasPrefix(candidate.ModelID, "async_invoke/") {
+			target += "/async-invoke"
+		} else {
+			target += "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
+		}
 	} else if candidate.Endpoint == "google-embeddings" {
 		target = geminiTarget(candidate, "google-embeddings")
 	} else if candidate.Endpoint == "cohere-embeddings" {
