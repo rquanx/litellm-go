@@ -3,7 +3,9 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
@@ -113,12 +115,36 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		rand.Shuffle(len(tools), func(i, j int) { tools[i], tools[j] = tools[j], tools[i] })
 	}
 	plan := s.attemptPlan(name)
+	var recorder *callbackResponse
+	var lastProvider string
+	if s.config.Callback != nil {
+		recorder = &callbackResponse{ResponseWriter: w, event: newInferenceEvent("asearch", name, false), capture: s.config.LogMessages}
+		if key := ProxyCredential(r); key != "" && !s.authorized(r) {
+			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+		}
+		if recorder.capture {
+			recorder.event.Messages = boundedCallbackJSON(input["query"])
+		}
+		w = recorder
+		defer func() {
+			if recorder.status != 0 {
+				recorder.finish()
+				recorder.event.Model = lastProvider + "/search"
+				recorder.event.Provider = lastProvider
+				s.config.Callback(recorder.event)
+			}
+		}()
+	}
 	for {
 		tool := tools[plan.index]
+		lastProvider = tool.Provider
 		payload := searchPayload(tool.Provider, input, query, queries)
 		status, headers, body := s.callSearch(r.Context(), tool, payload)
 		if status >= 200 && status < 300 {
 			if result, ok := normalizeSearch(tool.Provider, body); ok {
+				if recorder != nil {
+					recorder.event.Spend = searchCost(tool.Provider, input, max(1, len(queries)))
+				}
 				writeJSON(w, http.StatusOK, map[string]any{"object": "search", "results": result})
 				return
 			}

@@ -39,9 +39,11 @@ search_tools:
 	if err != nil {
 		t.Fatal(err)
 	}
+	var events []runtime.InferenceEvent
 	handler := registry.Handler(runtime.NewServer(runtime.Config{
 		Token: master, AuthorizeInference: true, AuthorizeKey: registry.Authorize,
 		AuthorizeSearch: registry.AuthorizeSearch, SearchTools: cfg.SearchTools,
+		Callback: func(event runtime.InferenceEvent) { events = append(events, event) },
 	}))
 	request := func(path, token, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -70,5 +72,10 @@ search_tools:
 	request("/v1/search/shared", issued.Key, `{"query":"fixture"}`, 403)
 	if calls.Load() != 1 {
 		t.Fatalf("upstream received %d calls, want 1", calls.Load())
+	}
+	if len(events) != 1 || events[0].CallType != "asearch" || events[0].ModelGroup != "shared" ||
+		events[0].Provider != "perplexity" || events[0].KeyDigest != keyDigest(issued.Key) || events[0].Total != 0 ||
+		events[0].Spend == nil || *events[0].Spend != 0.005 || events[0].Messages != nil || events[0].Response != nil {
+		t.Fatalf("unexpected search events: %+v", events)
 	}
 }
