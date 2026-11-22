@@ -41,7 +41,7 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		}
 		return strings.Compare(a.candidate.DeploymentID, b.candidate.DeploymentID)
 	})
-	results := make([]bool, len(deployments))
+	results := make([]ModelHealthRecord, len(deployments))
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	var workers sync.WaitGroup
@@ -51,7 +51,15 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		go func() {
 			defer workers.Done()
 			for index := worker; index < len(deployments) && ctx.Err() == nil; index += concurrency {
-				results[index] = s.probeDeployment(ctx, r, deployments[index].candidate)
+				deployment := deployments[index]
+				start := time.Now()
+				entry := ModelHealthRecord{ID: newUUID(), Model: deployment.alias, ModelID: deployment.candidate.DeploymentID,
+					Status: "unhealthy", UnhealthyCount: 1, CheckedAt: start, CreatedAt: start}
+				if s.probeDeployment(ctx, r, deployment.candidate) {
+					entry.Status, entry.HealthyCount, entry.UnhealthyCount = "healthy", 1, 0
+				}
+				entry.ResponseMS = float64(time.Since(start)) / float64(time.Millisecond)
+				results[index] = entry
 			}
 		}()
 	}
@@ -64,11 +72,22 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 			entry["api_base"] = candidate.APIBase
 			entry["api_version"] = candidate.APIVersion
 		}
-		if results[i] {
+		if results[i].HealthyCount != 0 {
 			healthy = append(healthy, entry)
 		} else {
 			unhealthy = append(unhealthy, entry)
 		}
+	}
+	if s.config.HealthHistory != nil {
+		saved := make([]ModelHealthRecord, 0, len(results))
+		for _, result := range results {
+			if result.ID != "" {
+				saved = append(saved, result)
+			}
+		}
+		storeCtx, cancelStore := context.WithTimeout(r.Context(), time.Second)
+		defer cancelStore()
+		s.config.HealthHistory.Record(storeCtx, saved)
 	}
 	status := http.StatusOK
 	if (model != "" || id != "") && len(healthy) == 0 {

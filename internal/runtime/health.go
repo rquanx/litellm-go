@@ -19,7 +19,7 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 			w.WriteHeader(http.StatusOK)
 			return true
 		}
-	case "/health/readiness/details", "/health/backlog", "/health":
+	case "/health/readiness/details", "/health/backlog", "/health", "/health/history", "/health/latest", "/health/shared-status":
 		if r.Method == http.MethodGet && !isAdmin {
 			valid := false
 			if s.config.AuthorizeKey != nil {
@@ -45,6 +45,10 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 		writeJSON(w, http.StatusOK, map[string]int64{"in_flight_requests": s.inFlight.Load()})
 	case "/health":
 		s.modelHealth(w, r, scope, isAdmin)
+	case "/health/history", "/health/latest":
+		s.healthHistory(w, r, scope)
+	case "/health/shared-status":
+		writeJSON(w, http.StatusOK, map[string]any{"shared_health_check_enabled": false, "message": "Shared health check is not enabled"})
 	default:
 		s.readiness(w, r, path == "/health/readiness/details" || s.config.PublicReadinessDetails)
 	}

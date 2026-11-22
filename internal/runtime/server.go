@@ -45,6 +45,7 @@ type Config struct {
 	RetryPolicy        RetryPolicy
 	ModelRetryPolicies map[string]RetryPolicy
 	DatabasePing       func(context.Context) error
+	HealthHistory      HealthHistory
 	CallbackNames      []string
 	PublicReadinessDetails bool
 }

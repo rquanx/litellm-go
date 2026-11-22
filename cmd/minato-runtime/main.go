@@ -138,6 +138,15 @@ func main() {
 	if *keyStatePath != "" && keys == nil {
 		log.Fatal("virtual key state requires standalone config and a master key")
 	}
+	if stateDB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		history, err := proxyconfig.OpenHealthHistory(ctx, stateDB)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.HealthHistory = history
+	}
 	if proxy.Callback != nil {
 		config.Callback = proxy.Callback.Start(context.Background())
 		config.CallbackNames = []string{"generic_api"}
