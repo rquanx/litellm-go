@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -55,6 +56,9 @@ func (entry deployment) vertexConfig(base string) (*runtime.VertexConfig, string
 		base = "https://aiplatform.googleapis.com"
 		if config.Location != "global" {
 			base = "https://" + config.Location + "-aiplatform.googleapis.com"
+		}
+		if entry.Info.Mode == "rerank" || strings.Contains(entry.Params.Model, "/semantic-ranker-") {
+			base = "https://discoveryengine.googleapis.com"
 		}
 	}
 	return config, base, nil

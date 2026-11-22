@@ -2,8 +2,75 @@ package runtime
 
 import (
 	"encoding/json"
+	"net/url"
+	"strconv"
 	"strings"
 )
+
+func vertexRerankTarget(candidate Candidate) string {
+	base := strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1")
+	return base + "/v1/projects/" + url.PathEscape(candidate.Vertex.Project) + "/locations/global/rankingConfigs/default_ranking_config:rank"
+}
+
+func vertexRerankRequest(payload map[string]any) map[string]any {
+	docs, _ := payload["documents"].([]any)
+	records := make([]map[string]any, 0, len(docs))
+	for index, document := range docs {
+		record := map[string]any{"id": strconv.Itoa(index)}
+		if text, ok := document.(string); ok {
+			record["content"] = text
+		} else if fields, ok := document.(map[string]any); ok {
+			for _, field := range []string{"content", "title"} {
+				if value, exists := fields[field]; exists {
+					record[field] = value
+				}
+			}
+			if record["content"] == nil {
+				record["content"] = fields["text"]
+			}
+		}
+		records = append(records, record)
+	}
+	request := map[string]any{"model": payload["model"], "query": payload["query"], "records": records}
+	if limit, exists := payload["top_n"]; exists {
+		request["topN"] = limit
+	}
+	if include, ok := payload["return_documents"].(bool); ok {
+		request["ignoreRecordDetailsInResponse"] = !include
+	}
+	return request
+}
+
+func vertexRerankResponse(body []byte) []byte {
+	var response struct {
+		Records []struct {
+			ID string `json:"id"`
+			Score *float64 `json:"score"`
+		} `json:"records"`
+	}
+	if json.Unmarshal(body, &response) != nil || response.Records == nil {
+		return body
+	}
+	results := make([]map[string]any, 0, len(response.Records))
+	for _, record := range response.Records {
+		index, err := strconv.Atoi(record.ID)
+		if err != nil {
+			return body
+		}
+		score := 1.0
+		if record.Score != nil {
+			score = *record.Score
+		}
+		results = append(results, map[string]any{"index": index, "relevance_score": score})
+	}
+	value, err := json.Marshal(map[string]any{"results": results, "meta": map[string]any{
+		"billed_units": map[string]int{"search_units": len(results)},
+	}})
+	if err != nil {
+		return body
+	}
+	return value
+}
 
 func voyageRerankRequest(payload map[string]any) map[string]any {
 	request := map[string]any{"model": payload["model"], "query": payload["query"],

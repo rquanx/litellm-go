@@ -507,6 +507,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if strings.Contains(model, "embedding") {
 			endpoint = "google-embeddings"
 		}
+		if provider == "vertex_ai" && (entry.Info.Mode == "rerank" || strings.HasPrefix(model, "semantic-ranker-")) {
+			endpoint = "rerank"
+		}
 	}
 	if provider == "bedrock" {
 		endpoint = "bedrock-converse"
@@ -533,7 +536,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if configured == "embeddings" && (endpoint == "bedrock-embeddings" || endpoint == "google-embeddings") {
 			configured = endpoint
 		}
-		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings") ||
+		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" &&
+			!(provider == "vertex_ai" && configured == "rerank")) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint) {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
