@@ -93,7 +93,16 @@ mcp_servers:
 	if result := call("POST", "/mcp-rest/tools/call", "fixture-key", `{"server_id":"fixture","name":"echo"}`, 200); !strings.Contains(result, "fixture") {
 		t.Fatalf("unexpected tool response %s", result)
 	}
-	if closed.Load() != 2 {
+	if result := call("POST", "/mcp", "fixture-key", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26"}}`, 200); !strings.Contains(result, "protocolVersion") {
+		t.Fatalf("unexpected MCP initialization response %s", result)
+	}
+	if result := call("POST", "/mcp", "fixture-key", `{"jsonrpc":"2.0","id":2,"method":"tools/list"}`, 200); !strings.Contains(result, "fixture-echo") {
+		t.Fatalf("unexpected MCP tool list %s", result)
+	}
+	if result := call("POST", "/mcp", "fixture-key", `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fixture-echo"}}`, 200); !strings.Contains(result, "fixture") {
+		t.Fatalf("unexpected MCP tool response %s", result)
+	}
+	if closed.Load() != 4 {
 		t.Fatalf("closed %d MCP sessions", closed.Load())
 	}
 }
