@@ -23,6 +23,7 @@ func main() {
 	importKeys := flag.Bool("import-litellm-keys", false, "Copy supported LiteLLM key digests into empty Go proxy state and exit")
 	importAccess := flag.Bool("import-litellm-access", false, "Import supported LiteLLM access records and keys into empty Go PostgreSQL state")
 	importSearch := flag.Bool("import-litellm-search-tools", false, "Import LiteLLM search tools into Go PostgreSQL state")
+	importMCP := flag.Bool("import-litellm-mcp-servers", false, "Import supported LiteLLM MCP servers into Go PostgreSQL state")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -85,7 +86,7 @@ func main() {
 		config.DatabasePing = stateDB.PingContext
 	}
 	importCount := 0
-	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch} {
+	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch, *importMCP} {
 		if requested {
 			importCount++
 		}
@@ -103,6 +104,14 @@ func main() {
 				log.Fatal(err)
 			}
 			log.Printf("Imported %d LiteLLM search tools", count)
+			return
+		}
+		if *importMCP {
+			count, err := proxyconfig.ImportLiteLLMMCPServers(stateDB, proxy)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM MCP servers", count)
 			return
 		}
 		if *importAccess {

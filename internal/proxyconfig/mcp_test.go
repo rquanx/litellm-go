@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,44 @@ import (
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL);
+		CREATE TEMP TABLE "LiteLLM_MCPServerTable" (
+			server_id TEXT, server_name TEXT, transport TEXT, url TEXT, approval_status TEXT,
+			auth_type TEXT, credentials JSONB, static_headers JSONB
+		);
+		INSERT INTO "LiteLLM_MCPServerTable" VALUES
+			('fixture-id','fixture','http','http://localhost:1/mcp','active','bearer_token',
+			'{"auth_value":"fixture-import-token"}','{"X-Fixture":"value"}'),
+			('pending','unreviewed','stdio',NULL,'pending',NULL,NULL,NULL);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Config{MasterKey: "fixture-master"}
+	if count, err := ImportLiteLLMMCPServers(db, config); err != nil || count != 1 {
+		t.Fatalf("import count %d: %v", count, err)
+	}
+	var state modelState
+	if err := postgresModels(db, config.MasterKey).load(&state); err != nil {
+		t.Fatal(err)
+	}
+	entry := state.MCPServers["fixture"]
+	if entry.ServerID != "fixture-id" || entry.Headers["Authorization"] != "Bearer fixture-import-token" ||
+		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 1 {
+		t.Fatal("stored MCP server did not retain its ID and credentials")
+	}
+}
 
 func TestManagedMCPServersPersistAndPublish(t *testing.T) {
 	const master = "fixture-master"
