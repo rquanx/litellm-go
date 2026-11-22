@@ -2,6 +2,8 @@
 
 import argparse
 import ast
+import gzip
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -11,6 +13,31 @@ TARGET = ROOT / "internal/proxyconfig/openai-compatible.json"
 SETTINGS = ROOT / "internal/proxyconfig/openai-provider-settings.json"
 PRICES = ROOT / "internal/proxyconfig/model-token-prices.json"
 CACHE_PRICES = ROOT / "internal/proxyconfig/model-cache-prices.json"
+
+
+def compressed_json(data):
+    output = io.BytesIO()
+    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as stream:
+        stream.write(json.dumps(data, separators=(",", ":")).encode())
+    return output.getvalue()
+
+
+def public_catalogs(checkout, revision, prices):
+    def source(path):
+        return subprocess.check_output(["git", "-C", checkout, "show", f"{revision}:{path}"])
+
+    tree = ast.parse(source("litellm/types/utils.py"))
+    provider_enum = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "LlmProviders")
+    providers = sorted({
+        field.value.value for field in provider_enum.body
+        if isinstance(field, ast.Assign) and isinstance(field.value, ast.Constant) and isinstance(field.value.value, str)
+    })
+    fields = json.loads(source("litellm/proxy/public_endpoints/provider_create_fields.json"))
+    return {
+        "public-model-cost-map.json.gz": compressed_json(prices),
+        "public-providers.json.gz": compressed_json(providers),
+        "public-provider-fields.json.gz": compressed_json(fields),
+    }
 
 
 def main():
@@ -53,6 +80,7 @@ def main():
         if model != "sample_spec" and any(type(rate) in (int, float) for rate in rates):
             cache_prices[model] = [rate if type(rate) in (int, float) else None for rate in rates]
     cache_output = json.dumps(cache_prices, sort_keys=True, indent=2) + "\n"
+    public = public_catalogs(args.checkout, revision, upstream_prices)
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
             raise SystemExit("Go provider list differs from the pinned LiteLLM source")
@@ -64,11 +92,17 @@ def main():
         if CACHE_PRICES.read_text(encoding="utf-8") != cache_output:
             raise SystemExit("Go cache prices differ from the pinned LiteLLM source")
         print(f"{len(cache_prices)} cache prices match LiteLLM {revision}")
+        for name, data in public.items():
+            if gzip.decompress((TARGET.parent / name).read_bytes()) != gzip.decompress(data):
+                raise SystemExit(f"{name} differs from the pinned LiteLLM source")
+        print(f"{len(public)} public catalogs match LiteLLM {revision}")
     else:
         TARGET.write_text(output, encoding="utf-8")
         SETTINGS.write_text(settings_output, encoding="utf-8")
         PRICES.write_text(price_output, encoding="utf-8")
         CACHE_PRICES.write_text(cache_output, encoding="utf-8")
+        for name, data in public.items():
+            (TARGET.parent / name).write_bytes(data)
 
 
 if __name__ == "__main__":
