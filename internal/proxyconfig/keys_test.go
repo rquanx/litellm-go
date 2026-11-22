@@ -101,7 +101,7 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	send(handler, "POST", "/key/block", master, `{"key":"`+rotated+`"}`, 200)
 	send(handler, "GET", "/v1/models", generated.Key, "", 401)
 	send(handler, "POST", "/key/unblock", master, `{"key":"`+rotated+`"}`, 200)
-	send(handler, "POST", "/key/delete", master, `{"keys":["`+keyDigest(rotated)+`"]}`, 200)
+	send(handler, "POST", "/key/delete", master, `{"key_aliases":["Fixture"]}`, 200)
 	handler = buildHandler()
 	send(handler, "GET", "/v1/models", generated.Key, "", 401)
 	send(handler, "GET", "/v1/models", rotated, "", 401)

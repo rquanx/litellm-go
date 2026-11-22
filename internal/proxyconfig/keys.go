@@ -246,8 +246,10 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 	}
 	var input struct {
 		Keys []string `json:"keys"`
+		Aliases []string `json:"key_aliases"`
 	}
-	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil || len(input.Keys) == 0 {
+	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil ||
+		len(input.Keys)+len(input.Aliases) == 0 || slices.Contains(input.Aliases, "") {
 		modelError(w, http.StatusBadRequest, "Supply virtual keys to delete")
 		return
 	}
@@ -261,6 +263,14 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 		if _, exists := next.Keys[digest]; exists {
 			delete(next.Keys, digest)
 			removed++
+		}
+	}
+	if len(input.Aliases) != 0 {
+		for digest, key := range next.Keys {
+			if slices.Contains(input.Aliases, key.Alias) {
+				delete(next.Keys, digest)
+				removed++
+			}
 		}
 	}
 	if removed > 0 {
