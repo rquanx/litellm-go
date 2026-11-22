@@ -59,6 +59,7 @@ func main() {
 		}
 		proxy.MasterKey = config.Token
 		config.AuthorizeInference = true
+		config.PublicReadinessDetails = proxy.PublicReadinessDetails
 		if proxy.Timeout > 0 {
 			config.HTTPClient.Timeout = proxy.Timeout
 		}
@@ -74,6 +75,7 @@ func main() {
 			log.Fatal(err)
 		}
 		defer stateDB.Close()
+		config.DatabasePing = stateDB.PingContext
 	}
 	importCount := 0
 	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch} {
@@ -138,6 +140,7 @@ func main() {
 	}
 	if proxy.Callback != nil {
 		config.Callback = proxy.Callback.Start(context.Background())
+		config.CallbackNames = []string{"generic_api"}
 		config.LogMessages = proxy.LogMessages
 	}
 	var spend *proxyconfig.SpendLog

@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,11 +44,15 @@ type Config struct {
 	AllowedFails       int
 	RetryPolicy        RetryPolicy
 	ModelRetryPolicies map[string]RetryPolicy
+	DatabasePing       func(context.Context) error
+	CallbackNames      []string
+	PublicReadinessDetails bool
 }
 
 type Server struct {
 	config Config
 	mu     sync.RWMutex
+	inFlight atomic.Int64
 	routes map[string]Route
 	configuredRoutes map[string]Route
 	searchTools []SearchTool
@@ -95,6 +100,11 @@ func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTo
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	s.inFlight.Add(1)
+	defer s.inFlight.Add(-1)
+	if s.config.AuthorizeInference && s.serveHealth(writer, request) {
+		return
+	}
 	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
 		return
 	}

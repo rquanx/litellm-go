@@ -27,6 +27,7 @@ type configFile struct {
 		DatabaseURL string `yaml:"database_url"`
 		StoreModels bool `yaml:"store_model_in_db"`
 		DisableSpendLogs bool `yaml:"disable_spend_logs"`
+		PublicReadinessDetails bool `yaml:"allow_public_health_readiness_details"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
@@ -96,6 +97,7 @@ type Config struct {
 	ModelRetryPolicies map[string]runtime.RetryPolicy
 	DatabaseURL string
 	DisableSpendLogs bool
+	PublicReadinessDetails bool
 	models    []deployment
 	fallbacks []map[string][]string
 	defaultFallbacks []string
@@ -162,7 +164,7 @@ func Load(reader io.Reader) (Config, error) {
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
-		DisableSpendLogs: file.General.DisableSpendLogs, AllowedFails: allowedFails,
+		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.credentials = make(map[string]providerCredential, len(file.Credentials))
