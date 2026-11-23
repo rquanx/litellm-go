@@ -15,7 +15,7 @@ import (
 
 func TestConfiguredA2AAgentRoutes(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer fixture-upstream" || r.Header.Get("X-Trace-ID") != "trace-1" {
+		if r.Header.Get("Authorization") != "Bearer fixture-upstream" || r.Header.Get("X-Trace-ID") != "trace-1" || r.Header.Get("X-Fixture") != "dynamic" {
 			t.Errorf("unexpected upstream credentials or trace header")
 		}
 		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
@@ -33,6 +33,7 @@ agent_list:
     agent_card_params: {name: Demo, url: os.environ/MINATO_TEST_AGENT_URL}
     static_headers: {Authorization: Bearer fixture-upstream}
     extra_headers: [X-Trace-ID]
+    litellm_params: {require_trace_id_on_calls_to_agent: true}
   - agent_name: private-agent
     agent_card_params: {name: Private, url: os.environ/MINATO_TEST_AGENT_URL}
 litellm_settings:
@@ -48,6 +49,9 @@ litellm_settings:
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("X-Trace-ID", "trace-1")
+		r.Header.Set("X-A2A-Fixture-X-Fixture", "dynamic")
+		r.Header.Set("X-A2A-Fixture-Authorization", "Bearer ignored")
+		r.Header.Set("X-LiteLLM-Trace-Id", "fixture-trace")
 		w := httptest.NewRecorder()
 		server.ServeHTTP(w, r)
 		if w.Code != status {
@@ -65,6 +69,13 @@ litellm_settings:
 	}
 	call("GET", "/v1/agents/private-agent", "scoped", "", 404)
 	call("GET", "/v1/agents/private-agent", "master", "", 200)
+	missing := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/a2a/fixture", nil)
+	req.Header.Set("Authorization", "Bearer scoped")
+	server.ServeHTTP(missing, req)
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("trace requirement returned %d", missing.Code)
+	}
 	stream := call("POST", "/v1/a2a/fixture/message/send", "scoped", `{"jsonrpc":"2.0","id":1,"method":"message/stream","params":{}}`, 200)
 	if !stream.Flushed || !strings.Contains(stream.Body.String(), `"result"`) {
 		t.Fatal(stream.Body)

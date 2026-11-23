@@ -59,8 +59,9 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 			}
 			headers.Set(name, resolved)
 		}
+		requireTraceID, _ := entry.Parameters["require_trace_id_on_calls_to_agent"].(bool)
 		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: address.String(), Card: entry.Card, Headers: headers,
-			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
+			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), RequireTraceID: requireTraceID, Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
 	}
 	return agents, nil
 }

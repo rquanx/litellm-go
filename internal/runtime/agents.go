@@ -13,12 +13,13 @@ import (
 )
 
 type Agent struct {
-	ID, Name, URL string
-	Card          map[string]any
-	Headers       http.Header
-	ExtraHeaders  []string
-	AccessGroups  []string
-	Public        bool
+	ID, Name, URL  string
+	Card           map[string]any
+	Headers        http.Header
+	ExtraHeaders   []string
+	AccessGroups   []string
+	RequireTraceID bool
+	Public         bool
 }
 
 func agentCard(r *http.Request, agent Agent, selector string) map[string]any {
@@ -126,6 +127,10 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent Agent) {
+	if agent.RequireTraceID && strings.TrimSpace(r.Header.Get("X-LiteLLM-Trace-Id")) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "This agent requires the X-LiteLLM-Trace-Id header")
+		return
+	}
 	raw, err := readBody(r, s.config.MaxBodyBytes)
 	if err != nil {
 		writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Agent input is too large")
@@ -159,6 +164,23 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 		}
 		if value := r.Header.Get(name); value != "" {
 			upstream.Header.Set(name, value)
+		}
+	}
+	for _, selector := range []string{agent.ID, agent.Name} {
+		prefix := "x-a2a-" + strings.ToLower(selector) + "-"
+		for header, values := range r.Header {
+			field, ok := strings.CutPrefix(strings.ToLower(header), prefix)
+			if !ok || field == "" {
+				continue
+			}
+			switch name := http.CanonicalHeaderKey(field); name {
+			case "Connection", "Content-Length", "Host", "Transfer-Encoding", "Upgrade", "Proxy-Authorization":
+				continue
+			default:
+				if len(values) > 0 {
+					upstream.Header[name] = slices.Clone(values)
+				}
+			}
 		}
 	}
 	for name, values := range agent.Headers {
