@@ -63,7 +63,7 @@ func (store *MCPUserCredentialStore) decode(value string) (runtime.MCPUserOAuthT
 			break
 		}
 	}
-	return runtime.MCPUserOAuthToken{}, errors.New("stored MCP credential is not a readable OAuth token")
+	return runtime.MCPUserOAuthToken{}, runtime.ErrMCPUserOAuthNotFound
 }
 
 func (store *MCPUserCredentialStore) Read(ctx context.Context, user, server string) (runtime.MCPUserOAuthToken, error) {
@@ -71,6 +71,9 @@ func (store *MCPUserCredentialStore) Read(ctx context.Context, user, server stri
 	defer cancel()
 	var value string
 	err := store.db.QueryRowContext(ctx, `SELECT credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE user_id=$1 AND server_id=$2`, user, server).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return runtime.MCPUserOAuthToken{}, runtime.ErrMCPUserOAuthNotFound
+	}
 	if err != nil {
 		return runtime.MCPUserOAuthToken{}, err
 	}
@@ -110,4 +113,43 @@ func (store *MCPUserCredentialStore) Save(ctx context.Context, user, server stri
 		return errors.New("MCP user credential changed during token exchange")
 	}
 	return nil
+}
+
+func (store *MCPUserCredentialStore) Delete(ctx context.Context, user, server string) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var raw string
+	err := store.db.QueryRowContext(ctx, `SELECT credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE user_id=$1 AND server_id=$2`, user, server).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := store.decode(raw); err != nil {
+		return nil
+	}
+	_, err = store.db.ExecContext(ctx, `DELETE FROM "LiteLLM_MCPUserCredentials" WHERE user_id=$1 AND server_id=$2 AND credential_b64=$3`, user, server, raw)
+	return err
+}
+
+func (store *MCPUserCredentialStore) List(ctx context.Context, user string) (map[string]runtime.MCPUserOAuthToken, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	rows, err := store.db.QueryContext(ctx, `SELECT server_id,credential_b64 FROM "LiteLLM_MCPUserCredentials" WHERE user_id=$1`, user)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tokens := make(map[string]runtime.MCPUserOAuthToken)
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, err
+		}
+		if token, err := store.decode(raw); err == nil {
+			tokens[id] = token
+		}
+	}
+	return tokens, rows.Err()
 }

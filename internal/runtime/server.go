@@ -170,6 +170,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
 		return
 	}
+	if s.config.AuthorizeInference && s.serveMCPUserCredentials(writer, request) {
+		return
+	}
 	if s.config.AuthorizeInference && s.serveMCPOAuth(writer, request) {
 		return
 	}

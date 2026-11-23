@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -16,9 +17,13 @@ type MCPUserOAuthToken struct {
 	Scopes       []string  `json:"scopes,omitempty"`
 }
 
+var ErrMCPUserOAuthNotFound = errors.New("MCP OAuth credential not found")
+
 type MCPUserOAuthStore interface {
 	Read(context.Context, string, string) (MCPUserOAuthToken, error)
 	Save(context.Context, string, string, MCPUserOAuthToken) error
+	Delete(context.Context, string, string) error
+	List(context.Context, string) (map[string]MCPUserOAuthToken, error)
 }
 
 func (s *Server) mcpOAuthUser(r *http.Request) string {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -61,4 +62,49 @@ func TestMCPRefreshesExpiredUserTokenOnce(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected one refresh, got %d", calls)
 	}
+}
+
+func (store *testMCPUserTokens) Delete(context.Context, string, string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.token = MCPUserOAuthToken{}
+	return nil
+}
+
+func (store *testMCPUserTokens) List(context.Context, string) (map[string]MCPUserOAuthToken, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	return map[string]MCPUserOAuthToken{"fixture-server": store.token}, nil
+}
+
+func TestMCPUserCredentialManagementKeepsTokensPrivate(t *testing.T) {
+	tokens := &testMCPUserTokens{}
+	server := NewServer(Config{
+		AuthorizeInference: true, Token: "master", MCPUserOAuthStore: tokens,
+		AuthorizeKey: func(key string) ([]string, bool) { return nil, key == "user" },
+		MCPUserOAuthIdentity: func(r *http.Request) string {
+			if ProxyCredential(r) == "user" {
+				return "owner"
+			}
+			return ""
+		},
+		MCPServers: []MCPServer{{ID: "fixture-server", Name: "fixture", AllowAllKeys: true, InteractiveOAuth: &MCPInteractiveOAuth{}}},
+	})
+	const path = "/mcp/server/fixture-server/oauth-user-credential"
+	call := func(method, path, body, want string) {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer user")
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, r)
+		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), want) ||
+			strings.Contains(result.Body.String(), "private-token") || strings.Contains(result.Body.String(), "private-refresh") {
+			t.Fatalf("wrong management result %d %s", result.Code, result.Body)
+		}
+	}
+	call("POST", path, `{"access_token":"private-token","refresh_token":"private-refresh","expires_in":3600}`, `"has_credential":true`)
+	call("GET", path+"/status", "", `"has_credential":true`)
+	call("GET", "/mcp/user-credentials", "", `"server_name":"fixture"`)
+	call("DELETE", path, "", `"has_credential":false`)
+	call("GET", path+"/status", "", `"has_credential":false`)
 }
