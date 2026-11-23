@@ -224,6 +224,17 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "A Vertex corpus requires the vertex_ai provider")
 		return
 	}
+	if provider == "pg_vector" || (provider == "" && deployment != "") {
+		candidate, ok := s.selectResourceProvider(alias, deployment, "pg_vector", scope, true)
+		if ok {
+			s.pgVectorResource(w, request, candidate, family, path, fields)
+			return
+		}
+		if provider == "pg_vector" {
+			writeError(w, http.StatusBadRequest, "model_required", "Select a configured pg_vector deployment")
+			return
+		}
+	}
 	if provider == "s3_vectors" {
 		if family != "vector_stores_search" {
 			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "S3 Vectors supports vector search")

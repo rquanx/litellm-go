@@ -21,6 +21,7 @@ var endpoints = map[string]endpointSpec{
 	"translation":        {"/v1/audio/translations", "translation", false},
 	"moderations":        {"/v1/moderations", "moderations", false},
 	"rerank":             {"/v1/rerank", "rerank", false},
+	"vector-stores":      {"/v1/vector_stores", "vector-stores", false},
 	"videos":            {"/v1/videos", "videos", false},
 	"ocr":                {"/v1/ocr", "ocr", false},
 	"anthropic-messages": {"/v1/messages", "anthropic", true},
