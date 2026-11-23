@@ -10,28 +10,31 @@ import (
 const maxCallbackMessageBytes = 64 << 10
 
 type InferenceEvent struct {
-	ID         string          `json:"id"`
-	TraceID    string          `json:"trace_id"`
-	CallType   string          `json:"call_type"`
-	Stream     bool            `json:"stream"`
-	Status     string          `json:"status"`
-	Model      string          `json:"model"`
-	ModelGroup string          `json:"model_group"`
-	ModelID    string          `json:"model_id"`
-	Provider   string          `json:"custom_llm_provider"`
-	StartTime  float64         `json:"startTime"`
-	EndTime    float64         `json:"endTime"`
-	Total      int             `json:"total_tokens"`
-	Prompt     int             `json:"prompt_tokens"`
-	Completion int             `json:"completion_tokens"`
-	Spend      *float64        `json:"response_cost"`
-	CacheHit   bool            `json:"cache_hit"`
-	CacheReadInputTokens int   `json:"cache_read_input_tokens,omitempty"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
-	KeyDigest  string          `json:"-"`
-	EndUser    string          `json:"end_user,omitempty"`
-	Messages   json.RawMessage `json:"messages"`
-	Response   json.RawMessage `json:"response"`
+	ID                       string          `json:"id"`
+	TraceID                  string          `json:"trace_id"`
+	CallType                 string          `json:"call_type"`
+	Stream                   bool            `json:"stream"`
+	Status                   string          `json:"status"`
+	Model                    string          `json:"model"`
+	ModelGroup               string          `json:"model_group"`
+	ModelID                  string          `json:"model_id"`
+	Provider                 string          `json:"custom_llm_provider"`
+	StartTime                float64         `json:"startTime"`
+	EndTime                  float64         `json:"endTime"`
+	Total                    int             `json:"total_tokens"`
+	Prompt                   int             `json:"prompt_tokens"`
+	Completion               int             `json:"completion_tokens"`
+	Spend                    *float64        `json:"response_cost"`
+	CacheHit                 bool            `json:"cache_hit"`
+	CacheReadInputTokens     int             `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int             `json:"cache_creation_input_tokens,omitempty"`
+	APISource                string          `json:"-"`
+	HTTPStatus               int             `json:"-"`
+	FirstOutput              float64         `json:"-"`
+	KeyDigest                string          `json:"-"`
+	EndUser                  string          `json:"end_user,omitempty"`
+	Messages                 json.RawMessage `json:"messages"`
+	Response                 json.RawMessage `json:"response"`
 }
 
 func newInferenceEvent(endpoint, alias string, stream bool) InferenceEvent {
@@ -46,13 +49,13 @@ func newInferenceEvent(endpoint, alias string, stream bool) InferenceEvent {
 
 type callbackResponse struct {
 	http.ResponseWriter
-	event InferenceEvent
-	status int
-	capture bool
-	price [2]*float64
-	cachePrice *float64
-	cacheCreationPrice *float64
-	cachedTokens int
+	event               InferenceEvent
+	status              int
+	capture             bool
+	price               [2]*float64
+	cachePrice          *float64
+	cacheCreationPrice  *float64
+	cachedTokens        int
 	cacheCreationTokens int
 }
 
@@ -73,6 +76,9 @@ func (recorder *callbackResponse) Write(data []byte) (int, error) {
 	if recorder.status == 0 {
 		recorder.status = http.StatusOK
 	}
+	if recorder.event.FirstOutput == 0 && len(data) > 0 {
+		recorder.event.FirstOutput = float64(time.Now().UnixNano()) / float64(time.Second)
+	}
 	if recorder.event.Stream && recorder.status < 400 {
 		for _, frame := range bytes.Split(data, []byte("\n\n")) {
 			if value := streamErrorBody(frame); len(value) != 0 {
@@ -87,30 +93,30 @@ func (recorder *callbackResponse) Write(data []byte) (int, error) {
 
 func (recorder *callbackResponse) recordJSON(data []byte) {
 	type tokenDetails struct {
-		Cached int `json:"cached_tokens"`
+		Cached   int `json:"cached_tokens"`
 		Creation int `json:"cache_creation_tokens"`
 	}
 	type interactionUsage struct {
-		Input int `json:"total_input_tokens"`
-		Output int `json:"total_output_tokens"`
+		Input     int `json:"total_input_tokens"`
+		Output    int `json:"total_output_tokens"`
 		Reasoning int `json:"total_reasoning_tokens"`
-		Cached int `json:"total_cached_tokens"`
-		Total int `json:"total_tokens"`
+		Cached    int `json:"total_cached_tokens"`
+		Total     int `json:"total_tokens"`
 	}
 	type usage struct {
-		Prompt int `json:"prompt_tokens"`
-		Completion int `json:"completion_tokens"`
-		Input int `json:"input_tokens"`
-		Output int `json:"output_tokens"`
-		Total int `json:"total_tokens"`
-		PromptDetails tokenDetails `json:"prompt_tokens_details"`
-		InputDetails tokenDetails `json:"input_tokens_details"`
-		NativeCacheRead int `json:"cache_read_input_tokens"`
-		NativeCacheCreation int `json:"cache_creation_input_tokens"`
+		Prompt              int          `json:"prompt_tokens"`
+		Completion          int          `json:"completion_tokens"`
+		Input               int          `json:"input_tokens"`
+		Output              int          `json:"output_tokens"`
+		Total               int          `json:"total_tokens"`
+		PromptDetails       tokenDetails `json:"prompt_tokens_details"`
+		InputDetails        tokenDetails `json:"input_tokens_details"`
+		NativeCacheRead     int          `json:"cache_read_input_tokens"`
+		NativeCacheCreation int          `json:"cache_creation_input_tokens"`
 	}
 	var payload struct {
-		Type string `json:"type"`
-		Usage usage `json:"usage"`
+		Type     string `json:"type"`
+		Usage    usage  `json:"usage"`
 		Response struct {
 			Usage usage `json:"usage"`
 		} `json:"response"`
@@ -118,11 +124,11 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 			Usage usage `json:"usage"`
 		} `json:"message"`
 		Gemini struct {
-			Prompt int `json:"promptTokenCount"`
+			Prompt     int `json:"promptTokenCount"`
 			Completion int `json:"candidatesTokenCount"`
-			Thoughts int `json:"thoughtsTokenCount"`
-			Total int `json:"totalTokenCount"`
-			Cached int `json:"cachedContentTokenCount"`
+			Thoughts   int `json:"thoughtsTokenCount"`
+			Total      int `json:"totalTokenCount"`
+			Cached     int `json:"cachedContentTokenCount"`
 		} `json:"usageMetadata"`
 	}
 	if json.Unmarshal(data, &payload) != nil {
@@ -130,8 +136,10 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	}
 	if recorder.event.CallType == "acreate_interaction" {
 		var result struct {
-			Usage interactionUsage `json:"usage"`
-			Interaction struct { Usage interactionUsage `json:"usage"` } `json:"interaction"`
+			Usage       interactionUsage `json:"usage"`
+			Interaction struct {
+				Usage interactionUsage `json:"usage"`
+			} `json:"interaction"`
 		}
 		if json.Unmarshal(data, &result) == nil {
 			data := result.Usage
@@ -155,8 +163,8 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	if payload.Usage != (usage{}) {
 		if payload.Type != "message_delta" || payload.Usage.Input > 0 || payload.Usage.NativeCacheRead > 0 ||
 			payload.Usage.NativeCacheCreation > 0 {
-			recorder.event.Prompt = max(0, payload.Usage.Prompt, payload.Usage.Input +
-				max(0, payload.Usage.NativeCacheRead) + max(0, payload.Usage.NativeCacheCreation))
+			recorder.event.Prompt = max(0, payload.Usage.Prompt, payload.Usage.Input+
+				max(0, payload.Usage.NativeCacheRead)+max(0, payload.Usage.NativeCacheCreation))
 			recorder.cachedTokens = min(recorder.event.Prompt, max(0, payload.Usage.PromptDetails.Cached, payload.Usage.InputDetails.Cached, payload.Usage.NativeCacheRead))
 			recorder.cacheCreationTokens = min(recorder.event.Prompt-recorder.cachedTokens, max(0,
 				payload.Usage.PromptDetails.Creation, payload.Usage.InputDetails.Creation, payload.Usage.NativeCacheCreation))
@@ -175,7 +183,10 @@ func (recorder *callbackResponse) finish() {
 	recorder.event.CacheCreationInputTokens = recorder.cacheCreationTokens
 	recorder.event.EndTime = float64(time.Now().UnixNano()) / float64(time.Second)
 	recorder.event.Model = recorder.Header().Get("X-Minato-Runtime-Model")
-	recorder.event.Provider = recorder.Header().Get("X-Minato-Runtime-Source")
+	recorder.event.HTTPStatus = recorder.status
+	if recorder.event.Provider == "" {
+		recorder.event.Provider = recorder.Header().Get("X-Minato-Runtime-Source")
+	}
 	recorder.event.Status = "success"
 	if recorder.status >= 400 {
 		recorder.event.Status = "failure"

@@ -323,6 +323,7 @@ func (s *Server) recordPassThrough(r *http.Request, event InferenceEvent, status
 	if status >= 200 && status < 300 {
 		event.Status, event.Spend = "success", cost
 	}
+	event.HTTPStatus = status
 	event.EndTime = float64(time.Now().UnixNano()) / float64(time.Second)
 	s.config.Callback(event)
 }

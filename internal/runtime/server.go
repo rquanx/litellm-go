@@ -1615,6 +1615,10 @@ func writeRuntimeMeta(writer http.ResponseWriter, candidate Candidate, attempts 
 		recorder.cachePrice = candidate.CacheReadPrice
 		recorder.cacheCreationPrice = candidate.CacheCreationPrice
 		recorder.event.ModelID = candidate.DeploymentID
+		recorder.event.Provider = candidate.Provider
+		if target, err := url.Parse(candidate.APIBase); err == nil && target.Host != "" {
+			recorder.event.APISource = target.Scheme + "://" + target.Host
+		}
 	}
 	writer.Header().Set("X-Minato-Runtime-Source", candidate.SourceID)
 	writer.Header().Set("X-Minato-Runtime-Model", candidate.ModelID)
