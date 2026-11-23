@@ -194,7 +194,8 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 	expires := now.Add(24 * time.Hour)
 	token := newKeyToken()
 	next.Keys = maps.Clone(next.Keys)
-	next.Keys[keyDigest(token)] = virtualKey{Alias: "cli-sso:" + user.ID, UserID: user.ID, TeamID: selected, Models: []string{}, CreatedAt: &now, Expires: &expires}
+	next.Keys[keyDigest(token)] = virtualKey{Alias: "cli-sso:" + user.ID, UserID: user.ID, TeamID: selected, Models: []string{},
+		Metadata: map[string]any{"_minato_cli_session": true}, CreatedAt: &now, Expires: &expires}
 	if !s.keys.apply(w, next) {
 		return
 	}

@@ -245,7 +245,12 @@ func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectP
 		}
 		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
 		permissions.team = owner.ObjectPermission
-		if index := memberIndex(owner, key.UserID); index >= 0 {
+		index := memberIndex(owner, key.UserID)
+		if session, _ := key.Metadata["_minato_cli_session"].(bool); session &&
+			(index < 0 || owner.Members[index].Role == "internal_user_viewer") {
+			return nil, permissions, false
+		}
+		if index >= 0 {
 			scope = intersectScopes(scope, unrestrictedScope(owner.Members[index].Models))
 		}
 		orgID = owner.OrgID

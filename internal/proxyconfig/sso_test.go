@@ -173,6 +173,29 @@ func TestCLISSORequiresConfirmationAndConsumesTeamKeyOnce(t *testing.T) {
 	if out := poll(pollPath, "poll-secret"); out.Code != http.StatusNotFound {
 		t.Fatal("CLI login could be redeemed again")
 	}
+	handler := registry.Handler(http.NotFoundHandler())
+	for _, route := range []struct {
+		path   string
+		status int
+	}{
+		{"/user/info", http.StatusOK},
+		{"/user/info?user_id=other", http.StatusForbidden},
+		{"/team/list", http.StatusOK},
+		{"/team/info?team_id=team-a", http.StatusOK},
+		{"/team/info?team_id=private", http.StatusNotFound},
+	} {
+		request := httptest.NewRequest(http.MethodGet, route.path, nil)
+		request.Header.Set("Authorization", "Bearer "+result.Key)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != route.status {
+			t.Fatalf("%s returned %d: %s", route.path, response.Code, response.Body)
+		}
+	}
+	registry.state.Teams["team-a"] = team{ID: "team-a", Models: []string{"approved"}}
+	if _, allowed := registry.Authorize(result.Key); allowed {
+		t.Fatal("the CLI key survived membership removal")
+	}
 }
 
 func TestSSOProvisioningStoresUserAndDefaultTeamsAtomically(t *testing.T) {

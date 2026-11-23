@@ -173,7 +173,9 @@ func (registry *KeyRegistry) saveTeam(w http.ResponseWriter, current team) {
 }
 
 func (registry *KeyRegistry) teamInfo(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
+	caller, ok := registry.identifyResourceCaller(r)
+	if !ok || (!caller.admin && caller.user == "") {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
 	id := r.URL.Query().Get("team_id")
@@ -183,10 +185,15 @@ func (registry *KeyRegistry) teamInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	registry.mu.RLock()
 	current, exists := registry.state.Teams[id]
+	if !caller.admin && memberIndex(current, caller.user) < 0 {
+		registry.mu.RUnlock()
+		modelError(w, http.StatusNotFound, "Team not found")
+		return
+	}
 	keys := make([]virtualKey, 0)
 	now := time.Now()
 	for _, key := range registry.state.Keys {
-		if key.TeamID == id && (key.Expires == nil || now.Before(*key.Expires)) {
+		if key.TeamID == id && (caller.admin || key.UserID == caller.user) && (key.Expires == nil || now.Before(*key.Expires)) {
 			keys = append(keys, key)
 		}
 	}
@@ -201,10 +208,19 @@ func (registry *KeyRegistry) teamInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (registry *KeyRegistry) listTeams(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
+	caller, ok := registry.identifyResourceCaller(r)
+	if !ok || (!caller.admin && caller.user == "") {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
 	userID := r.URL.Query().Get("user_id")
+	if !caller.admin {
+		if userID != "" && userID != caller.user {
+			modelError(w, http.StatusForbidden, "Team list is outside the key's user scope")
+			return
+		}
+		userID = caller.user
+	}
 	orgID := r.URL.Query().Get("organization_id")
 	registry.mu.RLock()
 	teams := make([]team, 0, len(registry.state.Teams))

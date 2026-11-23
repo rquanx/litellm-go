@@ -120,10 +120,19 @@ func (registry *KeyRegistry) writeUser(w http.ResponseWriter, r *http.Request, u
 }
 
 func (registry *KeyRegistry) userInfo(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
+	caller, ok := registry.identifyResourceCaller(r)
+	if !ok || (!caller.admin && caller.user == "") {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
 	id := r.URL.Query().Get("user_id")
+	if !caller.admin {
+		if id != "" && id != caller.user {
+			modelError(w, http.StatusForbidden, "User information is outside the key's scope")
+			return
+		}
+		id = caller.user
+	}
 	if id == "" {
 		modelError(w, http.StatusUnprocessableEntity, "Supply a user ID")
 		return

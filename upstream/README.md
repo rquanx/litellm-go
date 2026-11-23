@@ -142,6 +142,8 @@ The CLI SSO fixture verifies pending polling, browser code confirmation, polling
 
 With `litellm_settings.default_internal_user_params.user_role: internal_user`, a verified new SSO identity can provision an account with configured model scopes and team memberships. The fixture verifies that a missing team leaves the account and memberships uncommitted. Dynamic identity-provider group mappings remain open.
 
+User-bound keys can read their own user record and teams where the user is a member. Team detail responses limit key records to that user. Removing a team membership invalidates CLI SSO keys issued for that team.
+
 Both UI discovery aliases matched the Python defaults. The eval creation fixture matched object, timestamp, name, criteria and data source. Go fixtures also verify run cancellation, file ID and cursor translation, and model-scope enforcement.
 
 The Go polling fixture checks the queued response, an intermediate text delta, final usage, owner isolation and deletion while using the normal inference stream processing.
