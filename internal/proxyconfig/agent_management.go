@@ -109,6 +109,9 @@ func WithAgentManagement(next http.Handler, server *runtime.Server, config Confi
 				if next.Parameters == nil {
 					next.Parameters = changed.Parameters
 				}
+				if next.AccessGroups == nil {
+					next.AccessGroups = changed.AccessGroups
+				}
 				if next.ExtraHeaders == nil {
 					next.ExtraHeaders = changed.ExtraHeaders
 				}

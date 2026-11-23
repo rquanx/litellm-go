@@ -114,6 +114,8 @@ func (registry *KeyRegistry) AuthorizeMCP(token string) (runtime.MCPAccess, bool
 }
 
 type objectPermission struct {
+	Agents []string `json:"agents,omitempty"`
+	AgentGroups []string `json:"agent_access_groups,omitempty"`
 	SearchTools []string `json:"search_tools,omitempty"`
 	MCPServers []string `json:"mcp_servers"`
 	MCPTools map[string][]string `json:"mcp_tool_permissions,omitempty"`

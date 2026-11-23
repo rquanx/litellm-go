@@ -18,6 +18,7 @@ type agentConfig struct {
 	Card         map[string]any    `yaml:"agent_card_params" json:"agent_card_params"`
 	Parameters   map[string]any    `yaml:"litellm_params" json:"litellm_params,omitempty"`
 	Headers      map[string]string `yaml:"static_headers" json:"static_headers,omitempty"`
+	AccessGroups []string          `yaml:"agent_access_groups" json:"agent_access_groups,omitempty"`
 	ExtraHeaders []string          `yaml:"extra_headers" json:"extra_headers,omitempty"`
 }
 
@@ -59,7 +60,30 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 			headers.Set(name, resolved)
 		}
 		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: address.String(), Card: entry.Card, Headers: headers,
-			ExtraHeaders: entry.ExtraHeaders, Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
+			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
 	}
 	return agents, nil
+}
+
+func (registry *KeyRegistry) AuthorizeAgent(token string) func(runtime.Agent) bool {
+	_, permissions, valid := registry.authorize(token)
+	if !valid {
+		return nil
+	}
+	scopes := []*objectPermission{permissions.key, permissions.team, permissions.project}
+	return func(agent runtime.Agent) bool {
+		restricted := false
+		for _, permission := range scopes {
+			if permission == nil || len(permission.Agents)+len(permission.AgentGroups) == 0 {
+				continue
+			}
+			restricted = true
+			if !slices.Contains(permission.Agents, agent.ID) &&
+				!slices.Contains(permission.Agents, agent.Name) &&
+				!slices.ContainsFunc(agent.AccessGroups, func(group string) bool { return slices.Contains(permission.AgentGroups, group) }) {
+				return false
+			}
+		}
+		return restricted || agent.Public
+	}
 }

@@ -35,6 +35,7 @@ type Config struct {
 	AuthorizeKey       func(string) ([]string, bool)
 	CustomerPolicy     func(context.Context, string) (CustomerPolicy, error)
 	AuthorizeSearch    func(string) ([]string, bool)
+	AuthorizeAgent func(string) func(Agent) bool
 	AuthorizeMCP       func(string) (MCPAccess, bool)
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
 	ResourceOwnerScopes func(string) []string

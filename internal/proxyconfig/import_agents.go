@@ -49,10 +49,10 @@ func ImportLiteLLMAgents(db *sql.DB, config Config) (int, error) {
 		if json.Unmarshal(raw, &item) != nil || item.ID == "" || item.Name == "" {
 			return 0, errors.New("invalid LiteLLM agent record")
 		}
-		if item.Permission != "" || len(item.AccessGroups) != 0 || item.TPM != nil || item.RPM != nil || item.SessionTPM != nil || item.SessionRPM != nil {
+		if item.Permission != "" || item.TPM != nil || item.RPM != nil || item.SessionTPM != nil || item.SessionRPM != nil {
 			return 0, fmt.Errorf("agent %q uses unsupported delegated permissions or rate limits", item.Name)
 		}
-		agent := agentConfig{ID: item.ID, Name: item.Name, ExtraHeaders: item.Extra}
+		agent := agentConfig{ID: item.ID, Name: item.Name, ExtraHeaders: item.Extra, AccessGroups: item.AccessGroups}
 		if decodeLiteLLMSearchField(item.Card, &agent.Card) != nil || decodeLiteLLMSearchField(item.Params, &agent.Parameters) != nil ||
 			decodeLiteLLMSearchField(item.Headers, &agent.Headers) != nil {
 			return 0, fmt.Errorf("agent %q has incompatible configuration", item.Name)

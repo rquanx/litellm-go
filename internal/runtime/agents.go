@@ -17,6 +17,7 @@ type Agent struct {
 	Card          map[string]any
 	Headers       http.Header
 	ExtraHeaders  []string
+	AccessGroups  []string
 	Public        bool
 }
 
@@ -74,7 +75,19 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) bool {
 			return true
 		}
 	}
-	allowed := func(agent Agent) bool { return master || agent.Public }
+	var granted func(Agent) bool
+	if !master && s.config.AuthorizeAgent != nil {
+		granted = s.config.AuthorizeAgent(ProxyCredential(r))
+	}
+	allowed := func(agent Agent) bool {
+		if master {
+			return true
+		}
+		if granted != nil {
+			return granted(agent)
+		}
+		return agent.Public
+	}
 	describe := func(agent Agent) map[string]any {
 		return map[string]any{"agent_id": agent.ID, "agent_name": agent.Name, "agent_card_params": agentCard(r, agent, agent.ID),
 			"litellm_params": map[string]bool{"is_public": agent.Public}}

@@ -185,6 +185,7 @@ func main() {
 		}
 		config.AuthorizeKey = keys.Authorize
 		config.AuthorizeSearch = keys.AuthorizeSearch
+		config.AuthorizeAgent = keys.AuthorizeAgent
 		config.AuthorizeMCP = keys.AuthorizeMCP
 		config.AuthorizeMCPToolset = keys.AuthorizeMCPToolset
 		config.ResourceOwnerScopes = keys.ContainerOwnerScopes

@@ -150,3 +150,25 @@ func TestPostgresImportsLiteLLMAgents(t *testing.T) {
 		t.Fatalf("could not restore imported agent: %v", err)
 	}
 }
+
+func TestAgentGrantsAllowPrivateGroup(t *testing.T) {
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Keys[keyDigest("scoped")] = virtualKey{ObjectPermission: &objectPermission{AgentGroups: []string{"group"}}}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", AuthorizeKey: keys.Authorize,
+		AuthorizeAgent: keys.AuthorizeAgent, Agents: []runtime.Agent{
+			{ID: "private", Name: "private", Card: map[string]any{"name": "private"}, AccessGroups: []string{"group"}},
+			{ID: "public", Name: "public", Card: map[string]any{"name": "public"}, Public: true},
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/v1/agents", nil)
+	request.Header.Set("Authorization", "Bearer scoped")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"agent_id":"private"`) ||
+		strings.Contains(result.Body.String(), `"agent_id":"public"`) {
+		t.Fatalf("wrong agent list %d %s", result.Code, result.Body)
+	}
+}
