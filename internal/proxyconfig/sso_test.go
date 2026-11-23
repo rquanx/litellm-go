@@ -3,11 +3,14 @@ package proxyconfig
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -101,4 +104,73 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 		return
 	}
 	t.Fatal("missing UI session cookie")
+}
+
+func TestCLISSORequiresConfirmationAndConsumesTeamKeyOnce(t *testing.T) {
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.state.Users = map[string]internalUser{"user": {ID: "user", Email: "login@example.invalid", Role: "internal_user"}}
+	registry.state.Teams["team-a"] = team{ID: "team-a", Models: []string{"approved"}, Members: []teamMembership{{UserID: "user", Role: "user"}}}
+	registry.state.Teams["team-b"] = team{ID: "team-b", Models: []string{"other"}, Members: []teamMembership{{UserID: "user", Role: "user"}}}
+	base, _ := url.Parse("https://minato.example.invalid")
+	server := &uiSSOServer{keys: registry, config: uiSSOConfig{base: base}, cli: map[string]*cliSSOFlow{
+		"login": {expires: time.Now().Add(time.Minute), pollHash: keyDigest("poll-secret"), codeHash: keyDigest("1234ABCD")},
+	}}
+	const pollPath = "/sso/cli/poll/login"
+	const completePath = "/sso/cli/complete/login"
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sso/cli/complete/{login_id}", server.completeCLI)
+	mux.HandleFunc("GET /sso/cli/poll/{login_id}", server.pollCLI)
+	poll := func(path, secret string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("X-Litellm-CLI-Poll-Secret", secret)
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	if out := poll(pollPath, "wrong"); out.Code != http.StatusForbidden {
+		t.Fatalf("unexpected invalid poll response: %d %s", out.Code, out.Body)
+	}
+	if out := poll(pollPath, "poll-secret"); out.Code != http.StatusOK || !strings.Contains(out.Body.String(), `"status":"pending"`) {
+		t.Fatalf("unexpected pending response: %d %s", out.Code, out.Body)
+	}
+	page := httptest.NewRecorder()
+	server.renderCLIConfirmation(page, "login", ssoIdentity{Subject: "subject", Email: "login@example.invalid", Verified: true})
+	match := regexp.MustCompile(`name="browser_complete_token" value="([^"]+)"`).FindStringSubmatch(page.Body.String())
+	if len(match) != 2 || page.Code != http.StatusOK {
+		t.Fatalf("verification form unavailable: %d %s", page.Code, page.Body)
+	}
+	complete := func(code, token string) int {
+		form := url.Values{"user_code": {code}, "browser_complete_token": {token}}
+		r := httptest.NewRequest(http.MethodPost, completePath, strings.NewReader(form.Encode()))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w.Code
+	}
+	if complete("1234-abcd", "wrong") != http.StatusBadRequest || complete("1234-abcd", match[1]) != http.StatusOK {
+		t.Fatal("CLI confirmation did not require both verification values")
+	}
+	if out := poll(pollPath, "poll-secret"); !strings.Contains(out.Body.String(), `"requires_team_selection":true`) {
+		t.Fatalf("team selection was skipped: %s", out.Body)
+	}
+	if out := poll(pollPath+"?team_id=denied", "poll-secret"); out.Code != http.StatusForbidden {
+		t.Fatalf("unknown team was accepted: %s", out.Body)
+	}
+	out := poll(pollPath+"?team_id=team-a", "poll-secret")
+	var result struct {
+		Key string `json:"key"`
+	}
+	if out.Code != http.StatusOK || json.Unmarshal(out.Body.Bytes(), &result) != nil || result.Key == "" {
+		t.Fatalf("team key unavailable: %d %s", out.Code, out.Body)
+	}
+	scope, allowed := registry.Authorize(result.Key)
+	if !allowed || len(scope) != 1 || scope[0] != "approved" {
+		t.Fatalf("invalid team key scope: %v", scope)
+	}
+	if out := poll(pollPath, "poll-secret"); out.Code != http.StatusNotFound {
+		t.Fatal("CLI login could be redeemed again")
+	}
 }

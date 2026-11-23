@@ -22,18 +22,23 @@ type uiSSOServer struct {
 	config uiSSOConfig
 	mu     sync.Mutex
 	flows  map[string]uiSSOFlow
+	cli    map[string]*cliSSOFlow
 }
 
 type uiSSOFlow struct {
 	verifier string
 	expires  time.Time
+	cliID    string
 }
 
 func (registry *KeyRegistry) registerUISSO(mux *http.ServeMux) {
-	server := &uiSSOServer{keys: registry, config: loadUISSOConfig(), flows: make(map[string]uiSSOFlow)}
+	server := &uiSSOServer{keys: registry, config: loadUISSOConfig(), flows: make(map[string]uiSSOFlow), cli: make(map[string]*cliSSOFlow)}
 	mux.HandleFunc("GET /sso/key/generate", server.start)
 	mux.HandleFunc("GET /sso/callback", server.callback)
 	mux.HandleFunc("GET /sso/readiness", server.readiness)
+	mux.HandleFunc("POST /sso/cli/start", server.startCLI)
+	mux.HandleFunc("POST /sso/cli/complete/{login_id}", server.completeCLI)
+	mux.HandleFunc("GET /sso/cli/poll/{login_id}", server.pollCLI)
 	mux.HandleFunc("GET /sso/get/ui_settings", server.settings)
 	if server.config.ready() {
 		for _, path := range []string{"/.well-known/litellm-ui-config", "/litellm/.well-known/litellm-ui-config"} {
@@ -64,7 +69,17 @@ func (s *uiSSOServer) start(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusServiceUnavailable, "Too many pending SSO attempts")
 		return
 	}
-	s.flows[state] = uiSSOFlow{verifier: verifier, expires: now.Add(uiSSOFlowTTL)}
+	var cliID string
+	if r.URL.Query().Get("source") == "litellm-cli" {
+		cliID = r.URL.Query().Get("key")
+		flow := s.cli[cliID]
+		if flow == nil || !flow.expires.After(now) || flow.browserTokenHash != "" {
+			s.mu.Unlock()
+			modelError(w, http.StatusNotFound, "Unknown or completed CLI login")
+			return
+		}
+	}
+	s.flows[state] = uiSSOFlow{verifier: verifier, expires: now.Add(uiSSOFlowTTL), cliID: cliID}
 	s.mu.Unlock()
 
 	w.Header().Set("Cache-Control", "no-store")
@@ -124,16 +139,17 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
-	var identity struct {
-		Subject  string `json:"sub"`
-		Email    string `json:"email"`
-		Verified bool   `json:"email_verified"`
-	}
+	var identity ssoIdentity
 	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&identity) != nil || identity.Subject == "" {
 		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
 		return
 	}
-	session, expires, ok := s.issueSession(w, identity.Subject, strings.TrimSpace(identity.Email), identity.Verified)
+	identity.Email = strings.TrimSpace(identity.Email)
+	if flow.cliID != "" {
+		s.renderCLIConfirmation(w, flow.cliID, identity)
+		return
+	}
+	session, expires, ok := s.issueSession(w, identity.Subject, identity.Email, identity.Verified)
 	if !ok {
 		return
 	}
@@ -145,9 +161,8 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, dashboard.String(), http.StatusSeeOther)
 }
 
-func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string, verified bool) (string, time.Time, bool) {
-	s.keys.mu.Lock()
-	defer s.keys.mu.Unlock()
+// resolveUserLocked matches a provider identity to a preprovisioned user.
+func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email string, verified bool) (internalUser, bool, string) {
 	var user internalUser
 	var bound bool
 	binding := s.config.provider + "|" + s.config.ClientID + "|" + s.config.userInfo
@@ -158,7 +173,7 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string,
 		if id == subject {
 			if bound {
 				modelError(w, http.StatusForbidden, "SSO subject has ambiguous user bindings")
-				return "", time.Time{}, false
+				return internalUser{}, false, ""
 			}
 			user, bound = candidate, true
 		}
@@ -168,9 +183,18 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string,
 	}
 	if user.ID == "" || user.Role != "internal_user" {
 		modelError(w, http.StatusForbidden, "SSO identity has no active internal user")
+		return internalUser{}, false, ""
+	}
+	return user, bound, binding
+}
+
+func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string, verified bool) (string, time.Time, bool) {
+	s.keys.mu.Lock()
+	defer s.keys.mu.Unlock()
+	user, bound, binding := s.resolveUserLocked(w, subject, email, verified)
+	if user.ID == "" {
 		return "", time.Time{}, false
 	}
-
 	now := time.Now().UTC()
 	expires := now.Add(24 * time.Hour)
 	token := newKeyToken()
