@@ -11,7 +11,15 @@ import (
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
+func LegacyVectorStoreLookup(db *sql.DB) runtime.LegacyFileLookup {
+	return legacyResourceLookup(db, `"LiteLLM_ManagedVectorStoreTable"`, "unified_resource_id")
+}
+
 func LegacyFileLookup(db *sql.DB) runtime.LegacyFileLookup {
+	return legacyResourceLookup(db, `"LiteLLM_ManagedFileTable"`, "unified_file_id")
+}
+
+func legacyResourceLookup(db *sql.DB, table, idColumn string) runtime.LegacyFileLookup {
 	return func(ctx context.Context, id string, owners []string, master bool) (map[string]string, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
@@ -29,8 +37,8 @@ func LegacyFileLookup(db *sql.DB) runtime.LegacyFileLookup {
 			return nil, nil
 		}
 		var data []byte
-		err := db.QueryRowContext(ctx, `SELECT model_mappings FROM "LiteLLM_ManagedFileTable"
-			WHERE unified_file_id=$1 AND (storage_backend IS NULL OR storage_backend IN ('','default'))
+		err := db.QueryRowContext(ctx, `SELECT model_mappings FROM `+table+`
+			WHERE `+idColumn+`=$1 AND (storage_backend IS NULL OR storage_backend IN ('','default'))
 			AND ($2 OR created_by = ANY($3) OR (created_by IS NULL AND team_id = ANY($4)))`,
 			id, master, pq.Array(users), pq.Array(teams)).Scan(&data)
 		if err != nil {

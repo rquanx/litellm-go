@@ -149,7 +149,7 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 			_ = writeSocketError(ctx, client, http.StatusForbidden, "The key cannot use this WebSocket session")
 			return
 		}
-		event, ids, err := prepareSocketEvent(kind, data, alias, candidate)
+		event, ids, err := s.prepareSocketEvent(request.WithContext(ctx), kind, data, alias, candidate)
 		if err != nil {
 			if writeSocketError(ctx, client, http.StatusBadRequest, err.Error()) != nil {
 				return
@@ -168,7 +168,7 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 	}
 }
 
-func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, candidate Candidate) ([]byte, []string, error) {
+func (s *Server) prepareSocketEvent(request *http.Request, kind websocket.MessageType, data []byte, alias string, candidate Candidate) ([]byte, []string, error) {
 	event, err := parseSocketEvent(kind, data, alias)
 	if err != nil {
 		return nil, nil, err
@@ -184,7 +184,8 @@ func prepareSocketEvent(kind websocket.MessageType, data []byte, alias string, c
 			event["previous_response_id"] = original
 		}
 	}
-	if err := rewriteResponseVectorStores(event, &deployment); err != nil {
+	// The session has already authorized the fixed alias and deployment.
+	if err := s.rewriteResponseVectorStores(request, event, alias, nil, &deployment); err != nil {
 		return nil, nil, err
 	}
 	ids, err := rewriteResponseContainers(event, &deployment)

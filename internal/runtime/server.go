@@ -39,6 +39,7 @@ type Config struct {
 	ResourceOwnerScopes func(string) []string
 	ContainerOwners     ContainerOwners
 	LegacyFiles         LegacyFileLookup
+	LegacyVectorStores  LegacyFileLookup
 	ResponsePolling     ResponsePollingConfig
 	PollingStore        PollingStore
 	InferenceCache      InferenceCacheConfig
@@ -558,7 +559,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		} else {
 			provider, deployment = "", ""
 		}
-		if err := rewriteResponseVectorStores(input, &deployment); err != nil {
+		if err := s.rewriteResponseVectorStores(request, input, route.Alias, modelScope, &deployment); err != nil {
 			writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}

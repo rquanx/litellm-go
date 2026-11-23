@@ -92,6 +92,7 @@ func main() {
 		defer stateDB.Close()
 		config.DatabasePing = stateDB.PingContext
 		config.LegacyFiles = proxyconfig.LegacyFileLookup(stateDB)
+		config.LegacyVectorStores = proxyconfig.LegacyVectorStoreLookup(stateDB)
 	}
 	importCount := 0
 	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend} {

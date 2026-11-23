@@ -21,23 +21,31 @@ func TestLegacyFilesReadOwnerAndDeploymentMappings(t *testing.T) {
 		unified_file_id TEXT PRIMARY KEY, storage_backend TEXT, created_by TEXT, team_id TEXT, model_mappings JSONB);
 		INSERT INTO "LiteLLM_ManagedFileTable" VALUES
 			('fixture',NULL,'owner','team','{"deployment":"file-native"}'),
-			('team-fixture','default',NULL,'team','{"deployment":"file-team"}');`)
+			('team-fixture','default',NULL,'team','{"deployment":"file-team"}');
+		CREATE TEMP TABLE "LiteLLM_ManagedVectorStoreTable" (
+			unified_resource_id TEXT PRIMARY KEY, storage_backend TEXT, created_by TEXT, team_id TEXT, model_mappings JSONB);
+		INSERT INTO "LiteLLM_ManagedVectorStoreTable" VALUES
+			('fixture',NULL,'owner','team','{"deployment":"vs-native"}'),
+			('team-fixture','default',NULL,'team','{"deployment":"vs-team"}');`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lookup := LegacyFileLookup(db)
-	for _, test := range []struct{ key, owner, expected string }{
-		{"fixture", "user:owner", "file-native"},
-		{"fixture", "team:team", ""},
-		{"team-fixture", "team:team", "file-team"},
-	} {
-		found, err := lookup(context.Background(), test.key, []string{test.owner}, false)
-		if test.expected == "" {
-			if len(found) > 0 {
-				t.Fatal("unauthorized mapping was returned")
+	for _, resource := range []struct {
+		lookup func(context.Context, string, []string, bool) (map[string]string, error)
+		prefix string
+	}{{LegacyFileLookup(db), "file-"}, {LegacyVectorStoreLookup(db), "vs-"}} {
+		for _, test := range []struct{ key, owner, expected string }{
+			{"fixture", "user:owner", resource.prefix + "native"},
+			{"fixture", "team:team", ""},
+			{"team-fixture", "team:team", resource.prefix + "team"},
+		} {
+			found, err := resource.lookup(context.Background(), test.key, []string{test.owner}, false)
+			if len(found) > 0 && test.expected == "" {
+				t.Fatalf("unauthorized %s mapping was returned", resource.prefix)
 			}
-		} else if err != nil || found["deployment"] != test.expected {
-			t.Fatalf("expected mapping for %s, got %v: %v", test.key, found, err)
+			if test.expected != "" && (err != nil || found["deployment"] != test.expected) {
+				t.Fatalf("expected %s for %s, got %v: %v", test.expected, test.key, found, err)
+			}
 		}
 	}
 }

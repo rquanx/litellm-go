@@ -130,6 +130,43 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		body, _ = json.Marshal(fields)
 		contentType = "application/json"
 	}
+	escapedID, suffix, _ := strings.Cut(strings.TrimPrefix(path, vectorStorePath+"/"), "/")
+	id, _ := url.PathUnescape(escapedID)
+	if isLegacyVectorStore(id) {
+		if !(request.Method == http.MethodGet && suffix == "") && family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Managed vector stores support retrieval and search")
+			return
+		}
+		candidate, original, ok := s.resolveLegacyVectorStore(request, id, alias, deployment, scope)
+		if !ok || (provider != "" && provider != candidate.Provider) {
+			writeError(w, http.StatusNotFound, "resource_not_found", "Unknown managed vector store")
+			return
+		}
+		path = vectorStorePath + "/" + url.PathEscape(original)
+		if suffix != "" {
+			path += "/" + suffix
+		}
+		if candidate.Provider == "gemini" {
+			s.geminiVectorStore(w, request, candidate, family, path, fields)
+			return
+		}
+		if family == "vector_stores" {
+			s.forwardResource(w, request, candidate, family, path, contentType, body, func(data []byte) ([]byte, error) {
+				var result map[string]any
+				if err := json.Unmarshal(data, &result); err != nil {
+					return nil, err
+				}
+				if result == nil {
+					return nil, errors.New("expected a vector store object")
+				}
+				result["id"] = id
+				return json.Marshal(result)
+			})
+			return
+		}
+		s.forwardOpenAIResource(w, request, candidate, family, path, contentType, body)
+		return
+	}
 	if provider == "gemini" {
 		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
 			s.geminiVectorStore(w, request, candidate, family, path, fields)
@@ -203,8 +240,14 @@ func rewriteVectorStoreFiles(fields map[string]any, deployment *string) error {
 	return nil
 }
 
-func rewriteResponseVectorStores(fields map[string]any, deployment *string) error {
+func (s *Server) rewriteResponseVectorStores(r *http.Request, fields map[string]any, alias string, scope []string, deployment *string) error {
 	tools, _ := fields["tools"].([]any)
+	type reference struct {
+		stores []any
+		index  int
+		id     string
+	}
+	var legacy []reference
 	for _, tool := range tools {
 		value, _ := tool.(map[string]any)
 		if value["type"] != "file_search" {
@@ -213,15 +256,25 @@ func rewriteResponseVectorStores(fields map[string]any, deployment *string) erro
 		stores, _ := value["vector_store_ids"].([]any)
 		for index, store := range stores {
 			id, _ := store.(string)
-			if !strings.HasPrefix(id, "minato_") {
-				continue
+			switch {
+			case strings.HasPrefix(id, "minato_"):
+				original, err := nativeResourceID(id, "vector_stores", deployment)
+				if err != nil {
+					return err
+				}
+				stores[index] = original
+			case isLegacyVectorStore(id):
+				legacy = append(legacy, reference{stores, index, id})
 			}
-			original, err := nativeResourceID(id, "vector_stores", deployment)
-			if err != nil {
-				return err
-			}
-			stores[index] = original
 		}
+	}
+	for _, ref := range legacy {
+		candidate, original, ok := s.resolveLegacyVectorStore(r, ref.id, alias, *deployment, scope)
+		if !ok || candidate.Endpoint != "responses" {
+			return errors.New("unknown or mismatched managed vector store")
+		}
+		*deployment = candidate.DeploymentID
+		ref.stores[ref.index] = original
 	}
 	return nil
 }

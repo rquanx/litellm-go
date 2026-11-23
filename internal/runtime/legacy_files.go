@@ -23,8 +23,24 @@ func isLegacyManagedFile(value string) bool {
 	return false
 }
 
+func isLegacyVectorStore(value string) bool {
+	if len(value) > 8192 {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(value, "="))
+	return err == nil && strings.HasPrefix(string(raw), "litellm_proxy:vector_store;unified_id,")
+}
+
+func (s *Server) resolveLegacyVectorStore(r *http.Request, id, alias, deployment string, scope []string) (Candidate, string, bool) {
+	return s.resolveLegacyMapping(r, id, alias, deployment, scope, s.config.LegacyVectorStores, true)
+}
+
 func (s *Server) resolveLegacyFile(r *http.Request, id, alias string, scope []string) (Candidate, string, bool) {
-	if s.config.LegacyFiles == nil {
+	return s.resolveLegacyMapping(r, id, alias, "", scope, s.config.LegacyFiles, false)
+}
+
+func (s *Server) resolveLegacyMapping(r *http.Request, id, alias, deployment string, scope []string, lookup LegacyFileLookup, vector bool) (Candidate, string, bool) {
+	if lookup == nil {
 		return Candidate{}, "", false
 	}
 	var owners []string
@@ -35,7 +51,7 @@ func (s *Server) resolveLegacyFile(r *http.Request, id, alias string, scope []st
 	if !master && len(owners) == 0 {
 		return Candidate{}, "", false
 	}
-	mappings, err := s.config.LegacyFiles(r.Context(), id, owners, master)
+	mappings, err := lookup(r.Context(), id, owners, master)
 	if err != nil || len(mappings) == 0 {
 		return Candidate{}, "", false
 	}
@@ -48,18 +64,21 @@ func (s *Server) resolveLegacyFile(r *http.Request, id, alias string, scope []st
 			continue
 		}
 		for _, candidate := range route.Candidates {
-			if candidate.DeploymentID == "" || !candidateAllowed(scope, candidate) ||
-				(candidate.Provider != "openai" && candidate.Provider != "azure") {
+			if candidate.DeploymentID == "" || (deployment != "" && deployment != candidate.DeploymentID) || !candidateAllowed(scope, candidate) ||
+				(candidate.Provider != "openai" && candidate.Provider != "azure" && (!vector || candidate.Provider != "gemini")) {
 				continue
 			}
 			value := mappings[candidate.DeploymentID]
 			if value == "" && alias != "" && len(route.Candidates) == 1 {
 				value = mappings[name]
 			}
+			if vector && candidate.Provider == "gemini" {
+				value = strings.TrimPrefix(value, geminiStorePrefix)
+			}
 			if !validResourceSegment(value) {
 				continue
 			}
-			if selected.DeploymentID != "" && selected.DeploymentID != candidate.DeploymentID {
+			if selected.DeploymentID != "" && (selected.DeploymentID != candidate.DeploymentID || original != value) {
 				return Candidate{}, "", false
 			}
 			selected, original = candidate, value

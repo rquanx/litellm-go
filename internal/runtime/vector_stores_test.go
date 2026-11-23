@@ -1,13 +1,89 @@
 package runtime
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestLegacyVectorStoreUsesAuthorizedDatabaseMapping(t *testing.T) {
+	id := base64.RawURLEncoding.EncodeToString([]byte("litellm_proxy:vector_store;unified_id,fixture;resource_id,vs-untrusted"))
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		switch r.URL.Path {
+		case "/v1/vector_stores/vs-native":
+			io.WriteString(w, `{"id":"vs-native","object":"vector_store"}`)
+		case "/v1/vector_stores/vs-native/search":
+			io.WriteString(w, `{"data":[]}`)
+		case "/v1/responses":
+			data, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(data), `"vector_store_ids":["vs-native"]`) {
+				t.Errorf("unexpected Responses body %s", data)
+			}
+			io.WriteString(w, `{"id":"resp-fixture","object":"response"}`)
+		default:
+			t.Errorf("unexpected upstream path %q", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{
+		AuthorizeInference: true,
+		Token:              "master",
+		AuthorizeKey: func(key string) ([]string, bool) {
+			if key == "restricted" {
+				return []string{"other"}, true
+			}
+			return nil, key == "owner" || key == "other"
+		},
+		ResourceOwnerScopes: func(key string) []string { return []string{"user:" + key} },
+		LegacyVectorStores: func(_ context.Context, requested string, owners []string, master bool) (map[string]string, error) {
+			owned := len(owners) == 1 && (owners[0] == "user:owner" || owners[0] == "user:restricted")
+			if requested != id || (!master && !owned) {
+				return nil, nil
+			}
+			return map[string]string{"vector": "vs-native"}, nil
+		},
+		Routes: []Route{{Alias: "vector", Candidates: []Candidate{
+			{Provider: "openai", DeploymentID: "vector", APIBase: upstream.URL, Endpoint: "responses"},
+		}}},
+	})
+	path := "/v1/vector_stores/" + id
+	response := `{"model":"vector","tools":[{"type":"file_search","vector_store_ids":["` + id + `"]}]}`
+	for _, fixture := range []struct {
+		method, path, token, body string
+		status                    int
+	}{
+		{"GET", path, "owner", "", 200},
+		{"GET", path, "other", "", 404},
+		{"GET", path, "restricted", "", 404},
+		{"POST", path + "/search", "owner", `{"query":"example"}`, 200},
+		{"DELETE", path, "owner", "", 400},
+		{"POST", "/v1/responses", "other", response, 400},
+		{"POST", "/v1/responses", "owner", response, 200},
+	} {
+		r := httptest.NewRequest(fixture.method, fixture.path, strings.NewReader(fixture.body))
+		r.Header.Set("Authorization", "Bearer "+fixture.token)
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if w.Code != fixture.status {
+			t.Fatalf("%s %s as %s: got %d, want %d: %s", fixture.method, fixture.path, fixture.token, w.Code, fixture.status, w.Body)
+		}
+		if fixture.method == "GET" && w.Code == 200 && !strings.Contains(w.Body.String(), id) {
+			t.Fatal("retrieval changed the managed vector store ID")
+		}
+	}
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("upstream requests = %d, want 3", got)
+	}
+}
 
 func TestVectorStoreRequestsKeepFileAndStoreAffinity(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
