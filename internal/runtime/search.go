@@ -177,7 +177,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 			}
 			plan.remaining = plan.retries
 		}
-		if !plan.advance(r.Context(), status, headers, retryableStatus(status), len(tools)) {
+		if !plan.advanceWithBackup(r.Context(), status, headers, retryableStatus(status), plan.index+1 < len(tools)) {
 			writeError(w, status, "search_provider_error", "Search provider request failed")
 			return
 		}

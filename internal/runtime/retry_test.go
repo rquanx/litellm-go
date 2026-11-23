@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,5 +30,20 @@ func TestRetrySameDeploymentBeforeFallback(t *testing.T) {
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK || result.Header().Get("X-Minato-Runtime-Attempts") != "2" || calls.Load() != 2 {
 		t.Fatalf("unexpected result after retry: %d %s", result.Code, result.Body.String())
+	}
+}
+
+func TestMaxFallbacksCountsGroupsRatherThanDeployments(t *testing.T) {
+	maxFallbacks:=1
+	plan:=attemptPlan{maxFallbacks:&maxFallbacks}
+	route:=Route{Candidates:[]Candidate{{RoutingGroup:"primary"},{RoutingGroup:"primary"},{RoutingGroup:"first"},{RoutingGroup:"second"}}}
+	ctx:=context.Background()
+	for _,want:=range []int{1,2}{
+		if !plan.next(ctx,http.StatusServiceUnavailable,nil,true,nil,&route,true)||plan.index!=want{
+			t.Fatalf("expected candidate %d, plan %+v",want,plan)
+		}
+	}
+	if plan.next(ctx,http.StatusServiceUnavailable,nil,true,nil,&route,true)||plan.index!=2||plan.fallbacks!=1{
+		t.Fatalf("maximum fallback count was not enforced: %+v",plan)
 	}
 }

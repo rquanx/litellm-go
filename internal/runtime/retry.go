@@ -51,18 +51,20 @@ type attemptPlan struct {
 	used      int
 	remaining int
 	specialized bool
+	maxFallbacks *int
+	fallbacks int
 	policy RetryPolicy
 	modelPolicy RetryPolicy
 }
 
 func (s *Server) attemptPlan(alias string) attemptPlan {
-	return attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries,
+	return attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries, maxFallbacks: s.config.MaxFallbacks,
 		policy: s.config.RetryPolicy, modelPolicy: s.config.ModelRetryPolicies[alias]}
 }
 
 func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Header, retryable bool, body []byte, route *Route, admitted bool) bool {
 	if !admitted {
-		return plan.advance(ctx, status, headers, retryable, len(route.Candidates))
+		return plan.advance(ctx, status, headers, retryable, route.Candidates)
 	}
 	kind := ""
 	if len(body) > 0 && !plan.specialized && route.Candidates[plan.index].RoutingGroup != "" {
@@ -75,9 +77,10 @@ func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Head
 			candidates = route.PolicyFallback
 		}
 		if candidates != nil {
-			if ctx.Err() != nil || len(candidates) == 0 {
+			if ctx.Err() != nil || len(candidates) == 0 || !plan.canFallback() {
 				return false
 			}
+			plan.fallbacks++
 			route.Candidates = candidates
 			plan.index = 0
 			plan.used = 0
@@ -96,15 +99,14 @@ func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Head
 				plan.used++
 				return true
 			}
-			if ctx.Err() != nil || plan.index+1 >= len(route.Candidates) {
+			if ctx.Err() != nil || !plan.canAdvance(route.Candidates) {
 				return false
 			}
-			plan.index++
-			plan.used = 0
+			plan.advanceIndex(route.Candidates)
 			return true
 		}
 	}
-	return plan.advance(ctx, status, headers, retryable, len(route.Candidates))
+	return plan.advance(ctx, status, headers, retryable, route.Candidates)
 }
 
 func specializedFailure(status int, body []byte) string {
@@ -153,11 +155,21 @@ func streamErrorBody(frame []byte) []byte {
 	return nil
 }
 
-func (plan *attemptPlan) advance(ctx context.Context, status int, headers http.Header, retryable bool, size int) bool {
+func (plan *attemptPlan) advance(ctx context.Context, status int, headers http.Header, retryable bool, candidates []Candidate) bool {
+	previous := plan.index
+	if !plan.advanceWithBackup(ctx, status, headers, retryable, plan.canAdvance(candidates)) {
+		return false
+	}
+	if plan.index != previous && differentFallbackGroup(candidates[previous], candidates[plan.index]) {
+		plan.fallbacks++
+	}
+	return true
+}
+
+func (plan *attemptPlan) advanceWithBackup(ctx context.Context, status int, headers http.Header, retryable, hasBackup bool) bool {
 	if !retryable || ctx.Err() != nil {
 		return false
 	}
-	hasBackup := plan.index+1 < size
 	if plan.remaining > 0 && plan.used < plan.retries && (status == 0 || retryableStatus(status)) &&
 		(status != http.StatusTooManyRequests || !hasBackup) {
 		if waitForRetry(ctx, headers, plan.used) {
@@ -204,4 +216,25 @@ func retryDelay(headers http.Header, used int) time.Duration {
 		return time.Until(when)
 	}
 	return min(500*time.Millisecond<<used, 8*time.Second)
+}
+
+func (plan *attemptPlan) canFallback() bool {
+	return plan.maxFallbacks == nil || plan.fallbacks < *plan.maxFallbacks
+}
+
+func (plan *attemptPlan) canAdvance(candidates []Candidate) bool {
+	return plan.index+1 < len(candidates) &&
+		(!differentFallbackGroup(candidates[plan.index], candidates[plan.index+1]) || plan.canFallback())
+}
+
+func (plan *attemptPlan) advanceIndex(candidates []Candidate) {
+	if differentFallbackGroup(candidates[plan.index], candidates[plan.index+1]) {
+		plan.fallbacks++
+	}
+	plan.index++
+	plan.used = 0
+}
+
+func differentFallbackGroup(from, to Candidate) bool {
+	return from.RoutingGroup != to.RoutingGroup
 }

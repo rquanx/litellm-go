@@ -31,6 +31,7 @@ type Config struct {
 	MaxBodyBytes       int64
 	MaxConcurrent      int
 	NumRetries         int
+	MaxFallbacks       *int
 	AuthorizeKey       func(string) ([]string, bool)
 	AuthorizeSearch    func(string) ([]string, bool)
 	AuthorizeMCP       func(string) (MCPAccess, bool)

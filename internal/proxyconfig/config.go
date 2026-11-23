@@ -61,6 +61,7 @@ type configFile struct {
 			Samples int `yaml:"max_latency_list_size"`
 		} `yaml:"routing_strategy_args"`
 		Timeout   int                  `yaml:"timeout"`
+		MaxFallbacks *int `yaml:"max_fallbacks"`
 		Retries   int                  `yaml:"num_retries"`
 		AllowedFails *int `yaml:"allowed_fails"`
 		CooldownTime *float64 `yaml:"cooldown_time"`
@@ -120,6 +121,7 @@ type Config struct {
 	MasterKey string
 	Timeout   time.Duration
 	NumRetries int
+	MaxFallbacks *int
 	RoutingStrategy string
 	EnableTagFiltering bool
 	TagsMatchAll bool
@@ -202,6 +204,9 @@ func Load(reader io.Reader) (Config, error) {
 	if file.Router.DisableCooldowns || (file.Router.AllowedFails == nil && file.Router.CooldownTime == nil) {
 		cooldownSeconds = 0
 	}
+	if file.Router.MaxFallbacks != nil && (*file.Router.MaxFallbacks < 0 || *file.Router.MaxFallbacks > 16) {
+		return Config{}, errors.New("invalid max_fallbacks")
+	}
 	if !file.Router.RetryPolicy.Valid() {
 		return Config{}, errors.New("invalid retry_policy")
 	}
@@ -210,7 +215,7 @@ func Load(reader io.Reader) (Config, error) {
 			return Config{}, errors.New("invalid model_group_retry_policy")
 		}
 	}
-	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries,
+	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries, MaxFallbacks: file.Router.MaxFallbacks,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,

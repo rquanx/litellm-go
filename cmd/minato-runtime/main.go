@@ -52,6 +52,7 @@ func main() {
 		config.SearchFallbacks = proxy.SearchFallbacks
 		config.PassThrough = proxy.PassThrough
 		config.NumRetries = proxy.NumRetries
+		config.MaxFallbacks = proxy.MaxFallbacks
 		config.RoutingStrategy = proxy.RoutingStrategy
 		config.EnableTagFiltering = proxy.EnableTagFiltering
 		config.TagsMatchAll = proxy.TagsMatchAll
