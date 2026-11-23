@@ -17,6 +17,7 @@ type GenericGuardrail struct {
 	Provider                string
 	Azure                   *AzureSafetyOptions
 	ModerationModel         string
+	Team                    string
 }
 
 type GuardrailPolicy struct {
@@ -64,9 +65,7 @@ func (s *Server) ReplaceGuardrails(guards []GenericGuardrail) {
 }
 
 func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model, endpoint string, input map[string]any, stream bool) (responseGuardrails, bool) {
-	s.mu.RLock()
-	guards := s.guardrails
-	s.mu.RUnlock()
+	guards := s.visibleGuardrails(r)
 	if len(guards) == 0 && s.config.ResolvePolicy == nil {
 		delete(input, "policies")
 		return responseGuardrails{}, true
@@ -149,6 +148,29 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	return plan, true
+}
+
+func (s *Server) visibleGuardrails(r *http.Request) []GenericGuardrail {
+	s.mu.RLock()
+	guards := s.guardrails
+	s.mu.RUnlock()
+	team := ""
+	for i, guard := range guards {
+		if guard.Team == "" {
+			continue
+		}
+		if s.config.GuardrailTeam != nil {
+			team = s.config.GuardrailTeam(r)
+		}
+		result := append([]GenericGuardrail{}, guards[:i]...)
+		for _, candidate := range guards[i:] {
+			if candidate.Team == "" || candidate.Team == team {
+				result = append(result, candidate)
+			}
+		}
+		return result
+	}
+	return guards
 }
 
 func writePolicyAttribution(headers http.Header, matches []GuardrailPolicyMatch) {

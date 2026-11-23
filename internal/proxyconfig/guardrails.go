@@ -10,6 +10,7 @@ import (
 )
 
 type genericGuardrailSpec struct {
+	Team   string `yaml:"-" json:"-"`
 	Name   string `yaml:"guardrail_name" json:"guardrail_name"`
 	Params struct {
 		Provider           string         `yaml:"guardrail" json:"guardrail"`
@@ -44,6 +45,10 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 	seen := make(map[string]bool)
 	for _, spec := range specs {
 		p := spec.Params
+		if spec.Team != "" && (p.Provider != "generic_guardrail_api" || p.APIBase == "" ||
+			strings.HasPrefix(p.APIBase, "os.environ/") || strings.HasPrefix(p.APIKey, "os.environ/")) {
+			return nil, errors.New("invalid team guardrail configuration")
+		}
 		if spec.Name == "" || seen[spec.Name] || !supportedGuardrailProvider(p.Provider) || (p.Mode != "pre_call" && p.Mode != "post_call") ||
 			(p.Provider == "azure/prompt_shield" && p.Mode != "pre_call") ||
 			(p.Fallback != "" && p.Fallback != "fail_open" && p.Fallback != "fail_closed") {
@@ -60,7 +65,7 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 		if err != nil {
 			return nil, err
 		}
-		if key == "" && p.Provider == "generic_guardrail_api" {
+		if key == "" && p.Provider == "generic_guardrail_api" && spec.Team == "" {
 			key = os.Getenv("GENERIC_GUARDRAIL_API_KEY")
 		}
 		if p.Provider == "openai_moderation" {
@@ -114,7 +119,7 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 		}
 		target.Path, target.RawPath = path, ""
 		result = append(result, runtime.GenericGuardrail{Name: spec.Name, URL: target.String(), APIKey: key,
-			Post: p.Mode == "post_call", Default: p.Default, FailOpen: p.Fallback == "fail_open", Parameters: p.Parameters, Provider: p.Provider, Azure: azure, ModerationModel: p.Model})
+			Post: p.Mode == "post_call", Default: p.Default, FailOpen: p.Fallback == "fail_open", Parameters: p.Parameters, Provider: p.Provider, Azure: azure, ModerationModel: p.Model, Team: spec.Team})
 		seen[spec.Name] = true
 	}
 	return result, nil

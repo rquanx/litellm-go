@@ -147,9 +147,7 @@ func (s *Server) testGuardrailPipeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "guardrail_pipeline_error", "Expected a valid pipeline and test messages")
 		return
 	}
-	s.mu.RLock()
-	guards := s.guardrails
-	s.mu.RUnlock()
+	guards := s.visibleGuardrails(r)
 	input := map[string]any{"messages": request.Messages, "model": "test"}
 	writeJSON(w, http.StatusOK, s.runPipeline(r, request.Pipeline, guards, "test", input))
 }

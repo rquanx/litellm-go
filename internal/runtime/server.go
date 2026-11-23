@@ -79,6 +79,7 @@ type Config struct {
 	ResolvePrompt func(*http.Request, map[string]any) (int, error)
 	Guardrails []GenericGuardrail
 	ResolvePolicy func(*http.Request, string, map[string]any) GuardrailPolicy
+	GuardrailTeam func(*http.Request) string
 	CallbackNames      []string
 	CallbackHealth func(context.Context, string, InferenceEvent) bool
 	PublicReadinessDetails bool

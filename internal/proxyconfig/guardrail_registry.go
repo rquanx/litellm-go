@@ -43,8 +43,8 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 		return nil, errors.New("could not initialize guardrails registry")
 	}
 	registry := &guardrailRegistry{db: db, keys: keys, server: server, static: static, rows: make(map[string]guardrailRecord)}
-	records, err := db.QueryContext(ctx, `SELECT guardrail_id,guardrail_name,litellm_params,guardrail_info FROM `+guardrailTable+`
-		WHERE status='active' AND team_id IS NULL`)
+	records, err := db.QueryContext(ctx, `SELECT guardrail_id,guardrail_name,litellm_params,guardrail_info,COALESCE(team_id,'') FROM `+guardrailTable+`
+		WHERE status='active'`)
 	if err != nil {
 		return nil, err
 	}
@@ -52,14 +52,14 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 	for records.Next() {
 		var row guardrailRecord
 		var params, info []byte
-		if err := records.Scan(&row.ID, &row.Spec.Name, &params, &info); err != nil {
+		if err := records.Scan(&row.ID, &row.Spec.Name, &params, &info, &row.Spec.Team); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal(params, &row.Spec.Params)
+		_ = decodePolicyCondition(params, &row.Spec.Params)
 		if !supportedGuardrailProvider(row.Spec.Params.Provider) {
 			continue
 		}
-		_ = json.Unmarshal(info, &row.Info)
+		_ = decodePolicyCondition(info, &row.Info)
 		registry.rows[row.ID] = row
 	}
 	if err := records.Err(); err != nil {
@@ -79,8 +79,20 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 	mux.HandleFunc("PUT /guardrails/{guardrail_id}", registry.write)
 	mux.HandleFunc("PATCH /guardrails/{guardrail_id}", registry.write)
 	mux.HandleFunc("DELETE /guardrails/{guardrail_id}", registry.write)
+	mux.HandleFunc("POST /guardrails/register", registry.submitGuardrail)
+	submissions := http.NewServeMux()
+	submissions.HandleFunc("GET /guardrails/submissions", registry.readSubmissions)
+	submissions.HandleFunc("GET /guardrails/submissions/{guardrail_id}", registry.readSubmissions)
+	submissions.HandleFunc("POST /guardrails/submissions/{guardrail_id}/approve", registry.reviewSubmission)
+	submissions.HandleFunc("POST /guardrails/submissions/{guardrail_id}/reject", registry.reviewSubmission)
 	mux.Handle("/", next)
-	return mux, nil
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/guardrails/submissions" || strings.HasPrefix(r.URL.Path, "/guardrails/submissions/") {
+			submissions.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}), nil
 }
 
 func (registry *guardrailRegistry) compile(rows map[string]guardrailRecord) ([]runtime.GenericGuardrail, error) {
@@ -117,7 +129,8 @@ func guardrailListEntry(id string, guard runtime.GenericGuardrail, info map[stri
 }
 
 func (registry *guardrailRegistry) read(w http.ResponseWriter, r *http.Request) {
-	if _, ok := registry.keys.identifyResourceCaller(r); !ok {
+	caller, ok := registry.keys.identifyResourceCaller(r)
+	if !ok {
 		modelError(w, 401, "Proxy token required")
 		return
 	}
@@ -134,6 +147,9 @@ func (registry *guardrailRegistry) read(w http.ResponseWriter, r *http.Request) 
 		result = append(result, item)
 	}
 	for key, row := range registry.rows {
+		if row.Spec.Team != "" && !caller.admin && caller.team != row.Spec.Team {
+			continue
+		}
 		item := guardrailListEntry(key, runtime.GenericGuardrail{Name: row.Spec.Name, Post: row.Spec.Params.Mode == "post_call", Default: row.Spec.Params.Default, Provider: row.Spec.Params.Provider}, row.Info)
 		if id == key || id == row.Spec.Name {
 			modelJSON(w, 200, item)
@@ -182,6 +198,9 @@ func (registry *guardrailRegistry) write(w http.ResponseWriter, r *http.Request)
 	} else if _, ok := next[id]; !ok {
 		modelError(w, 404, "Guardrail not found")
 		return
+	}
+	if row, ok := next[id]; ok && row.Spec.Team != "" && r.Method != http.MethodDelete {
+		request.Guardrail.Team = row.Spec.Team
 	}
 	if r.Method == http.MethodPatch {
 		row := next[id]

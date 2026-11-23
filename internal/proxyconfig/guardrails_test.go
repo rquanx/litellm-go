@@ -318,3 +318,77 @@ func TestPostgresGuardrailRegistryPublishesAndRestoresRules(t *testing.T) {
 		t.Fatalf("delete returned %d %s", deleted.Code, deleted.Body)
 	}
 }
+
+func TestPostgresTeamGuardrailReviewIsScoped(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Teams["one"] = team{ID: "one"}
+	keys.state.Teams["two"] = team{ID: "two"}
+	keys.state.Keys[keyDigest("team-one")] = virtualKey{TeamID: "one"}
+	keys.state.Keys[keyDigest("team-two")] = virtualKey{TeamID: "two"}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/beta/litellm_basic_guardrail_api" {
+			io.WriteString(w, `{"action":"BLOCKED","blocked_reason":"team fixture"}`)
+			return
+		}
+		io.WriteString(w, `{"id":"result","choices":[]}`)
+	}))
+	defer upstream.Close()
+	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, AuthorizeKey: keys.Authorize, GuardrailTeam: keys.GuardrailTeam,
+		Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{Provider: "openai", ModelID: "fixture", APIBase: upstream.URL, Endpoint: "chat-completions"}}}},
+	})
+	handler, err := WithGuardrailRegistry(server, server, keys, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, token, body string, status int) string {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s %s returned %d %s", method, path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	name := "team-guard-" + newEntityID()
+	submission := fmt.Sprintf(`{"guardrail_name":%q,"litellm_params":{"guardrail":"generic_guardrail_api","mode":"pre_call","api_base":%q,"api_key":"fixture-key","default_on":true}}`, name, upstream.URL)
+	created := call(http.MethodPost, "/guardrails/register", "team-one", submission, 200)
+	var record struct {
+		ID string `json:"guardrail_id"`
+	}
+	if json.Unmarshal([]byte(created), &record) != nil || record.ID == "" || !strings.Contains(created, "pending_review") {
+		t.Fatalf("unexpected submission: %s", created)
+	}
+	defer db.Exec(`DELETE FROM `+guardrailTable+` WHERE guardrail_id=$1`, record.ID)
+	path := "/guardrails/submissions/" + record.ID
+	if got := call(http.MethodGet, path, "team-one", "", 200); strings.Contains(got, "fixture-key") {
+		t.Fatalf("submission exposed its credential: %s", got)
+	}
+	call(http.MethodGet, path, "team-two", "", 404)
+	const chat = "/v1/chat/completions"
+	const body = `{"model":"demo","messages":[]}`
+	call(http.MethodPost, chat, "team-one", body, 200)
+	call(http.MethodPost, path+"/approve", "team-one", "", 401)
+	call(http.MethodPost, path+"/approve", "master", "", 200)
+	call(http.MethodPost, chat, "team-one", body, 400)
+	call(http.MethodPost, chat, "team-two", body, 200)
+	handler, err = WithGuardrailRegistry(server, server, keys, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call(http.MethodPost, chat, "team-one", body, 400)
+	call(http.MethodDelete, "/guardrails/"+record.ID, "master", "", 200)
+}
