@@ -20,6 +20,7 @@ type ssoIdentity struct {
 	Verified bool   `json:"email_verified"`
 	TeamIDs  []string
 	Role     string
+	Binding  string
 }
 
 type cliSSOFlow struct {
@@ -37,8 +38,9 @@ const cliSSOTTL = 10 * time.Minute
 
 var cliConfirmation = template.Must(template.New("cli-confirm").Parse(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Confirm CLI sign-in</title><main><h1>Confirm CLI sign-in</h1><form method="post" action="{{.Action}}"><input type="hidden" name="browser_complete_token" value="{{.Token}}"><label for="user_code">Code from the CLI</label><input id="user_code" name="user_code" autocomplete="one-time-code" required><button>Confirm</button></form></main></html>`))
 
-func (s *uiSSOServer) startCLI(w http.ResponseWriter, _ *http.Request) {
-	if !s.config.ready() {
+func (s *uiSSOServer) startCLI(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.currentSSOConfig(r.Context())
+	if err != nil || !cfg.ready() {
 		modelError(w, http.StatusServiceUnavailable, "SSO is unavailable")
 		return
 	}
@@ -68,7 +70,7 @@ func (s *uiSSOServer) startCLI(w http.ResponseWriter, _ *http.Request) {
 		"user_code": code[:4] + "-" + code[4:], "expires_in": int(cliSSOTTL.Seconds())})
 }
 
-func (s *uiSSOServer) renderCLIConfirmation(w http.ResponseWriter, id string, identity ssoIdentity) {
+func (s *uiSSOServer) renderCLIConfirmation(w http.ResponseWriter, id string, identity ssoIdentity, cfg uiSSOConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	flow := s.cli[id]
@@ -91,7 +93,7 @@ func (s *uiSSOServer) renderCLIConfirmation(w http.ResponseWriter, id string, id
 	flow.identity, flow.userID = identity, user.ID
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; form-action 'self'; frame-ancestors 'none'")
-	_ = cliConfirmation.Execute(w, struct{ Action, Token string }{s.config.base.JoinPath("sso/cli/complete", id).Path, token})
+	_ = cliConfirmation.Execute(w, struct{ Action, Token string }{cfg.base.JoinPath("sso/cli/complete", id).Path, token})
 }
 
 func (s *uiSSOServer) completeCLI(w http.ResponseWriter, r *http.Request) {

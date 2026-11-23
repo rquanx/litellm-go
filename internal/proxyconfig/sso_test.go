@@ -100,6 +100,28 @@ func TestPostgresSSOMappingsUpdatePreservesProviderSettings(t *testing.T) {
 	if err != nil || teamClaim != "identity.teams" || cfg.userRole(map[string]any{"groups": []any{"readers"}}) != "internal_user_viewer" {
 		t.Fatalf("stored mappings were not applied: %v %s %+v", err, teamClaim, cfg.roleGroups)
 	}
+	t.Setenv("GOOGLE_CLIENT_ID", "")
+	t.Setenv("MICROSOFT_CLIENT_ID", "")
+	t.Setenv("GENERIC_ROLE_MAPPINGS_ROLES", "")
+	patch = `{"generic_client_id":"fixture","generic_client_secret":"fixture-oauth-secret","generic_authorization_endpoint":"https://auth.example.invalid/authorize",
+		"generic_token_endpoint":"https://auth.example.invalid/token","generic_userinfo_endpoint":"https://auth.example.invalid/userinfo","proxy_base_url":"https://proxy.example.invalid"}`
+	if response := call(http.MethodPatch, "/update/sso_settings", "master", patch); response.Code != http.StatusOK ||
+		strings.Contains(response.Body.String(), "fixture-oauth-secret") {
+		t.Fatalf("unexpected provider update %d %s", response.Code, response.Body)
+	}
+	if err := db.QueryRow(`SELECT sso_settings->>'generic_client_secret' FROM ` + ssoConfigTable).Scan(&secret); err != nil ||
+		!strings.HasPrefix(secret, "minato-encrypted:") || strings.Contains(secret, "fixture-oauth-secret") {
+		t.Fatal("updated OAuth client secret was not encrypted")
+	}
+	result := call(http.MethodGet, "/sso/key/generate", "", "")
+	if result.Code != http.StatusFound || !strings.HasPrefix(result.Header().Get("Location"), "https://auth.example.invalid/authorize?") {
+		t.Fatalf("database provider settings were not used: %d %s", result.Code, result.Body)
+	}
+	result = call(http.MethodGet, "/get/sso_settings", "master", "")
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"generic_client_secret":"********"`) ||
+		strings.Contains(result.Body.String(), "fixture-oauth-secret") {
+		t.Fatalf("settings did not redact the secret: %d %s", result.Code, result.Body)
+	}
 }
 
 func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
@@ -273,7 +295,7 @@ func TestCLISSORequiresConfirmationAndConsumesTeamKeyOnce(t *testing.T) {
 		t.Fatalf("unexpected pending response: %d %s", out.Code, out.Body)
 	}
 	page := httptest.NewRecorder()
-	server.renderCLIConfirmation(page, "login", ssoIdentity{Subject: "subject", Email: "login@example.invalid", Verified: true})
+	server.renderCLIConfirmation(page, "login", ssoIdentity{Subject: "subject", Email: "login@example.invalid", Verified: true}, server.config)
 	match := regexp.MustCompile(`name="browser_complete_token" value="([^"]+)"`).FindStringSubmatch(page.Body.String())
 	if len(match) != 2 || page.Code != http.StatusOK {
 		t.Fatalf("verification form unavailable: %d %s", page.Code, page.Body)

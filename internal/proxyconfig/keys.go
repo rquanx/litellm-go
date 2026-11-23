@@ -82,11 +82,9 @@ func LoadPostgresKeys(master string, db *sql.DB) (*KeyRegistry, error) {
 	)`);err!=nil {
 		return nil,err
 	}
-	if loadUISSOConfig().ready() {
-		registry.browserSSO, err = openPostgresBrowserSSO(db, master)
-		if err != nil {
-			return nil, err
-		}
+	registry.browserSSO, err = openPostgresBrowserSSO(db, master)
+	if err != nil {
+		return nil, err
 	}
 	return registry, nil
 }

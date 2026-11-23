@@ -31,6 +31,7 @@ type uiSSOFlow struct {
 	verifier string
 	expires  time.Time
 	cliID    string
+	binding  string
 }
 
 func (registry *KeyRegistry) registerUISSO(mux *http.ServeMux) {
@@ -44,31 +45,32 @@ func (registry *KeyRegistry) registerUISSO(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sso/get/ui_settings", server.settings)
 	mux.HandleFunc("GET /get/sso_settings", server.ssoSettingsEndpoint)
 	mux.HandleFunc("PATCH /update/sso_settings", server.ssoSettingsEndpoint)
-	if server.config.ready() {
+	if server.config.ready() || registry.browserSSO != nil {
 		for _, path := range []string{"/.well-known/litellm-ui-config", "/litellm/.well-known/litellm-ui-config"} {
-			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
-				writePublicUIConfig(w, true)
+			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, r *http.Request) {
+				cfg, err := server.currentSSOConfig(r.Context())
+				writePublicUIConfig(w, err == nil && cfg.ready())
 			})
 		}
 	}
 }
 
 func (s *uiSSOServer) start(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config
-	if !cfg.ready() {
+	cfg, err := s.currentSSOConfig(r.Context())
+	if err != nil || !cfg.ready() {
 		modelError(w, http.StatusServiceUnavailable, "SSO is unavailable")
 		return
 	}
 	now := time.Now()
 	state := oauth2.GenerateVerifier()
 	verifier := oauth2.GenerateVerifier()
-	flow := uiSSOFlow{verifier: verifier, expires: now.Add(uiSSOFlowTTL)}
+	flow := uiSSOFlow{verifier: verifier, expires: now.Add(uiSSOFlowTTL), binding: cfg.flowBinding()}
 	if s.keys.browserSSO != nil && r.URL.Query().Get("source") != "litellm-cli" {
-		if err := s.keys.browserSSO.save(r.Context(), s.ssoProviderBinding(), state, flow); err != nil {
+		if err := s.keys.browserSSO.save(r.Context(), flow.binding, state, flow); err != nil {
 			modelError(w, http.StatusServiceUnavailable, "Could not initialize SSO state")
 			return
 		}
-		s.redirectSSO(w, r, state, verifier)
+		cfg.redirectSSO(w, r, state, verifier)
 		return
 	}
 	s.mu.Lock()
@@ -96,23 +98,23 @@ func (s *uiSSOServer) start(w http.ResponseWriter, r *http.Request) {
 	s.flows[state] = flow
 	s.mu.Unlock()
 
-	s.redirectSSO(w, r, state, verifier)
+	cfg.redirectSSO(w, r, state, verifier)
 }
 
-func (s *uiSSOServer) redirectSSO(w http.ResponseWriter, r *http.Request, state, verifier string) {
+func (cfg uiSSOConfig) redirectSSO(w http.ResponseWriter, r *http.Request, state, verifier string) {
 	w.Header().Set("Cache-Control", "no-store")
-	http.SetCookie(w, s.stateCookie(state, int(uiSSOFlowTTL.Seconds())))
-	http.Redirect(w, r, s.config.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), http.StatusFound)
+	http.SetCookie(w, cfg.stateCookie(state, int(uiSSOFlowTTL.Seconds())))
+	http.Redirect(w, r, cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier)), http.StatusFound)
 }
 
-func (s *uiSSOServer) stateCookie(value string, maxAge int) *http.Cookie {
-	return &http.Cookie{Name: "litellm_sso_state", Value: value, Path: s.config.base.JoinPath("sso").Path,
-		MaxAge: maxAge, HttpOnly: true, Secure: s.config.base.Scheme == "https", SameSite: http.SameSiteLaxMode}
+func (cfg uiSSOConfig) stateCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: "litellm_sso_state", Value: value, Path: cfg.base.JoinPath("sso").Path,
+		MaxAge: maxAge, HttpOnly: true, Secure: cfg.base.Scheme == "https", SameSite: http.SameSiteLaxMode}
 }
 
 func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
-	cfg := s.config
-	if !cfg.ready() {
+	cfg, err := s.currentSSOConfig(r.Context())
+	if err != nil || !cfg.ready() {
 		modelError(w, http.StatusServiceUnavailable, "SSO is unavailable")
 		return
 	}
@@ -130,15 +132,15 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 	delete(s.flows, state)
 	s.mu.Unlock()
 	if !exists && s.keys.browserSSO != nil {
-		flow, err = s.keys.browserSSO.consume(r.Context(), s.ssoProviderBinding(), state)
+		flow, err = s.keys.browserSSO.consume(r.Context(), cfg.flowBinding(), state)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			modelError(w, http.StatusServiceUnavailable, "Could not read SSO state")
 			return
 		}
 		exists = err == nil
 	}
-	http.SetCookie(w, s.stateCookie("", -1))
-	if !exists || !flow.expires.After(time.Now()) || code == "" || query.Has("error") {
+	http.SetCookie(w, cfg.stateCookie("", -1))
+	if !exists || (flow.binding != "" && flow.binding != cfg.flowBinding()) || !flow.expires.After(time.Now()) || code == "" || query.Has("error") {
 		modelError(w, http.StatusUnauthorized, "Invalid or expired SSO callback")
 		return
 	}
@@ -190,13 +192,14 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	identity.TeamIDs = policyStringList(ssoClaim(claims, teamClaim))
 	identity.Role = cfg.userRole(claims)
+	identity.Binding = cfg.identityBinding()
 	if identity.Subject == "" {
 		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
 		return
 	}
 	identity.Email = strings.TrimSpace(identity.Email)
 	if flow.cliID != "" {
-		s.renderCLIConfirmation(w, flow.cliID, identity)
+		s.renderCLIConfirmation(w, flow.cliID, identity, cfg)
 		return
 	}
 	if s.keys.browserSSO != nil {
@@ -222,7 +225,10 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, identity ssoIdent
 	subject, email, verified := identity.Subject, identity.Email, identity.Verified
 	var user internalUser
 	var bound bool
-	binding := s.ssoProviderBinding()
+	binding := identity.Binding
+	if binding == "" {
+		binding = s.config.identityBinding()
+	}
 	// The binding can be configured explicitly for providers that omit email_verified.
 	for _, candidate := range s.keys.state.Users {
 		identities, _ := candidate.Metadata["sso_subjects"].(map[string]any)
@@ -258,8 +264,12 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, identity ssoIdent
 	return user, bound, binding
 }
 
-func (s *uiSSOServer) ssoProviderBinding() string {
-	return s.config.provider + "|" + s.config.ClientID + "|" + s.config.userInfo
+func (cfg uiSSOConfig) identityBinding() string {
+	return cfg.provider + "|" + cfg.ClientID + "|" + cfg.userInfo
+}
+
+func (cfg uiSSOConfig) flowBinding() string {
+	return keyDigest(strings.Join([]string{cfg.identityBinding(), cfg.Endpoint.AuthURL, cfg.Endpoint.TokenURL, cfg.RedirectURL, cfg.ClientSecret}, "\x00"))
 }
 
 func (s *uiSSOServer) issueSession(w http.ResponseWriter, identity ssoIdentity) (string, time.Time, bool) {
@@ -341,7 +351,11 @@ func (s *uiSSOServer) readiness(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
 		return
 	}
-	cfg := s.config
+	cfg, err := s.currentSSOConfig(r.Context())
+	if err != nil {
+		modelError(w, 503, "Could not read SSO configuration")
+		return
+	}
 	if cfg.provider == "" {
 		modelJSON(w, http.StatusOK, map[string]any{"status": "healthy", "sso_configured": false, "message": "No SSO provider configured"})
 		return
@@ -358,13 +372,21 @@ func (s *uiSSOServer) settings(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(w, r) {
 		return
 	}
+	cfg, err := s.currentSSOConfig(r.Context())
+	if err != nil {
+		modelError(w, 503, "Could not read SSO configuration")
+		return
+	}
 	settings := map[string]any{"DEFAULT_TEAM_DISABLED": strings.EqualFold(os.Getenv("PROXY_DEFAULT_TEAM_DISABLED"), "true"),
-		"SSO_ENABLED": s.config.ready(), "NUM_SPEND_LOGS_ROWS": 0, "DISABLE_EXPENSIVE_DB_QUERIES": false}
+		"SSO_ENABLED": cfg.ready(), "NUM_SPEND_LOGS_ROWS": 0, "DISABLE_EXPENSIVE_DB_QUERIES": false}
 	for _, field := range []string{"PROXY_BASE_URL", "PROXY_LOGOUT_URL", "LITELLM_UI_API_DOC_BASE_URL"} {
 		settings[field] = nil
 		if value, ok := os.LookupEnv(field); ok {
 			settings[field] = value
 		}
+	}
+	if cfg.base != nil {
+		settings["PROXY_BASE_URL"] = cfg.base.String()
 	}
 	modelJSON(w, http.StatusOK, settings)
 }
