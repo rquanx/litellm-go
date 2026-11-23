@@ -142,6 +142,8 @@ The Gemini file upload fixture matched LiteLLM `v1.85.0` for object, status, byt
 
 The Gemini File Search fixture matched LiteLLM `v1.85.0` for the vector store name, creation time and status, and for the search query and retrieved snippet. Go tests also check citation deduplication and deployment affinity.
 
+The Bedrock Knowledge Base fixture checks signed retrieval, compound filter conversion and source metadata through the vector search endpoint.
+
 The Gemini Interactions create fixture matched LiteLLM `v1.85.0` for object, model alias, status, output text and token usage. Go fixtures cover agent streaming, previous-interaction routing, scoped access, retrieval, cancellation and deletion. Go adds deployment affinity to returned interaction IDs.
 
 The configured pass-through test matched assistant content and token usage from a synthetic upstream on both proxies. Go coverage also verifies that configured upstream credentials take precedence and that proxy credentials stay on the proxy even when client header forwarding is enabled.

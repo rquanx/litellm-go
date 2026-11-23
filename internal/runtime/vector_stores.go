@@ -175,6 +175,14 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		writeError(w, http.StatusBadRequest, "model_required", "Select one configured Gemini vector store deployment")
 		return
 	}
+	if provider == "bedrock" {
+		if family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Bedrock knowledge bases support vector search")
+			return
+		}
+		s.searchBedrockKnowledgeBase(w, request, alias, id, scope, fields)
+		return
+	}
 	candidate, ok := s.selectResourceCandidate(alias, deployment, provider, scope)
 	if !ok && provider == "" && (alias != "" || deployment != "") {
 		if gemini, found := s.geminiResourceCandidate(alias, deployment, scope); found {

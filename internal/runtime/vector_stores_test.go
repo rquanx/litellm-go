@@ -85,6 +85,31 @@ func TestLegacyVectorStoreUsesAuthorizedDatabaseMapping(t *testing.T) {
 	}
 }
 
+func TestBedrockKnowledgeBaseSearchUsesSignedRegionalRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		expected := `{"retrievalConfiguration":{"vectorSearchConfiguration":{"filter":{"andAll":[{"equals":{"key":"topic","value":"fixture"}},{"greaterThan":{"key":"year","value":2024}}]},"numberOfResults":5}},"retrievalQuery":{"text":"example query"}}`
+		if r.URL.Path != "/knowledgebases/fixture/retrieve" || r.Method != "POST" ||
+			!strings.Contains(r.Header.Get("Authorization"), "/us-east-1/bedrock/aws4_request") || string(body) != expected {
+			t.Errorf("unexpected Bedrock knowledge base request %s %s", r.URL.Path, body)
+		}
+		io.WriteString(w, `{"retrievalResults":[{"content":{"text":"fixture result"},"metadata":{"x-amz-bedrock-kb-source-uri":"s3://example/doc.txt"},"score":0.8}]}`)
+	}))
+	defer upstream.Close()
+	config := &BedrockConfig{Region: "us-east-1", AgentBase: upstream.URL, AccessKey: "fixture", SecretKey: "fixture-secret"}
+	candidate := Candidate{Provider: "bedrock", ModelID: "amazon.nova-lite-v1:0", DeploymentID: "bedrock",
+		Endpoint: "bedrock-converse", APIBase: upstream.URL, Bedrock: config}
+	server := NewServer(Config{AuthorizeInference: true, Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}})
+	request := httptest.NewRequest("POST", "/v1/vector_stores/fixture/search", strings.NewReader(
+		`{"model":"demo","custom_llm_provider":"bedrock","query":["example","query"],"max_num_results":5,"filters":{"and":[{"operator":"eq","key":"topic","value":"fixture"},{"operator":"gt","key":"year","value":2024}]}}`))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"search_query":"example query"`) ||
+		!strings.Contains(response.Body.String(), `"filename":"doc.txt"`) || !strings.Contains(response.Body.String(), "fixture result") {
+		t.Fatalf("unexpected Bedrock vector search response %d %s", response.Code, response.Body)
+	}
+}
+
 func TestVectorStoreRequestsKeepFileAndStoreAffinity(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

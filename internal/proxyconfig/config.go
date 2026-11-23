@@ -109,6 +109,7 @@ type deployment struct {
 		AWSSTSEndpoint string `yaml:"aws_sts_endpoint" json:"aws_sts_endpoint,omitempty"`
 		AWSExternalID string `yaml:"aws_external_id" json:"aws_external_id,omitempty"`
 		AWSBedrockControlEndpoint string `yaml:"aws_bedrock_control_endpoint" json:"aws_bedrock_control_endpoint,omitempty"`
+		AWSBedrockAgentRuntimeEndpoint string `yaml:"aws_bedrock_agent_runtime_endpoint" json:"aws_bedrock_agent_runtime_endpoint,omitempty"`
 		AWSBatchRoleARN string `yaml:"aws_batch_role_arn" json:"aws_batch_role_arn,omitempty"`
 		S3OutputBucket string `yaml:"s3_output_bucket_name" json:"s3_output_bucket_name,omitempty"`
 		S3Bucket string `yaml:"s3_bucket_name" json:"s3_bucket_name,omitempty"`
@@ -985,6 +986,7 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 		{entry.Params.AWSSecretKey, "", &config.SecretKey},
 		{entry.Params.AWSSessionToken, "", &config.SessionToken},
 		{entry.Params.AWSBedrockControlEndpoint, "AWS_ENDPOINT_URL_BEDROCK", &config.ControlBase},
+		{entry.Params.AWSBedrockAgentRuntimeEndpoint, "AWS_ENDPOINT_URL_BEDROCK_AGENT_RUNTIME", &config.AgentBase},
 		{entry.Params.AWSBatchRoleARN, "AWS_BATCH_ROLE_ARN", &config.BatchRole},
 		{entry.Params.S3OutputBucket, "AWS_S3_OUTPUT_BUCKET_NAME", &config.BatchOutputBucket},
 		{entry.Params.S3Bucket, "AWS_S3_BUCKET_NAME", &config.S3Bucket},

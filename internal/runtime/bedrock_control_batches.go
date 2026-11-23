@@ -276,18 +276,22 @@ func (s *Server) sendBedrockControlBatch(w http.ResponseWriter, r *http.Request,
 		}
 		control = "https://bedrock." + region + "." + domain
 	}
+	return s.sendBedrockResource(w, r, candidate, method, strings.TrimRight(control, "/")+suffix, body)
+}
+
+func (s *Server) sendBedrockResource(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target string, body map[string]any) ([]byte, bool) {
 	var data []byte
 	if body != nil {
 		data, _ = json.Marshal(body)
 	}
-	upstream, err := http.NewRequestWithContext(r.Context(), method, strings.TrimRight(control, "/")+suffix, bytes.NewReader(data))
+	upstream, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(data))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock control-plane URL")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock resource URL")
 		return nil, false
 	}
 	upstream.Header.Set("Content-Type", "application/json")
 	if err := signAWSRequest(r.Context(), upstream, candidate.Bedrock, data, "bedrock"); err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authorize the Bedrock control-plane request")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authorize the Bedrock resource request")
 		return nil, false
 	}
 	select {
@@ -300,13 +304,13 @@ func (s *Server) sendBedrockControlBatch(w http.ResponseWriter, r *http.Request,
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := client.Do(upstream)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Bedrock control-plane request failed")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Bedrock resource request failed")
 		return nil, false
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
 	if err != nil || int64(len(raw)) > s.config.MaxBodyBytes || response.StatusCode/100 == 3 {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock control-plane response")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock resource response")
 		return nil, false
 	}
 	if response.StatusCode/100 != 2 {
