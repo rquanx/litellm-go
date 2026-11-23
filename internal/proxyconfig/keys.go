@@ -304,6 +304,7 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	registry.registerOrganizationRoutes(mux)
 	registry.registerUserRoutes(mux)
 	registry.registerProjectRoutes(mux)
+	registry.registerUISSO(mux)
 	mux.Handle("/", next)
 	return mux
 }
