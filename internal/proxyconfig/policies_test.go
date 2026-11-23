@@ -121,10 +121,7 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 			policy_name text, version_number integer, version_status text, inherit text,
 			guardrails_add text[], guardrails_remove text[], condition jsonb, pipeline jsonb
 		)`,
-		`CREATE TEMP TABLE ` + policyAttachmentTable + ` (
-			attachment_id text, policy_name text, scope text, teams text[], keys text[], models text[], tags text[],
-			created_at timestamp DEFAULT CURRENT_TIMESTAMP
-		)`,
+		`CREATE TEMP TABLE ` + policyAttachmentTable + policyAttachmentSchema,
 		`INSERT INTO ` + policyTable + ` VALUES
 			('production-rule',1,'production',NULL,ARRAY['first'],'{}',NULL,NULL),
 			('production-rule',2,'draft',NULL,ARRAY['next'],'{}',NULL,NULL)`,
@@ -169,4 +166,58 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 		t.Fatalf("expected invalid inheritance to fail refresh, got %d %s", w.Code, w.Body)
 	}
 	check("", "next")
+}
+
+func TestPostgresPolicyAttachmentLifecycle(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TEMP TABLE ` + policyAttachmentTable + policyAttachmentSchema); err != nil {
+		t.Fatal(err)
+	}
+	var baseline policyRule
+	baseline.Guardrails.Add = []string{"deny"}
+	engine, err := compilePolicies(map[string]policyRule{"baseline": baseline}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenPolicyRegistry(engine, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := registry.Handler(http.NotFoundHandler(), "master")
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	const base = "/policies/attachments"
+	result := call(http.MethodPost, base, `{"policy_name":"baseline","scope":"*"}`)
+	var record policyAttachmentRecord
+	if result.Code != 200 || json.Unmarshal(result.Body.Bytes(), &record) != nil || record.ID == "" || record.Teams == nil {
+		t.Fatalf("create returned %d %s", result.Code, result.Body)
+	}
+	if guards := registry.current.Load().resolve(policyContext{}, true).Guardrails; !reflect.DeepEqual(guards, []string{"deny"}) {
+		t.Fatalf("attachment was not applied: %v", guards)
+	}
+	for _, path := range []string{base + "/" + record.ID, base + "/list"} {
+		if result = call(http.MethodGet, path, ""); result.Code != 200 || !strings.Contains(result.Body.String(), record.ID) {
+			t.Fatalf("read returned %d %s", result.Code, result.Body)
+		}
+	}
+	if result = call(http.MethodDelete, base+"/"+record.ID, ""); result.Code != 200 {
+		t.Fatalf("delete returned %d %s", result.Code, result.Body)
+	}
+	if guards := registry.current.Load().resolve(policyContext{}, true).Guardrails; len(guards) != 0 {
+		t.Fatalf("deleted attachment is still active: %v", guards)
+	}
 }

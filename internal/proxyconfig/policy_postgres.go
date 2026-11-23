@@ -17,6 +17,13 @@ import (
 
 const policyTable = `"LiteLLM_PolicyTable"`
 const policyAttachmentTable = `"LiteLLM_PolicyAttachmentTable"`
+const policyAttachmentSchema = ` (
+	attachment_id TEXT PRIMARY KEY, policy_name TEXT NOT NULL, scope TEXT,
+	teams TEXT[] NOT NULL DEFAULT '{}', keys TEXT[] NOT NULL DEFAULT '{}',
+	models TEXT[] NOT NULL DEFAULT '{}', tags TEXT[] NOT NULL DEFAULT '{}',
+	created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), created_by TEXT,
+	updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), updated_by TEXT
+)`
 
 type PolicyRegistry struct {
 	db      *sql.DB
@@ -29,6 +36,11 @@ func OpenPolicyRegistry(static *PolicyEngine, db *sql.DB) (*PolicyRegistry, erro
 	registry := &PolicyRegistry{static: static, db: db}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if db != nil {
+		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+policyAttachmentTable+policyAttachmentSchema); err != nil {
+			return nil, err
+		}
+	}
 	if err := registry.refresh(ctx); err != nil {
 		return nil, err
 	}
@@ -60,6 +72,18 @@ func (registry *PolicyRegistry) refresh(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	engine, err := registry.compileSnapshot(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	registry.current.Store(engine)
+	return nil
+}
+
+func (registry *PolicyRegistry) compileSnapshot(ctx context.Context, tx *sql.Tx) (*PolicyEngine, error) {
 	definitions := make(map[string]policyRule)
 	var attachments []policyAttachment
 	if registry.static != nil {
@@ -69,29 +93,21 @@ func (registry *PolicyRegistry) refresh(ctx context.Context) error {
 	var hasPolicies, hasAttachments bool
 	if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL,to_regclass($2) IS NOT NULL`, policyTable, policyAttachmentTable).
 		Scan(&hasPolicies, &hasAttachments); err != nil {
-		return err
+		return nil, err
 	}
 	if hasPolicies {
 		if err := readProductionPolicies(ctx, tx, definitions); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if hasAttachments {
 		dynamic, err := readPolicyAttachments(ctx, tx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		attachments = append(attachments, dynamic...)
 	}
-	engine, err := compilePolicies(definitions, attachments)
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	registry.current.Store(engine)
-	return nil
+	return compilePolicies(definitions, attachments)
 }
 
 func readProductionPolicies(ctx context.Context, tx *sql.Tx, definitions map[string]policyRule) error {

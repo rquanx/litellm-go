@@ -22,12 +22,12 @@ type policyRule struct {
 }
 
 type policyAttachment struct {
-	Policy string   `yaml:"policy"`
-	Scope  string   `yaml:"scope"`
-	Teams  []string `yaml:"teams"`
-	Keys   []string `yaml:"keys"`
-	Models []string `yaml:"models"`
-	Tags   []string `yaml:"tags"`
+	Policy string   `yaml:"policy" json:"policy_name"`
+	Scope  string   `yaml:"scope" json:"scope"`
+	Teams  []string `yaml:"teams" json:"teams"`
+	Keys   []string `yaml:"keys" json:"keys"`
+	Models []string `yaml:"models" json:"models"`
+	Tags   []string `yaml:"tags" json:"tags"`
 }
 
 type PolicyEngine struct {

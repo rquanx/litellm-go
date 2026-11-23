@@ -32,6 +32,14 @@ func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.H
 	protected("POST /policy/test", (*PolicyEngine).previewPolicy)
 	protected("GET /policy/list", (*PolicyEngine).listPolicies)
 	protected("GET /policy/info/{policy_name}", (*PolicyEngine).listPolicies)
+	for _, pattern := range []string{
+		"GET /policies/attachments/list", "GET /policies/attachments/{attachment_id}",
+		"POST /policies/attachments", "DELETE /policies/attachments/{attachment_id}",
+	} {
+		protected(pattern, func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+			registry.attachmentEndpoint(w, r)
+		})
+	}
 	mux.Handle("/", next)
 	return mux
 }
