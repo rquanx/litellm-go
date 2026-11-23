@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -208,6 +209,19 @@ type Config struct {
 }
 
 func Load(reader io.Reader) (Config, error) {
+	return load(reader, "")
+}
+
+func LoadFile(path string) (Config, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Config{}, err
+	}
+	defer file.Close()
+	return load(file, filepath.Dir(path))
+}
+
+func load(reader io.Reader, configDirectory string) (Config, error) {
 	var file configFile
 	decoder := yaml.NewDecoder(reader)
 	decoder.KnownFields(true)
@@ -273,7 +287,7 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, err
 	}
 	config.Guardrails = guardrails
-	config.prompts,err=compileConfiguredPrompts(file.Prompts)
+	config.prompts,err=compileConfiguredPrompts(file.Prompts,configDirectory)
 	if err!=nil {
 		return Config{},err
 	}

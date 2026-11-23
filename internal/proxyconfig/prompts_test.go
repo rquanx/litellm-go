@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -203,6 +204,35 @@ prompts:
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"prompt_type":"config"`) {
 		t.Fatalf("configured prompt info returned %d %s", w.Code, w.Body)
+	}
+}
+
+func TestConfigLoadsLocalPromptRelativeToYAML(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "fixture.prompt")
+	if err := os.WriteFile(file, []byte("System: Hello {{name}}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	yamlPath := filepath.Join(dir, "proxy.yaml")
+	if err := os.WriteFile(yamlPath, []byte(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/demo, api_base: "http://localhost:1"}
+prompts:
+  - prompt_id: greeting
+    litellm_params:
+      prompt_integration: dotprompt
+      prompt_file: fixture.prompt
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := LoadFile(yamlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params := config.prompts["greeting"].Params
+	if params["dotprompt_content"] != "System: Hello {{name}}" || params["prompt_file"] != nil {
+		t.Fatalf("configured prompt file was not loaded: %+v", params)
 	}
 }
 

@@ -39,12 +39,8 @@ func main() {
 	}
 	var proxy proxyconfig.Config
 	if *configPath != "" {
-		file, err := os.Open(*configPath)
-		if err != nil {
-			log.Fatal(err)
-		}
-		proxy, err = proxyconfig.Load(file)
-		file.Close()
+		var err error
+		proxy, err = proxyconfig.LoadFile(*configPath)
 		if err != nil {
 			log.Fatal(err)
 		}
