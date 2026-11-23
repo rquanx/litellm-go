@@ -50,6 +50,8 @@ func WithPromptManagement(next http.Handler, db *sql.DB, keys *KeyRegistry) (htt
 	mux.HandleFunc("GET /prompts/{prompt_id}", api.info)
 	mux.HandleFunc("GET /prompts/{prompt_id}/info", api.info)
 	mux.HandleFunc("POST /prompts", api.write)
+	mux.HandleFunc("POST /prompts/test", func(w http.ResponseWriter, r *http.Request) { api.testPrompt(w, r, next) })
+	mux.HandleFunc("POST /utils/dotprompt_json_converter", api.convertDotprompt)
 	for _, method := range []string{"PUT", "PATCH", "DELETE"} {
 		mux.HandleFunc(method+" /prompts/{prompt_id}", api.write)
 	}
