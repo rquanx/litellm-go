@@ -67,6 +67,11 @@ mcp_servers:
 			t.Fatalf("incorrect OAuth discovery response for %s: %d %s", path, result.Code, result.Body)
 		}
 	}
+	registration := call("POST", "/fixture/register", "master", "{}")
+	if registration.Code != http.StatusOK || !strings.Contains(registration.Body.String(), `"client_id":"fixture-client"`) ||
+		strings.Contains(registration.Body.String(), "fixture-secret") {
+		t.Fatalf("incorrect OAuth registration response %d %s", registration.Code, registration.Body)
+	}
 	verifier := strings.Repeat("v", 43)
 	digest := sha256.Sum256([]byte(verifier))
 	values := url.Values{"redirect_uri": {"http://127.0.0.1:5321/finish?session=demo"},
@@ -97,5 +102,31 @@ mcp_servers:
 	}
 	if exchanges.Load() != 1 {
 		t.Fatalf("expected one token exchange, got %d", exchanges.Load())
+	}
+}
+
+func TestMCPDynamicClientRegistrationUsesConfiguredCallback(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(data), `"redirect_uris":["http://127.0.0.1:4300/callback"]`) ||
+			strings.Contains(string(data), "ignored.example") {
+			t.Errorf("incorrect registration redirect %s", data)
+		}
+		w.WriteHeader(http.StatusCreated)
+		io.WriteString(w, `{"client_id":"registered","client_secret":"upstream-secret"}`)
+	}))
+	defer upstream.Close()
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", MCPServers: []runtime.MCPServer{{
+		ID: "fixture", Name: "fixture", InteractiveOAuth: &runtime.MCPInteractiveOAuth{
+			AuthorizationURL: upstream.URL + "/authorize", TokenURL: upstream.URL + "/token", RegistrationURL: upstream.URL + "/register",
+			CallbackURL: "http://127.0.0.1:4300/callback",
+		},
+	}}})
+	request := httptest.NewRequest(http.MethodPost, "/fixture/register", strings.NewReader(`{"client_name":"fixture","redirect_uris":["https://ignored.example"]}`))
+	request.Header.Set("Authorization", "Bearer master")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusCreated || !strings.Contains(result.Body.String(), `"client_id":"registered"`) {
+		t.Fatalf("wrong dynamic registration response %d %s", result.Code, result.Body)
 	}
 }

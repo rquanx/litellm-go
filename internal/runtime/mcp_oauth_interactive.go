@@ -15,12 +15,16 @@ import (
 )
 
 type MCPInteractiveOAuth struct {
-	AuthorizationURL, TokenURL, CallbackURL, ClientID, ClientSecret string
-	Scopes                                                          []string
+	AuthorizationURL, TokenURL, CallbackURL, RegistrationURL, ClientID, ClientSecret string
+	Scopes                                                                           []string
 }
 
 func (oauth *MCPInteractiveOAuth) Validate() error {
-	for _, value := range []string{oauth.AuthorizationURL, oauth.TokenURL, oauth.CallbackURL} {
+	addresses := []string{oauth.AuthorizationURL, oauth.TokenURL, oauth.CallbackURL}
+	if oauth.RegistrationURL != "" {
+		addresses = append(addresses, oauth.RegistrationURL)
+	}
+	for _, value := range addresses {
 		address, err := url.Parse(value)
 		if err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
 			(address.Scheme != "https" && !(address.Scheme == "http" && mcpOAuthLoopback(address.Hostname()))) {
@@ -72,7 +76,7 @@ func (s *Server) serveMCPOAuth(w http.ResponseWriter, r *http.Request) bool {
 	if !named {
 		selector, action = "", selector
 	}
-	if (action != "authorize" || r.Method != http.MethodGet) && (action != "token" || r.Method != http.MethodPost) {
+	if (action != "authorize" || r.Method != http.MethodGet) && ((action != "token" && action != "register") || r.Method != http.MethodPost) {
 		return false
 	}
 	var server MCPServer
@@ -91,9 +95,12 @@ func (s *Server) serveMCPOAuth(w http.ResponseWriter, r *http.Request) bool {
 		writeError(w, http.StatusUnauthorized, "unauthorized", "MCP server access is required")
 		return true
 	}
-	if action == "authorize" {
+	switch action {
+	case "authorize":
 		s.startMCPOAuth(w, r, server)
-	} else {
+	case "register":
+		s.registerMCPOAuthClient(w, r, server)
+	default:
 		s.exchangeMCPOAuth(w, r, server)
 	}
 	return true

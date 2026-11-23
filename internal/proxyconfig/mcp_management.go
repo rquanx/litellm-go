@@ -85,6 +85,10 @@ func (registry *modelRegistry) testMCPServer(w http.ResponseWriter, r *http.Requ
 func mcpServerEntry(name string, server mcpServerConfig) mcpServerInput {
 	server.Headers, server.Env = nil, nil
 	server.ClientSecret = ""
+	if address, err := url.Parse(server.RegistrationURL); err == nil {
+		address.RawQuery = ""
+		server.RegistrationURL = address.String()
+	}
 	if address, err := url.Parse(server.AuthorizationURL); err == nil {
 		address.RawQuery = ""
 		server.AuthorizationURL = address.String()

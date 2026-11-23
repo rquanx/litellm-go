@@ -49,7 +49,7 @@ func (s *Server) serveMCPOAuthDiscovery(w http.ResponseWriter, r *http.Request) 
 	}
 	if kind == "oauth-authorization-server" {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token",
+			"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/token", "registration_endpoint": issuer + "/register",
 			"response_types_supported": []string{"code"}, "scopes_supported": scopes,
 			"grant_types_supported": []string{"authorization_code", "refresh_token"}, "code_challenge_methods_supported": []string{"S256"},
 			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},

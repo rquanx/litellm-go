@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
 
@@ -42,6 +43,7 @@ type mcpServerConfig struct {
 	AuthType string `yaml:"auth_type" json:"auth_type,omitempty"`
 	OAuthFlow string `yaml:"oauth2_flow" json:"oauth2_flow,omitempty"`
 	AuthorizationURL string `yaml:"authorization_url" json:"authorization_url,omitempty"`
+	RegistrationURL string `yaml:"registration_url" json:"registration_url,omitempty"`
 	OAuthCallbackURL string `yaml:"oauth_callback_url" json:"oauth_callback_url,omitempty"`
 	TokenURL string `yaml:"token_url" json:"token_url,omitempty"`
 	ClientID string `yaml:"client_id" json:"client_id,omitempty"`
@@ -170,6 +172,7 @@ func (entry mcpServerConfig) interactiveOAuth() (*runtime.MCPInteractiveOAuth, e
 	config := &runtime.MCPInteractiveOAuth{Scopes: slices.Clone(entry.Scopes)}
 	for _, field := range []struct{value string; target *string}{
 		{entry.AuthorizationURL, &config.AuthorizationURL},
+		{entry.RegistrationURL, &config.RegistrationURL},
 		{entry.TokenURL, &config.TokenURL},
 		{entry.OAuthCallbackURL, &config.CallbackURL},
 		{entry.ClientID, &config.ClientID},
@@ -180,6 +183,9 @@ func (entry mcpServerConfig) interactiveOAuth() (*runtime.MCPInteractiveOAuth, e
 			return nil, err
 		}
 		*field.target = value
+	}
+	if config.CallbackURL == "" {
+		config.CallbackURL = strings.TrimRight(os.Getenv("PROXY_BASE_URL"), "/") + "/callback"
 	}
 	if err := config.Validate(); err != nil {
 		return nil, err
