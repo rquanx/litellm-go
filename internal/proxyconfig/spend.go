@@ -47,6 +47,8 @@ func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS end_user_id TEXT NOT NULL DEFAULT '';
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS cache_read_input_tokens BIGINT NOT NULL DEFAULT 0;
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0;
+	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT '';
+	CREATE INDEX IF NOT EXISTS minato_proxy_spend_agent ON minato_proxy_spend (agent_id, started_at) WHERE agent_id <> '';
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_end_user ON minato_proxy_spend (end_user_id, started_at) WHERE end_user_id <> '';
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_started_at ON minato_proxy_spend (started_at DESC, request_id);`)
 	if err != nil {
@@ -96,14 +98,18 @@ func (log *SpendLog) Record(event runtime.InferenceEvent) {
 
 	start := time.Unix(0, int64(event.StartTime*1e9)).UTC()
 	end := time.Unix(0, int64(event.EndTime*1e9)).UTC()
+	agentID := ""
+	if event.Provider == "a2a_agent" {
+		agentID = event.ModelID
+	}
 	_, _ = log.db.ExecContext(ctx, `INSERT INTO minato_proxy_spend
 		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend,cache_hit,end_user_id,
-		cache_read_input_tokens,cache_creation_input_tokens)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+		cache_read_input_tokens,cache_creation_input_tokens,agent_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		ON CONFLICT (request_id) DO NOTHING`,
 		event.ID, start, end, event.KeyDigest, key.Alias, key.UserID, key.TeamID, key.ProjectID, event.Model, event.ModelGroup,
 		event.ModelID, event.Provider, event.CallType, event.Status, event.Prompt, event.Completion, event.Total, event.Spend, event.CacheHit, event.EndUser,
-		event.CacheReadInputTokens, event.CacheCreationInputTokens)
+		event.CacheReadInputTokens, event.CacheCreationInputTokens, agentID)
 }
 
 func (log *SpendLog) Start(ctx context.Context) func(runtime.InferenceEvent) {

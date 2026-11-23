@@ -81,13 +81,17 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 		'fixture-id','openai','acompletion','success',2,3,5,0.015);`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN cache_hit TEXT DEFAULT 'True'`); err != nil {
+	if _, err := db.Exec(`ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN cache_hit TEXT DEFAULT 'True', ADD COLUMN agent_id TEXT DEFAULT 'historical-agent'`); err != nil {
 		t.Fatal(err)
 	}
 	for _, expected := range []int64{1, 0} {
 		if count, err := ImportLiteLLMSpend(db); err != nil || count != expected {
 			t.Fatalf("imported %d, want %d: %v", count, expected, err)
 		}
+	}
+	var agentID string
+	if err := db.QueryRow(`SELECT agent_id FROM minato_proxy_spend WHERE request_id = 'historical'`).Scan(&agentID); err != nil || agentID != "historical-agent" {
+		t.Fatalf("could not restore historical agent attribution: %q %v", agentID, err)
 	}
 	historical := call("master", "/spend/logs/v2?project_id=imported", 200, `"total_count":1`)
 	if strings.Contains(historical, "sk-plaintext-fixture") || !strings.Contains(historical, `"total_tokens":5`) {

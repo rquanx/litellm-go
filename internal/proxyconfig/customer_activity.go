@@ -87,8 +87,7 @@ func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, enti
 	}
 	column, aliasJoin, aliasField := "end_user_id", " LEFT JOIN "+customerTable+" customer ON customer.user_id=activity.entity_id", "customer.alias"
 	if entity == "agent" {
-		column, aliasJoin, aliasField = "model_id", "", "NULL::text"
-		where += " AND provider = 'a2a_agent'"
+		column, aliasJoin, aliasField = "COALESCE(NULLIF(agent_id,''),CASE WHEN provider='a2a_agent' THEN model_id ELSE '' END)", "", "NULL::text"
 	}
 	where += " AND " + column + " <> ''"
 	if scope != nil {
