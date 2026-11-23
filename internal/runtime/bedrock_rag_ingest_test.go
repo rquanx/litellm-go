@@ -89,3 +89,54 @@ func TestRAGBedrockKnowledgeBaseIngestion(t *testing.T) {
 		t.Fatalf("wrong ingestion sequence or rejection %d %s", rejected.Code, rejected.Body)
 	}
 }
+
+func TestRAGBedrockCreatesKnowledgeBaseUsingConfiguredInfrastructure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		switch r.Method + " " + r.URL.Path {
+		case "PUT /knowledgebases/":
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			raw, _ := json.Marshal(body)
+			if !strings.Contains(string(raw), "foundation-model/amazon.titan-embed-text-v2:0") ||
+				!strings.Contains(string(raw), `"vectorIndexName":"fixture-index"`) {
+				t.Errorf("incorrect knowledge base payload %s", raw)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{"knowledgeBase":{"knowledgeBaseId":"NEW1","status":"CREATING"}}`)
+		case "GET /knowledgebases/NEW1":
+			io.WriteString(w, `{"knowledgeBase":{"knowledgeBaseId":"NEW1","status":"ACTIVE"}}`)
+		case "PUT /knowledgebases/NEW1/datasources/":
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			raw, _ := json.Marshal(body)
+			if !strings.Contains(string(raw), `"bucketArn":"arn:aws:s3:::fixture-bucket"`) {
+				t.Errorf("incorrect data source payload %s", raw)
+			}
+			io.WriteString(w, `{"dataSource":{"dataSourceId":"DS1"}}`)
+		case "GET /knowledgebases/NEW1/datasources/DS1":
+			io.WriteString(w, `{"dataSource":{"dataSourceConfiguration":{"s3Configuration":{"bucketArn":"arn:aws:s3:::fixture-bucket","inclusionPrefixes":["data/"]}}}}`)
+		case "PUT /fixture-bucket/data/fixture.txt":
+		case "PUT /knowledgebases/NEW1/datasources/DS1/ingestionjobs/":
+			io.WriteString(w, `{"ingestionJob":{"ingestionJobId":"JOB1","status":"STARTING"}}`)
+		default:
+			t.Errorf("unexpected provisioning request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	candidate := Candidate{Provider: "bedrock", ModelID: "fixture", Endpoint: "bedrock-converse", DeploymentID: "fixture", Bedrock: &BedrockConfig{
+		Region: "us-east-1", AgentControlBase: upstream.URL, S3Endpoint: upstream.URL, AccessKey: "fixture", SecretKey: "secret",
+	}}
+	server := NewServer(Config{AuthorizeInference: true, Token: "master", Routes: []Route{{Alias: "fixture", Candidates: []Candidate{candidate}}},
+		AuthorizeKey: func(key string) ([]string, bool) { return []string{"fixture"}, key == "fixture" }})
+	for _, token := range []string{"fixture", "master"} {
+		body := `{"file":{"filename":"fixture.txt","content":"Zml4dHVyZQ=="},"ingest_options":{"name":"fixture-kb","vector_store":{"custom_llm_provider":"bedrock","s3_bucket":"fixture-bucket","knowledge_base_role_arn":"arn:aws:iam::123456789012:role/fixture","opensearch_collection_arn":"arn:aws:aoss:us-east-1:123456789012:collection/fixture","opensearch_index_name":"fixture-index"}}}`
+		req := httptest.NewRequest(http.MethodPost, "/rag/ingest", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, req)
+		if token == "master" && (result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"vector_store_id":"NEW1"`)) ||
+			token == "fixture" && result.Code != http.StatusForbidden {
+			t.Fatalf("unexpected Bedrock create result %d %s", result.Code, result.Body)
+		}
+	}
+}

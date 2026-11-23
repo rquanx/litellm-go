@@ -168,7 +168,7 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 		return
 	}
 	if provider == "bedrock" {
-		s.ingestBedrockDocument(w, r, scope, alias, vectors, store, input)
+		s.ingestBedrockDocument(w, r, scope, alias, vectors, name, store, input)
 		return
 	}
 	if vectors == "" {

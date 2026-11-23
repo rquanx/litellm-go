@@ -14,12 +14,12 @@ import (
 
 var bedrockRAGBucket = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
-func (s *Server) ingestBedrockDocument(w http.ResponseWriter, r *http.Request, scope []string, alias, id string, options map[string]any, input ragIngestInput) {
+func (s *Server) ingestBedrockDocument(w http.ResponseWriter, r *http.Request, scope []string, alias, id, name string, options map[string]any, input ragIngestInput) {
 	if id == "" {
 		id, _ = options["knowledge_base_id"].(string)
 	}
 	source, _ := options["data_source_id"].(string)
-	if !bedrockRecordID.MatchString(id) || (source != "" && !bedrockRecordID.MatchString(source)) {
+	if (id != "" && !bedrockRecordID.MatchString(id)) || (source != "" && (id == "" || !bedrockRecordID.MatchString(source))) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Select an existing Bedrock knowledge base and a valid data source")
 		return
 	}
@@ -54,6 +54,13 @@ func (s *Server) ingestBedrockDocument(w http.ResponseWriter, r *http.Request, s
 			domain = "amazonaws.com.cn"
 		}
 		base = "https://bedrock-agent." + candidate.Bedrock.Region + "." + domain
+	}
+	if id == "" {
+		var ok bool
+		id, source, ok = s.createBedrockKnowledge(w, r, candidate, base, name, options)
+		if !ok {
+			return
+		}
 	}
 	sourcesURL := strings.TrimRight(base, "/") + "/knowledgebases/" + id + "/datasources/"
 	if source == "" {
