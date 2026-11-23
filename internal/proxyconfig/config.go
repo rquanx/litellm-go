@@ -82,6 +82,13 @@ type deployment struct {
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
 		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
+		AzureTenant string `yaml:"tenant_id" json:"tenant_id,omitempty"`
+		AzureClient string `yaml:"client_id" json:"client_id,omitempty"`
+		AzureClientSecret string `yaml:"client_secret" json:"client_secret,omitempty"`
+		AzureScope string `yaml:"azure_scope" json:"azure_scope,omitempty"`
+		AzureCredential string `yaml:"azure_credential" json:"azure_credential,omitempty"`
+		AzureAuthority string `yaml:"azure_authority_host" json:"azure_authority_host,omitempty"`
+		AzureTokenRefresh bool `yaml:"enable_azure_ad_token_refresh" json:"enable_azure_ad_token_refresh,omitempty"`
 		Tags []string `yaml:"tags" json:"tags,omitempty"`
 		TagRegex []string `yaml:"tag_regex" json:"tag_regex,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
@@ -122,6 +129,7 @@ type deployment struct {
 }
 
 type Config struct {
+	azureTokenRefresh bool
 	Agents []runtime.Agent
 	staticAgents []agentConfig
 	publicAgents []string
@@ -236,6 +244,7 @@ func Load(reader io.Reader) (Config, error) {
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
 	config.EnableTagFiltering = file.Router.EnableTagFiltering
+	config.azureTokenRefresh = file.Callbacks.AzureTokenRefresh
 	config.TagsMatchAll = file.Router.TagFilteringMatchAny != nil && !*file.Router.TagFilteringMatchAny
 	if file.Router.RedisURL != "" || file.Router.RedisHost != "" {
 		params := inferenceCacheParams{RedisURL: file.Router.RedisURL, Host: file.Router.RedisHost,
@@ -374,6 +383,7 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 	var aliases []string
 	for _, model := range models {
 		effective, err := model.withCredential(config.credentials)
+		effective.Params.AzureTokenRefresh = effective.Params.AzureTokenRefresh || config.azureTokenRefresh
 		if err != nil {
 			return nil, fmt.Errorf("model %q: %w", model.Alias, err)
 		}
@@ -814,7 +824,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			return runtime.Candidate{}, err
 		}
 	}
-	var azureADToken string
+	var azureADToken, azureIdentityKey string
+	var azureToken func(context.Context) (string, error)
 	if provider == "azure" {
 		azureADToken, err = resolveEnv(entry.Params.AzureADToken)
 		if err != nil {
@@ -823,6 +834,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if azureADToken == "" && key == "" && parsed.Scheme == "https" &&
 			strings.HasSuffix(parsed.Hostname(), ".openai.azure.com") {
 			azureADToken = os.Getenv("AZURE_AD_TOKEN")
+		}
+		if key == "" && azureADToken == "" {
+			azureToken, azureIdentityKey, err = entry.azureIdentity(parsed.Scheme == "https" && strings.HasSuffix(parsed.Hostname(), ".openai.azure.com"))
+			if err != nil {
+				return runtime.Candidate{}, err
+			}
 		}
 	}
 	azureSpeech := provider == "azure" && strings.HasPrefix(model, "speech/")
@@ -950,7 +967,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
-		Vertex: vertex, AzureADToken: azureADToken, WatsonX: watsonx}, nil
+		Vertex: vertex, AzureADToken: azureADToken, AzureToken: azureToken, AzureIdentityKey: azureIdentityKey, WatsonX: watsonx}, nil
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

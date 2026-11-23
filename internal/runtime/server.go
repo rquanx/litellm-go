@@ -1337,7 +1337,10 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if speechFormat != "" {
 		upstream.Header.Set("X-Microsoft-OutputFormat", speechFormat)
 		if apiKey != "" { upstream.Header.Set("Ocp-Apim-Subscription-Key", apiKey) }
-		if candidate.AzureADToken != "" { upstream.Header.Set("Authorization", "Bearer "+candidate.AzureADToken) }
+		if err := providerKeyHeaders(ctx, upstream.Header, candidate, ""); err != nil {
+			release()
+			return nil, err
+		}
 	} else if candidate.Provider == "elevenlabs" {
 		upstream.Header.Set("xi-api-key", apiKey)
 	} else if candidate.Provider == "deepgram" {
@@ -1365,7 +1368,10 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			return nil, err
 		}
 	} else if candidate.Bedrock == nil {
-		providerKeyHeaders(upstream.Header, candidate, apiKey)
+		if err := providerKeyHeaders(ctx, upstream.Header, candidate, apiKey); err != nil {
+			release()
+			return nil, err
+		}
 	}
 	if vertexSpeechDeployment(candidate) {
 		upstream.Header.Set("X-Goog-User-Project", candidate.Vertex.Project)

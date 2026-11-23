@@ -217,6 +217,22 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AzureADToken == "" {
 			model.Params.AzureADToken = existing.Params.AzureADToken
 		}
+		for _, setting := range []struct {
+			current *string
+			previous string
+		}{
+			{&model.Params.AzureTenant, existing.Params.AzureTenant},
+			{&model.Params.AzureClient, existing.Params.AzureClient},
+			{&model.Params.AzureClientSecret, existing.Params.AzureClientSecret},
+			{&model.Params.AzureScope, existing.Params.AzureScope},
+			{&model.Params.AzureCredential, existing.Params.AzureCredential},
+			{&model.Params.AzureAuthority, existing.Params.AzureAuthority},
+		} {
+			if *setting.current == "" {
+				*setting.current = setting.previous
+			}
+		}
+		model.Params.AzureTokenRefresh = model.Params.AzureTokenRefresh || existing.Params.AzureTokenRefresh
 		if model.Params.Weight == nil {
 			model.Params.Weight = existing.Params.Weight
 		}

@@ -17,6 +17,7 @@ import (
 )
 
 type callbackSettings struct {
+	AzureTokenRefresh bool `yaml:"enable_azure_ad_token_refresh"`
 	PublicAgentGroups []string `yaml:"public_agent_groups"`
 	Cache             bool                 `yaml:"cache"`
 	CacheParams       inferenceCacheParams `yaml:"cache_params"`

@@ -104,7 +104,9 @@ func (s *Server) dialProviderSocket(ctx context.Context, candidate Candidate, ad
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	providerKeyHeaders(headers, candidate, key)
+	if err := providerKeyHeaders(ctx, headers, candidate, key); err != nil {
+		return nil, err
+	}
 	conn, _, err := websocket.Dial(ctx, address, &websocket.DialOptions{
 		HTTPClient: s.config.HTTPClient, HTTPHeader: headers,
 	})

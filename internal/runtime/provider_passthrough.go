@@ -91,7 +91,7 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 		}
 		key = os.Getenv(variable)
 	}
-	if key == "" && deployment.AzureADToken == "" && provider != "vllm" {
+	if key == "" && deployment.AzureADToken == "" && deployment.AzureToken == nil && provider != "vllm" {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Provider credentials are missing")
 		return true
 	}
@@ -129,8 +129,11 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 			route.Headers.Set("Anthropic-Version", "2023-06-01")
 		}
 	case "azure":
-		if deployment.AzureADToken != "" {
-			route.Headers.Set("Authorization", "Bearer "+deployment.AzureADToken)
+		if deployment.AzureADToken != "" || deployment.AzureToken != nil {
+			if err := providerKeyHeaders(r.Context(), route.Headers, deployment, ""); err != nil {
+				writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+				return true
+			}
 		} else {
 			route.Headers.Set("Api-Key", key)
 			route.Headers.Set("Authorization", "Bearer "+key)

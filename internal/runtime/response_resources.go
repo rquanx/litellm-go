@@ -160,7 +160,10 @@ func (s *Server) responseResource(writer http.ResponseWriter, request *http.Requ
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	providerKeyHeaders(upstream.Header, candidate, key)
+	if err := providerKeyHeaders(request.Context(), upstream.Header, candidate, key); err != nil {
+		writeError(writer, http.StatusBadGateway, "upstream_error", err.Error())
+		return
+	}
 	select {
 	case s.sem <- struct{}{}:
 	case <-request.Context().Done():

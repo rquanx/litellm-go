@@ -1,14 +1,22 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 )
 
-func providerKeyHeaders(headers http.Header, candidate Candidate, key string) {
+func providerKeyHeaders(ctx context.Context, headers http.Header, candidate Candidate, key string) error {
 	if candidate.Provider == "azure" {
-		if candidate.AzureADToken != "" {
+		if candidate.AzureToken != nil {
+			token, err := candidate.AzureToken(ctx)
+			if err != nil || token == "" {
+				return errors.New("could not acquire an Azure access token")
+			}
+			headers.Set("Authorization", "Bearer "+token)
+		} else if candidate.AzureADToken != "" {
 			headers.Set("Authorization", "Bearer "+candidate.AzureADToken)
 		} else if key != "" {
 			headers.Set("api-key", key)
@@ -16,6 +24,7 @@ func providerKeyHeaders(headers http.Header, candidate Candidate, key string) {
 	} else if key != "" {
 		headers.Set("Authorization", "Bearer "+key)
 	}
+	return nil
 }
 
 func azureTarget(base, model, endpoint, version string) string {

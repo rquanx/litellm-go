@@ -183,7 +183,7 @@ func (policy inferenceCacheRequest) key(candidate Candidate) string {
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	deployment, err := json.Marshal([]any{candidate, key, candidate.AzureADToken})
+	deployment, err := json.Marshal([]any{candidate, key, candidate.AzureADToken, candidate.AzureIdentityKey})
 	if err != nil {
 		return ""
 	}

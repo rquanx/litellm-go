@@ -408,7 +408,10 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 			if value := request.Header.Get(name); value != "" { upstream.Header.Set(name, value) }
 		}
 	} else {
-		providerKeyHeaders(upstream.Header, candidate, key)
+		if err := providerKeyHeaders(request.Context(), upstream.Header, candidate, key); err != nil {
+			writeError(writer, http.StatusBadGateway, "upstream_error", err.Error())
+			return
+		}
 	}
 	select {
 	case s.sem <- struct{}{}:

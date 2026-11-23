@@ -1,6 +1,9 @@
 package runtime
 
-import "regexp"
+import (
+	"context"
+	"regexp"
+)
 
 type Route struct {
 	Alias      string      `json:"alias"`
@@ -20,6 +23,8 @@ type Candidate struct {
 	Endpoint         string            `json:"endpoint"`
 	APIVersion       string            `json:"apiVersion,omitempty"`
 	AzureADToken     string            `json:"-"`
+	AzureToken       func(context.Context) (string, error) `json:"-"`
+	AzureIdentityKey string `json:"-"`
 	Provider         string            `json:"provider,omitempty"`
 	Region           string            `json:"region,omitempty"`
 	DeploymentID     string            `json:"deploymentId,omitempty"`

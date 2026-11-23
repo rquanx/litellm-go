@@ -202,8 +202,8 @@ func (s *Server) postRealtime(ctx context.Context, candidate Candidate, operatio
 	outgoing.Header.Set("Content-Type", contentType)
 	if candidate.Provider == "azure" && operation == "calls" {
 		outgoing.Header.Set("api-key", key)
-	} else {
-		providerKeyHeaders(outgoing.Header, candidate, key)
+	} else if err := providerKeyHeaders(ctx, outgoing.Header, candidate, key); err != nil {
+		return 0, nil, nil, err
 	}
 	select {
 	case s.sem <- struct{}{}:
