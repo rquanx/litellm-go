@@ -74,7 +74,8 @@ func TestMilvusIndexPassThroughUsesScopedRegisteredCollection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WithVectorRegistry(http.NotFoundHandler(), db, keys); err != nil {
+	indexHandler, err := WithVectorRegistry(http.NotFoundHandler(), db, keys)
+	if err != nil {
 		t.Fatal(err)
 	}
 	name := "milvus-" + newEntityID()
@@ -87,9 +88,14 @@ func TestMilvusIndexPassThroughUsesScopedRegisteredCollection(t *testing.T) {
 		VALUES ($1,'milvus',$1,'{"model":"vector","milvus_db_name":"docs"}','reader')`, name); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO "LiteLLM_ManagedVectorStoreIndexTable" (id,index_name,litellm_params)
-		VALUES ($1,$1,jsonb_build_object('vector_store_name',$1::text,'vector_store_index','native_collection'))`, name); err != nil {
-		t.Fatal(err)
+	for _, status := range []int{http.StatusOK, http.StatusBadRequest} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/indexes", strings.NewReader(`{"index_name":"`+name+`","litellm_params":{"vector_store_name":"`+name+`","vector_store_index":"native_collection"}}`))
+		request.Header.Set("Authorization", "Bearer limited")
+		output := httptest.NewRecorder()
+		indexHandler.ServeHTTP(output, request)
+		if output.Code != status {
+			t.Fatalf("index create: got %d want %d: %s", output.Code, status, output.Body)
+		}
 	}
 	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any

@@ -43,6 +43,7 @@ func WithVectorRegistry(next http.Handler, db *sql.DB, keys *KeyRegistry) (http.
 	}
 	api := &vectorRegistry{db: db, keys: keys}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/indexes", api.createIndex)
 	for _, prefix := range []string{"/vector_store/", "/v1/vector_store/"} {
 		mux.HandleFunc("GET "+prefix+"list", api.serve)
 		for _, action := range []string{"new", "info", "update", "delete"} {

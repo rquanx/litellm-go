@@ -3,9 +3,11 @@ package proxyconfig
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -72,4 +74,55 @@ func allowsMilvusIndex(metadata map[string]any, index, permission string) bool {
 		}
 	}
 	return false
+}
+
+func (api *vectorRegistry) createIndex(w http.ResponseWriter, r *http.Request) {
+	caller, ok := api.keys.identifyResourceCaller(r)
+	if !ok {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+		return
+	}
+	var input struct {
+		Name   string `json:"index_name"`
+		Params struct {
+			Store    string `json:"vector_store_name"`
+			Resource string `json:"vector_store_index"`
+		} `json:"litellm_params"`
+		Info map[string]any `json:"index_info"`
+	}
+	if decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input) != nil ||
+		!validVectorIndexName(input.Name) || !validVectorIndexName(input.Params.Resource) || strings.TrimSpace(input.Params.Store) == "" {
+		modelError(w, http.StatusBadRequest, "An index name, vector store name and provider index are required")
+		return
+	}
+	var info any
+	if input.Info != nil {
+		raw, _ := json.Marshal(input.Info)
+		info = string(raw)
+	}
+	params, _ := json.Marshal(input.Params)
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	var result json.RawMessage
+	err := api.db.QueryRowContext(ctx, `INSERT INTO "LiteLLM_ManagedVectorStoreIndexTable" AS idx
+		(id,index_name,litellm_params,index_info,created_by,updated_by)
+		SELECT $4,$5,$6,$7,NULLIF($2,''),NULLIF($2,'') FROM `+vectorRegistryTable+`
+		WHERE vector_store_name=$8 AND `+vectorRegistryScope+`
+		HAVING count(*)=1
+		ON CONFLICT (index_name) DO NOTHING RETURNING to_jsonb(idx)`,
+		caller.admin, caller.user, caller.team, newEntityID(), input.Name, string(params), info, input.Params.Store).Scan(&result)
+	if errors.Is(err, sql.ErrNoRows) {
+		modelError(w, http.StatusBadRequest, "The index exists or the vector store is unavailable")
+		return
+	}
+	if err != nil {
+		modelError(w, http.StatusInternalServerError, "Could not register vector store index")
+		return
+	}
+	modelJSON(w, http.StatusOK, result)
+}
+
+func validVectorIndexName(value string) bool {
+	return len(value) > 0 && len(value) <= 1024 && value != "." && value != ".." && !strings.ContainsAny(value, "/\\\x00") &&
+		strings.TrimSpace(value) == value
 }
