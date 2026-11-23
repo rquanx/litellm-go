@@ -317,7 +317,7 @@ func main() {
 		handler = customers.Handler(handler)
 	}
 	if spend != nil {
-		handler = spend.Handler(handler)
+		handler = spend.Handler(handler, server)
 	}
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	if config.BackgroundHealthInterval > 0 {

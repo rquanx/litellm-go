@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 type customerMetrics struct {
@@ -36,21 +37,38 @@ func (total *customerMetrics) add(entry customerMetrics) {
 }
 
 type customerBreakdown struct {
-	Metrics customerMetrics `json:"metrics"`
-	Metadata map[string]any `json:"metadata"`
-	Keys map[string]customerBreakdown `json:"api_key_breakdown,omitempty"`
+	Metrics  customerMetrics              `json:"metrics"`
+	Metadata map[string]any               `json:"metadata"`
+	Keys     map[string]customerBreakdown `json:"api_key_breakdown,omitempty"`
 }
 
 type customerActivityDay struct {
 	Date      string                                  `json:"date"`
 	Metrics   customerMetrics                         `json:"metrics"`
-	Breakdown map[string]map[string]customerBreakdown  `json:"breakdown"`
+	Breakdown map[string]map[string]customerBreakdown `json:"breakdown"`
 }
 
 func (log *SpendLog) customerActivity(w http.ResponseWriter, r *http.Request) {
 	if !log.keys.requireMaster(w, r) {
 		return
 	}
+	log.entityActivity(w, r, "end_user", nil)
+}
+
+func (log *SpendLog) agentActivity(w http.ResponseWriter, r *http.Request) {
+	token := runtime.ProxyCredential(r)
+	if token == log.keys.master && token != "" {
+		log.entityActivity(w, r, "agent", nil)
+		return
+	}
+	if _, ok := log.keys.Authorize(token); !ok {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+		return
+	}
+	log.entityActivity(w, r, "agent", log.agentActivityScope(r))
+}
+
+func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, entity string, scope []string) {
 	query := r.URL.Query()
 	page, pageErr := keyListInt(query, "page", 1)
 	size, sizeErr := keyListInt(query, "page_size", 10)
@@ -67,14 +85,23 @@ func (log *SpendLog) customerActivity(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	where += " AND end_user_id <> ''"
-	if ids := query.Get("end_user_ids"); ids != "" {
-		args = append(args, pq.Array(strings.Split(ids, ",")))
-		where += " AND end_user_id = ANY($" + strconv.Itoa(len(args)) + ")"
+	column, aliasJoin, aliasField := "end_user_id", " LEFT JOIN "+customerTable+" customer ON customer.user_id=activity.entity_id", "customer.alias"
+	if entity == "agent" {
+		column, aliasJoin, aliasField = "model_id", "", "NULL::text"
+		where += " AND provider = 'a2a_agent'"
 	}
-	if ids := query.Get("exclude_end_user_ids"); ids != "" {
+	where += " AND " + column + " <> ''"
+	if scope != nil {
+		args = append(args, pq.Array(scope))
+		where += " AND " + column + " = ANY($" + strconv.Itoa(len(args)) + ")"
+	}
+	if ids := query.Get(entity + "_ids"); ids != "" {
 		args = append(args, pq.Array(strings.Split(ids, ",")))
-		where += " AND NOT (end_user_id = ANY($" + strconv.Itoa(len(args)) + "))"
+		where += " AND " + column + " = ANY($" + strconv.Itoa(len(args)) + ")"
+	}
+	if ids := query.Get("exclude_" + entity + "_ids"); ids != "" {
+		args = append(args, pq.Array(strings.Split(ids, ",")))
+		where += " AND NOT (" + column + " = ANY($" + strconv.Itoa(len(args)) + "))"
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
@@ -85,7 +112,7 @@ func (log *SpendLog) customerActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var count int
-	const columns = `(started_at AT TIME ZONE 'UTC')::date AS day, end_user_id, model, model_group, provider,
+	columns := `(started_at AT TIME ZONE 'UTC')::date AS day, ` + column + ` AS entity_id, model, model_group, provider,
 		call_type, api_key, key_alias, team_id, COALESCE(sum(spend),0) AS spend, sum(prompt_tokens) AS prompt,
 		sum(completion_tokens) AS completion, sum(total_tokens) AS tokens, count(*) AS requests,
 		count(*) FILTER (WHERE status = 'success') AS successes, count(*) FILTER (WHERE status = 'failure') AS failures,
@@ -96,9 +123,9 @@ func (log *SpendLog) customerActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, offset := "$"+strconv.Itoa(len(args)+1), "$"+strconv.Itoa(len(args)+2)
-	rows, err := tx.QueryContext(ctx, `SELECT activity.*, customer.alias FROM (`+filtered+
-		" ORDER BY day DESC, end_user_id, model, model_group, provider, call_type, api_key, key_alias, team_id LIMIT "+limit+" OFFSET "+offset+
-		") activity LEFT JOIN "+customerTable+" customer ON customer.user_id=activity.end_user_id ORDER BY activity.day DESC",
+	rows, err := tx.QueryContext(ctx, "SELECT activity.*, "+aliasField+" FROM ("+filtered+
+		" ORDER BY day DESC, entity_id, model, model_group, provider, call_type, api_key, key_alias, team_id LIMIT "+limit+" OFFSET "+offset+
+		") activity"+aliasJoin+" ORDER BY activity.day DESC",
 		append(args, size, (page-1)*size)...)
 	if err != nil {
 		modelError(w, http.StatusInternalServerError, "Could not aggregate customer activity")

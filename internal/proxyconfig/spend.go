@@ -17,6 +17,7 @@ import (
 type SpendLog struct {
 	db   *sql.DB
 	keys *KeyRegistry
+	agentActivityScope func(*http.Request) []string
 }
 
 func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog, error) {
@@ -127,8 +128,12 @@ func (log *SpendLog) Start(ctx context.Context) func(runtime.InferenceEvent) {
 	}
 }
 
-func (log *SpendLog) Handler(next http.Handler) http.Handler {
+func (log *SpendLog) Handler(next http.Handler, server ...*runtime.Server) http.Handler {
 	mux := http.NewServeMux()
+	if len(server) > 0 {
+		log.agentActivityScope = server[0].GrantedAgentActivityIDs
+		mux.HandleFunc("GET /agent/daily/activity", log.agentActivity)
+	}
 	mux.HandleFunc("GET /customer/daily/activity", log.customerActivity)
 	mux.HandleFunc("GET /end_user/daily/activity", log.customerActivity)
 	mux.HandleFunc("GET /spend/logs", log.list)

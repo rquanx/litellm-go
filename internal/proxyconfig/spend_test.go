@@ -97,3 +97,48 @@ func TestPostgresSpendLogsAndCostTrend(t *testing.T) {
 	call("sk-test", activity, 401, "master key")
 	call("master", activity, 200, `"cache_hit_true_rows":1,"cached_completion_tokens":3,"generated_completion_tokens":0`)
 }
+
+func TestAgentDailyActivityIsScoped(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_spend (
+		request_id TEXT PRIMARY KEY, started_at TIMESTAMPTZ NOT NULL, ended_at TIMESTAMPTZ NOT NULL, api_key TEXT NOT NULL,
+		key_alias TEXT NOT NULL, user_id TEXT NOT NULL, team_id TEXT NOT NULL, model TEXT NOT NULL, model_group TEXT NOT NULL,
+		provider TEXT NOT NULL, call_type TEXT NOT NULL, status TEXT NOT NULL, prompt_tokens BIGINT NOT NULL,
+		completion_tokens BIGINT NOT NULL,total_tokens BIGINT NOT NULL,spend DOUBLE PRECISION)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Keys[keyDigest("scoped")] = virtualKey{ObjectPermission: &objectPermission{Agents: []string{"allowed"}}}
+	log, err := OpenSpendLog(context.Background(), db, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := float64(time.Now().Unix())
+	for _, id := range []string{"allowed", "private"} {
+		log.Record(runtime.InferenceEvent{ID: id, StartTime: now - 1, EndTime: now, Model: "a2a_agent/" + id, ModelID: id, Provider: "a2a_agent",
+			Status: "success", CallType: "asend_message", Total: 4, Prompt: 2, Completion: 2})
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeAgent: keys.AuthorizeAgent, Agents: []runtime.Agent{{ID: "allowed"}, {ID: "private", Public: true}}})
+	handler := log.Handler(http.NotFoundHandler(), server)
+	day := time.Now().UTC().Format(time.DateOnly)
+	req := httptest.NewRequest(http.MethodGet, "/agent/daily/activity?start_date="+day+"&end_date="+day, nil)
+	req.Header.Set("Authorization", "Bearer scoped")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"total_tokens":4`) || strings.Contains(response.Body.String(), "private") {
+		t.Fatalf("incorrect activity response %d %s", response.Code, response.Body)
+	}
+}

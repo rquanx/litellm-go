@@ -345,3 +345,23 @@ func (s *Server) probeAgent(ctx context.Context, client *http.Client, address st
 	response.Body.Close()
 	return response.StatusCode < 500
 }
+
+func (s *Server) GrantedAgentActivityIDs(r *http.Request) []string {
+	ids := []string{}
+	if s.config.AuthorizeAgent == nil {
+		return ids
+	}
+	granted := s.config.AuthorizeAgent(ProxyCredential(r))
+	if granted == nil {
+		return ids
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, agent := range s.agents {
+		agent.Public = false
+		if granted(agent) {
+			ids = append(ids, agent.ID)
+		}
+	}
+	return ids
+}
