@@ -836,7 +836,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = "image-edit"
 		}
 		if strings.Contains(model, "embedding") || entry.Info.Mode == "embedding" ||
-			(provider == "vertex_ai" && strings.Contains(strings.ToLower(model), "bge")) {
+			(provider == "vertex_ai" && (runtime.VertexUsesEmbedContent(model) || strings.Contains(strings.ToLower(model), "bge"))) {
 			endpoint = "google-embeddings"
 		}
 		if provider == "vertex_ai" && (entry.Info.Mode == "rerank" || strings.HasPrefix(model, "semantic-ranker-")) {

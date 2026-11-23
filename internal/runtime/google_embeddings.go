@@ -13,6 +13,9 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 	if candidate.Vertex != nil && (model == "multimodalembedding" || model == "multimodalembedding@001") {
 		return s.vertexMultimodalEmbeddings(ctx, request, candidate, input.fields)
 	}
+	if candidate.Vertex == nil || VertexUsesEmbedContent(model) {
+		return s.geminiContentEmbeddings(ctx, request, candidate, model, input.fields)
+	}
 	var texts []string
 	switch value := input.fields["input"].(type) {
 	case string:
@@ -32,8 +35,8 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 		return http.StatusBadRequest, []byte(`{"error":{"code":"invalid_request","message":"Supply a string or a list of strings"}}`), headers, false, nil
 	}
 	dimensions := input.fields["dimensions"]
-	bge := candidate.Vertex != nil && strings.Contains(strings.ToLower(model), "bge")
-	fineTuned := candidate.Vertex != nil && vertexNumericEndpoint(model)
+	bge := strings.Contains(strings.ToLower(model), "bge")
+	fineTuned := vertexNumericEndpoint(model)
 	taskType := input.fields["task_type"]
 	if taskType == nil {
 		taskType = input.fields["input_type"]
@@ -41,65 +44,51 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 	title := input.fields["title"]
 	items := make([]map[string]any, 0, len(texts))
 	fields := make(map[string]any)
-	if candidate.Vertex == nil {
-		model := "models/" + strings.TrimPrefix(candidate.ModelID, "models/")
-		for _, text := range texts {
-			item := map[string]any{"model": model, "content": map[string]any{"parts": []map[string]string{{"text": text}}}}
-			for name, value := range map[string]any{"outputDimensionality": dimensions, "taskType": taskType, "title": title} {
-				if value != nil {
-					item[name] = value
-				}
-			}
-			items = append(items, item)
-		}
-		fields["requests"] = items
-	} else {
-		field := "content"
-		switch {
-		case bge:
-			field = "prompt"
-		case fineTuned:
-			field = "inputs"
-		}
-		for _, text := range texts {
-			item := map[string]any{field: text}
-			if fineTuned {
-				items = append(items, item)
-				continue
-			}
-			if taskType != nil {
-				item["task_type"] = taskType
-			}
-			if title != nil {
-				item["title"] = title
-			}
-			items = append(items, item)
-		}
-		fields["instances"] = items
-		parameters := make(map[string]any)
-		if dimensions != nil {
-			parameters["outputDimensionality"] = dimensions
-		}
-		if truncate := input.fields["auto_truncate"]; truncate != nil {
-			parameters["auto_truncate"] = truncate
-		}
-		if bge || fineTuned {
-			for name, value := range map[string]any{"task_type": taskType, "title": title} {
-				if value != nil {
-					parameters[name] = value
-				}
-			}
-		}
+	field := "content"
+	switch {
+	case bge:
+		field = "prompt"
+	case fineTuned:
+		field = "inputs"
+	}
+	for _, text := range texts {
+		item := map[string]any{field: text}
 		if fineTuned {
-			for _, name := range []string{"max_new_tokens", "temperature", "top_p", "top_k"} {
-				if value := input.fields[name]; value != nil {
-					parameters[name] = value
-				}
+			items = append(items, item)
+			continue
+		}
+		if taskType != nil {
+			item["task_type"] = taskType
+		}
+		if title != nil {
+			item["title"] = title
+		}
+		items = append(items, item)
+	}
+	fields["instances"] = items
+	parameters := make(map[string]any)
+	if dimensions != nil {
+		parameters["outputDimensionality"] = dimensions
+	}
+	if truncate := input.fields["auto_truncate"]; truncate != nil {
+		parameters["auto_truncate"] = truncate
+	}
+	if bge || fineTuned {
+		for name, value := range map[string]any{"task_type": taskType, "title": title} {
+			if value != nil {
+				parameters[name] = value
 			}
 		}
-		if len(parameters) != 0 || bge || fineTuned {
-			fields["parameters"] = parameters
+	}
+	if fineTuned {
+		for _, name := range []string{"max_new_tokens", "temperature", "top_p", "top_k"} {
+			if value := input.fields[name]; value != nil {
+				parameters[name] = value
+			}
 		}
+	}
+	if len(parameters) != 0 || bge || fineTuned {
+		fields["parameters"] = parameters
 	}
 	status, response, upstreamHeaders, retryable, err := s.callProviderJSON(ctx, request, "embeddings", candidate, requestPayload{fields: fields})
 	if err != nil || status < 200 || status >= 300 {
@@ -107,65 +96,61 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 	}
 	type vector struct {
 		Values json.RawMessage `json:"values"`
-		Stats struct {
+		Stats  struct {
 			Tokens int `json:"token_count"`
 		} `json:"statistics"`
 	}
 	var result struct {
-		Embeddings []vector `json:"embeddings"`
 		Predictions []json.RawMessage `json:"predictions"`
-		Usage struct {
-			Tokens int `json:"promptTokenCount"`
-		} `json:"usageMetadata"`
 	}
 	if json.Unmarshal(response, &result) != nil {
 		return 0, nil, nil, true, errors.New("invalid Google embedding response")
 	}
-	total := result.Usage.Tokens
-	vectors := result.Embeddings
-	if candidate.Vertex != nil {
-		total = 0
-		vectors = nil
-		for _, raw := range result.Predictions {
-			var embedding vector
-			switch {
-			case bge:
-				embedding.Values = raw
-			case fineTuned:
-				var values []json.RawMessage
-				if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
-					return 0, nil, nil, true, errors.New("invalid fine-tuned Vertex embedding prediction")
-				}
-				embedding.Values = values[0]
-			default:
-				var prediction struct {
-					Embedding vector `json:"embeddings"`
-				}
-				if json.Unmarshal(raw, &prediction) != nil {
-					return 0, nil, nil, true, errors.New("invalid Vertex embedding prediction")
-				}
-				embedding = prediction.Embedding
+	total := 0
+	vectors := make([]json.RawMessage, 0, len(result.Predictions))
+	for _, raw := range result.Predictions {
+		var embedding vector
+		switch {
+		case bge:
+			embedding.Values = raw
+		case fineTuned:
+			var values []json.RawMessage
+			if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+				return 0, nil, nil, true, errors.New("invalid fine-tuned Vertex embedding prediction")
 			}
-			vectors = append(vectors, embedding)
-			total += embedding.Stats.Tokens
+			embedding.Values = values[0]
+		default:
+			var prediction struct {
+				Embedding vector `json:"embeddings"`
+			}
+			if json.Unmarshal(raw, &prediction) != nil {
+				return 0, nil, nil, true, errors.New("invalid Vertex embedding prediction")
+			}
+			embedding = prediction.Embedding
 		}
+		vectors = append(vectors, embedding.Values)
+		total += embedding.Stats.Tokens
 	}
-	if len(vectors) != len(texts) {
+	return s.googleEmbeddingResult(candidate.ModelID, vectors, len(texts), total)
+}
+
+func (s *Server) googleEmbeddingResult(model string, vectors []json.RawMessage, count, tokens int) (int, []byte, http.Header, bool, error) {
+	if len(vectors) != count {
 		return 0, nil, nil, true, errors.New("Google embedding response has an unexpected vector count")
 	}
 	data := make([]map[string]any, 0, len(vectors))
 	for index, embedding := range vectors {
-		if len(embedding.Values) == 0 || embedding.Values[0] != '[' {
+		if len(embedding) == 0 || embedding[0] != '[' {
 			return 0, nil, nil, true, errors.New("Google embedding response has no vector")
 		}
-		data = append(data, map[string]any{"object": "embedding", "index": index, "embedding": embedding.Values})
+		data = append(data, map[string]any{"object": "embedding", "index": index, "embedding": embedding})
 	}
-	body, err := json.Marshal(map[string]any{"object": "list", "model": candidate.ModelID, "data": data,
-		"usage": map[string]int{"prompt_tokens": total, "completion_tokens": 0, "total_tokens": total}})
+	body, err := json.Marshal(map[string]any{"object": "list", "model": model, "data": data,
+		"usage": map[string]int{"prompt_tokens": tokens, "completion_tokens": 0, "total_tokens": tokens}})
 	if int64(len(body)) > s.config.MaxBodyBytes {
 		return 0, nil, nil, false, errors.New("Google embedding response exceeds the body limit")
 	}
-	return http.StatusOK, body, headers, false, err
+	return http.StatusOK, body, http.Header{"Content-Type": {"application/json"}}, false, err
 }
 
 func vertexNumericEndpoint(model string) bool {

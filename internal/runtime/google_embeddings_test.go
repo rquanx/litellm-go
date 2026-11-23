@@ -5,15 +5,70 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
+func TestGeminiContentEmbeddingProtocols(t *testing.T) {
+	for _, vertex := range []bool{false, true} {
+		model, action, input := "gemini-embedding-2", ":batchEmbedContents", `[["text","data:image/png;base64,YWJj","files/a"],"files/a"]`
+		var deployment *VertexConfig
+		if vertex {
+			action, input = ":embedContent", `["text","data:image/png;base64,YWJj","gs://fixtures/guide.pdf"]`
+			deployment = &VertexConfig{Project: "example", Location: "global"}
+		}
+		t.Run(action[1:], func(t *testing.T) {
+			var lookups atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/v1beta/files/a" {
+					lookups.Add(1)
+					w.Write([]byte(`{"uri":"https://example.invalid/v1beta/files/a","mimeType":"image/png"}`))
+					return
+				}
+				var payload json.RawMessage
+				err := json.NewDecoder(r.Body).Decode(&payload)
+				var expected string
+				if vertex {
+					expected = `{"content":{"parts":[{"text":"text"},{"inline_data":{"data":"YWJj","mime_type":"image/png"}},{"file_data":{"file_uri":"gs://fixtures/guide.pdf","mime_type":"application/pdf"}}]},"outputDimensionality":128}`
+				} else {
+					expected = `{"requests":[{"content":{"parts":[{"text":"text"},{"inline_data":{"data":"YWJj","mime_type":"image/png"}},{"file_data":{"file_uri":"https://example.invalid/v1beta/files/a","mime_type":"image/png"}}]},"model":"models/gemini-embedding-2","outputDimensionality":128},{"content":{"parts":[{"file_data":{"file_uri":"https://example.invalid/v1beta/files/a","mime_type":"image/png"}}]},"model":"models/gemini-embedding-2","outputDimensionality":128}]}`
+				}
+				if !strings.HasSuffix(r.URL.Path, "/models/"+model+action) || err != nil || string(payload) != expected {
+					t.Errorf("unexpected embedding request %s: %s, %v", r.URL.Path, payload, err)
+				}
+				if vertex {
+					w.Write([]byte(`{"embedding":{"values":[1]}}`))
+				} else {
+					w.Write([]byte(`{"embeddings":[{"values":[1]},{"values":[2]}],"usageMetadata":{"promptTokenCount":3}}`))
+				}
+			}))
+			defer upstream.Close()
+			candidate := Candidate{Endpoint: "google-embeddings", ModelID: model, APIKey: "fixture", APIBase: upstream.URL, Vertex: deployment}
+			server := NewServer(Config{Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}})
+			request := httptest.NewRequest("POST", "/v1/embeddings", strings.NewReader(`{"model":"demo","dimensions":128,"input":`+input+`}`))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"embedding":[1]`) {
+				t.Fatalf("response = %d %s", response.Code, response.Body)
+			}
+			if vertex {
+				if lookups.Load() != 0 || !strings.Contains(response.Body.String(), `"total_tokens":0`) {
+					t.Fatalf("unexpected Vertex usage or media lookup: %s", response.Body)
+				}
+			} else if lookups.Load() != 1 || !strings.Contains(response.Body.String(), `"total_tokens":3`) ||
+				!strings.Contains(response.Body.String(), `"embedding":[2],"index":1`) {
+				t.Fatalf("unexpected Developer API batch response or file lookups: %s", response.Body)
+			}
+		})
+	}
+}
+
 func TestGoogleEmbeddingsMapsDeveloperAndVertexProtocols(t *testing.T) {
 	for _, fixture := range []struct {
-		name string
-		path string
+		name   string
+		path   string
 		vector string
-		field string
+		field  string
 		vertex *VertexConfig
 	}{
 		{"developer", "/v1beta/models/gemini-embedding-001:batchEmbedContents", `{"embeddings":[{"values":[1]}]}`, "requests", nil},
@@ -54,8 +109,8 @@ func TestGoogleEmbeddingsMapsDeveloperAndVertexProtocols(t *testing.T) {
 func TestVertexMultimodalEmbeddingMapsMediaAndUsage(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var fields struct {
-			Instances []vertexEmbeddingInstance `json:"instances"`
-			Parameters map[string]int `json:"parameters"`
+			Instances  []vertexEmbeddingInstance `json:"instances"`
+			Parameters map[string]int            `json:"parameters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
 			t.Error(err)

@@ -174,6 +174,14 @@ def main():
         if model != "sample_spec" and any(type(rate) in (int, float) for rate in rates):
             cache_prices[model] = [rate if type(rate) in (int, float) else None for rate in rates]
     cache_output = json.dumps(cache_prices, sort_keys=True, indent=2) + "\n"
+    vertex_content_models = sorted({
+        name.removeprefix("vertex_ai/")
+        for name, metadata in upstream_prices.items()
+        if metadata.get("uses_embed_content") is True
+        and (name.startswith("vertex_ai/") or str(metadata.get("litellm_provider", "")).startswith("vertex_ai"))
+    })
+    vertex_content_output = json.dumps(vertex_content_models, indent=2) + "\n"
+    vertex_content_target = ROOT / "internal/runtime/vertex-embed-content-models.json"
     public = public_catalogs(args.checkout, revision, upstream_prices)
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
@@ -186,6 +194,8 @@ def main():
         if CACHE_PRICES.read_text(encoding="utf-8") != cache_output:
             raise SystemExit("Go cache prices differ from the pinned LiteLLM source")
         print(f"{len(cache_prices)} cache prices match LiteLLM {revision}")
+        if vertex_content_target.read_text(encoding="utf-8") != vertex_content_output:
+            raise SystemExit("Vertex embedContent model list differs from the pinned LiteLLM source")
         for name, data in public.items():
             if gzip.decompress((TARGET.parent / name).read_bytes()) != gzip.decompress(data):
                 raise SystemExit(f"{name} differs from the pinned LiteLLM source")
@@ -195,6 +205,7 @@ def main():
         SETTINGS.write_text(settings_output, encoding="utf-8")
         PRICES.write_text(price_output, encoding="utf-8")
         CACHE_PRICES.write_text(cache_output, encoding="utf-8")
+        vertex_content_target.write_text(vertex_content_output, encoding="utf-8")
         for name, data in public.items():
             (TARGET.parent / name).write_bytes(data)
 

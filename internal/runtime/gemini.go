@@ -89,6 +89,9 @@ func geminiTarget(candidate Candidate, endpoint string) string {
 	project := base + "/v1/projects/" + url.PathEscape(vertex.Project) + "/locations/" + url.PathEscape(vertex.Location)
 	target := project + "/publishers/google/models/" + url.PathEscape(model)
 	if endpoint == "google-embeddings" {
+		if VertexUsesEmbedContent(model) {
+			return target + ":embedContent"
+		}
 		if id := strings.TrimPrefix(model, "bge/"); vertexNumericEndpoint(id) {
 			return project + "/endpoints/" + id + ":predict"
 		}
