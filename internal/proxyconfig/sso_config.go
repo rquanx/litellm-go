@@ -85,3 +85,15 @@ func (cfg uiSSOConfig) ready() bool {
 }
 
 const uiSSOFlowTTL = 5 * time.Minute
+
+func ssoClaim(claims map[string]any, path string) any {
+	if value, ok := claims[path]; ok {
+		return value
+	}
+	var value any = claims
+	for _, segment := range strings.Split(path, ".") {
+		object, _ := value.(map[string]any)
+		value = object[segment]
+	}
+	return value
+}

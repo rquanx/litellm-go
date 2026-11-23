@@ -35,7 +35,7 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 			if r.Header.Get("Authorization") != "Bearer fixture-access" {
 				t.Error("missing SSO access token")
 			}
-			w.Write([]byte(`{"sub":"fixture-subject","email":"login@example.invalid","email_verified":true}`))
+			w.Write([]byte(`{"identity":{"id":"fixture-subject","mail":"login@example.invalid"},"email_verified":true,"directory":{"teams":["sso-team","missing-team"]}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -46,6 +46,8 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 	t.Setenv("GENERIC_INCLUDE_CLIENT_ID", "")
 	t.Setenv("GENERIC_CLIENT_ID", "fixture")
 	t.Setenv("GENERIC_CLIENT_SECRET", "fixture-secret")
+	t.Setenv("GENERIC_USER_ID_ATTRIBUTE", "identity.id")
+	t.Setenv("GENERIC_USER_EMAIL_ATTRIBUTE", "identity.mail")
 	t.Setenv("GENERIC_AUTHORIZATION_ENDPOINT", upstream.URL+"/authorize")
 	t.Setenv("GENERIC_TOKEN_ENDPOINT", upstream.URL+"/token")
 	t.Setenv("GENERIC_USERINFO_ENDPOINT", upstream.URL+"/userinfo")
@@ -55,6 +57,8 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry.state.Users = map[string]internalUser{"user": {ID: "user", Email: "login@example.invalid", Role: "internal_user", Models: []string{"approved"}}}
+	registry.state.Teams["sso-team"] = team{ID: "sso-team"}
+	registry.SetSSOUserDefaults(nil, "directory.teams")
 	handler := registry.Handler(http.NotFoundHandler())
 	start := httptest.NewRecorder()
 	handler.ServeHTTP(start, httptest.NewRequest(http.MethodGet, "/sso/key/generate", nil))
@@ -83,6 +87,9 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 	completed := callback(cookies[0])
 	if completed.Code != http.StatusSeeOther || !strings.HasSuffix(completed.Header().Get("Location"), "/ui?login=success") {
 		t.Fatalf("callback returned %d: %s", completed.Code, completed.Body)
+	}
+	if memberIndex(registry.state.Teams["sso-team"], "user") < 0 || registry.state.Teams["missing-team"].ID != "" {
+		t.Fatal("SSO team claims did not add the user only to configured teams")
 	}
 	for _, cookie := range completed.Result().Cookies() {
 		if cookie.Name != "token" {
@@ -221,19 +228,19 @@ litellm_settings:
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry.SetSSOUserDefaults(cfg.SSOUserDefaults)
+	registry.SetSSOUserDefaults(cfg.SSOUserDefaults, cfg.SSOTeamClaim)
 	registry.state.Teams["provisioned"] = team{ID: "provisioned"}
 	server := &uiSSOServer{keys: registry, config: uiSSOConfig{provider: "generic", userInfo: "https://sso.example.invalid/me"}}
 	first := httptest.NewRecorder()
-	if _, _, ok := server.issueSession(first, "subject", "LOGIN@example.invalid", true); ok ||
+	if _, _, ok := server.issueSession(first, ssoIdentity{Subject: "subject", Email: "LOGIN@example.invalid", Verified: true}); ok ||
 		first.Code != http.StatusServiceUnavailable || len(registry.state.Users) != 0 || len(registry.state.Teams["provisioned"].Members) != 0 {
 		t.Fatalf("failed provisioning committed partial state: %d %s", first.Code, first.Body)
 	}
 	registry.state.Teams["missing"] = team{ID: "missing"}
-	if _, _, ok := server.issueSession(httptest.NewRecorder(), "subject", "LOGIN@example.invalid", false); ok {
+	if _, _, ok := server.issueSession(httptest.NewRecorder(), ssoIdentity{Subject: "subject", Email: "LOGIN@example.invalid"}); ok {
 		t.Fatal("unverified email triggered account provisioning")
 	}
-	if _, _, ok := server.issueSession(httptest.NewRecorder(), "subject", "LOGIN@example.invalid", true); !ok {
+	if _, _, ok := server.issueSession(httptest.NewRecorder(), ssoIdentity{Subject: "subject", Email: "LOGIN@example.invalid", Verified: true}); !ok {
 		t.Fatal("verified SSO provisioning failed")
 	}
 	for _, user := range registry.state.Users {

@@ -139,8 +139,26 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
+	var claims map[string]any
+	subjectClaim, emailClaim := "sub", "email"
+	if cfg.provider == "generic" {
+		if field := os.Getenv("GENERIC_USER_ID_ATTRIBUTE"); field != "" {
+			subjectClaim = field
+		}
+		if field := os.Getenv("GENERIC_USER_EMAIL_ATTRIBUTE"); field != "" {
+			emailClaim = field
+		}
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&claims) != nil {
+		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
+		return
+	}
 	var identity ssoIdentity
-	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&identity) != nil || identity.Subject == "" {
+	identity.Subject, _ = ssoClaim(claims, subjectClaim).(string)
+	identity.Email, _ = ssoClaim(claims, emailClaim).(string)
+	identity.Verified, _ = claims["email_verified"].(bool)
+	identity.TeamIDs = policyStringList(ssoClaim(claims, s.keys.ssoTeamClaim))
+	if identity.Subject == "" {
 		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
 		return
 	}
@@ -149,7 +167,7 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 		s.renderCLIConfirmation(w, flow.cliID, identity)
 		return
 	}
-	session, expires, ok := s.issueSession(w, identity.Subject, identity.Email, identity.Verified)
+	session, expires, ok := s.issueSession(w, identity)
 	if !ok {
 		return
 	}
@@ -198,10 +216,10 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email st
 	return user, bound, binding
 }
 
-func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string, verified bool) (string, time.Time, bool) {
+func (s *uiSSOServer) issueSession(w http.ResponseWriter, identity ssoIdentity) (string, time.Time, bool) {
 	s.keys.mu.Lock()
 	defer s.keys.mu.Unlock()
-	user, bound, binding := s.resolveUserLocked(w, subject, email, verified)
+	user, bound, binding := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
 	if user.ID == "" {
 		return "", time.Time{}, false
 	}
@@ -219,7 +237,7 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string,
 		return "", time.Time{}, false
 	}
 
-	next, ok := s.bindSSOUser(w, user, bound, binding, subject)
+	next, ok := s.bindSSOUser(w, user, bound, binding, identity)
 	if !ok {
 		return "", time.Time{}, false
 	}

@@ -50,39 +50,43 @@ func (defaults *SSOUserDefaults) validate() error {
 	return nil
 }
 
-func (registry *KeyRegistry) SetSSOUserDefaults(defaults *SSOUserDefaults) {
+func (registry *KeyRegistry) SetSSOUserDefaults(defaults *SSOUserDefaults, teamClaim string) {
 	registry.ssoDefaults = defaults
+	registry.ssoTeamClaim = teamClaim
 }
 
 // bindSSOUser prepares an atomic account, team membership and subject binding update.
-func (s *uiSSOServer) bindSSOUser(w http.ResponseWriter, user internalUser, bound bool, binding, subject string) (accessState, bool) {
+func (s *uiSSOServer) bindSSOUser(w http.ResponseWriter, user internalUser, bound bool, binding string, identity ssoIdentity) (accessState, bool) {
 	next := s.keys.state
-	if bound {
-		return next, true
-	}
 	_, existing := next.Users[user.ID]
-	metadata := maps.Clone(user.Metadata)
-	if metadata == nil {
-		metadata = make(map[string]any)
+	if !bound {
+		metadata := maps.Clone(user.Metadata)
+		if metadata == nil {
+			metadata = make(map[string]any)
+		}
+		identities, _ := metadata["sso_subjects"].(map[string]any)
+		identities = maps.Clone(identities)
+		if identities == nil {
+			identities = make(map[string]any)
+		}
+		identities[binding] = identity.Subject
+		metadata["sso_subjects"] = identities
+		user.Metadata = metadata
+		next.Users = maps.Clone(next.Users)
+		if next.Users == nil {
+			next.Users = make(map[string]internalUser)
+		}
+		next.Users[user.ID] = user
 	}
-	identities, _ := metadata["sso_subjects"].(map[string]any)
-	identities = maps.Clone(identities)
-	if identities == nil {
-		identities = make(map[string]any)
+	var grants []ssoDefaultTeam
+	if !existing && s.keys.ssoDefaults.enabled() {
+		grants = s.keys.ssoDefaults.Teams
 	}
-	identities[binding] = subject
-	metadata["sso_subjects"] = identities
-	user.Metadata = metadata
-	next.Users = maps.Clone(next.Users)
-	if next.Users == nil {
-		next.Users = make(map[string]internalUser)
-	}
-	next.Users[user.ID] = user
-	if existing || !s.keys.ssoDefaults.enabled() || len(s.keys.ssoDefaults.Teams) == 0 {
+	if len(grants) == 0 && len(identity.TeamIDs) == 0 {
 		return next, true
 	}
 	next.Teams = maps.Clone(next.Teams)
-	for _, grant := range s.keys.ssoDefaults.Teams {
+	for _, grant := range grants {
 		owner, found := next.Teams[grant.ID]
 		if !found || owner.Blocked {
 			modelError(w, http.StatusServiceUnavailable, "SSO default team is unavailable")
@@ -94,6 +98,14 @@ func (s *uiSSOServer) bindSSOUser(w http.ResponseWriter, user internalUser, boun
 		}
 		owner.Members = append(slices.Clone(owner.Members), teamMembership{TeamID: owner.ID, UserID: user.ID, Email: user.Email, Role: role})
 		next.Teams[grant.ID] = owner
+	}
+	for _, id := range identity.TeamIDs {
+		owner, found := next.Teams[id]
+		if !found || owner.Blocked || memberIndex(owner, user.ID) >= 0 {
+			continue
+		}
+		owner.Members = append(slices.Clone(owner.Members), teamMembership{TeamID: id, UserID: user.ID, Email: user.Email, Role: "user"})
+		next.Teams[id] = owner
 	}
 	return next, true
 }

@@ -18,6 +18,7 @@ type ssoIdentity struct {
 	Subject  string `json:"sub"`
 	Email    string `json:"email"`
 	Verified bool   `json:"email_verified"`
+	TeamIDs  []string
 }
 
 type cliSSOFlow struct {
@@ -153,7 +154,7 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusForbidden, "CLI login user binding changed")
 		return
 	}
-	next, ok := s.bindSSOUser(w, user, bound, binding, identity.Subject)
+	next, ok := s.bindSSOUser(w, user, bound, binding, identity)
 	if !ok {
 		return
 	}

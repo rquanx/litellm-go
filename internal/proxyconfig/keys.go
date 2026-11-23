@@ -59,6 +59,7 @@ type KeyRegistry struct {
 	mu     sync.RWMutex
 	state  accessState
 	ssoDefaults *SSOUserDefaults
+	ssoTeamClaim string
 	teamMemberSpend func(context.Context, string, string) (float64, error)
 }
 

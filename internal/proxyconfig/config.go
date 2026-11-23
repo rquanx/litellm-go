@@ -46,6 +46,9 @@ type configFile struct {
 		IgnoreTransientHealthErrors bool `yaml:"health_check_ignore_transient_errors"`
 		PassThrough []passThroughConfig `yaml:"pass_through_endpoints"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
+		UIAccessMode struct {
+			SSOGroupClaim string `yaml:"sso_group_jwt_field"`
+		} `yaml:"ui_access_mode"`
 	} `yaml:"general_settings"`
 	Router struct {
 		EnableTagFiltering bool `yaml:"enable_tag_filtering"`
@@ -196,6 +199,7 @@ type Config struct {
 	Policy *PolicyEngine
 	prompts map[string]promptRecord
 	SSOUserDefaults *SSOUserDefaults
+	SSOTeamClaim string
 	LogMessages bool
 	publicModelGroups []string
 	publicModelLinks map[string]any
@@ -296,6 +300,7 @@ func load(reader io.Reader, configDirectory string) (Config, error) {
 		return Config{}, err
 	}
 	config.SSOUserDefaults = file.Callbacks.SSOUserDefaults
+	config.SSOTeamClaim = file.General.UIAccessMode.SSOGroupClaim
 	if err := config.SSOUserDefaults.validate(); err != nil {
 		return Config{}, err
 	}

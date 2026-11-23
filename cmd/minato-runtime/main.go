@@ -342,7 +342,7 @@ func main() {
 	if keys != nil {
 		handler,err=proxy.WithPromptManagement(handler,stateDB,keys)
 		if err!=nil {log.Fatal(err)}
-		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
+		keys.SetSSOUserDefaults(proxy.SSOUserDefaults,proxy.SSOTeamClaim)
 		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)
 		go keys.RunRefresh(context.Background())

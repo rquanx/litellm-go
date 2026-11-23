@@ -159,7 +159,7 @@ The browser SSO routes support OAuth authorization codes with S256 PKCE and auth
 
 The CLI SSO fixture verifies pending polling, browser code confirmation, polling secret checks, team selection and single redemption. The CLI receives an expiring virtual key with the selected team scope. LiteLLM uses a CLI JWT. Pending flows are local to one proxy instance.
 
-With `litellm_settings.default_internal_user_params.user_role: internal_user`, a verified new SSO identity can provision an account with configured model scopes and team memberships. The fixture verifies that a missing team leaves the account and memberships uncommitted. Dynamic identity-provider group mappings remain open.
+With `litellm_settings.default_internal_user_params.user_role: internal_user`, a verified new SSO identity can provision an account with configured model scopes and team memberships. The fixture verifies that a missing default team leaves the account and memberships uncommitted. The authenticated UserInfo response can add the user to known teams using `general_settings.ui_access_mode.sso_group_jwt_field` and a dotted claim path. Generic SSO also accepts configured subject and email claim paths. Role mapping, group removal synchronization and automatic team creation remain open.
 
 User-bound keys can read their own user record and teams where the user is a member. Team detail responses limit key records to that user. Removing a team membership invalidates CLI SSO keys issued for that team.
 
