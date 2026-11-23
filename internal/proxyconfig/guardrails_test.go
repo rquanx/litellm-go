@@ -412,6 +412,7 @@ func TestPostgresGuardrailUsageRecordsAndAggregatesOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	db.SetMaxOpenConns(1)
 	keys, err := LoadKeys("master", "")
 	if err != nil {
 		t.Fatal(err)
@@ -461,5 +462,27 @@ func TestPostgresGuardrailUsageRecordsAndAggregatesOutcomes(t *testing.T) {
 		if w.Code != 200 || !strings.Contains(w.Body.String(), expected) {
 			t.Fatalf("%s returned %d %s", path, w.Code, w.Body)
 		}
+	}
+	if _, err := db.Exec(`
+		CREATE TEMP TABLE "LiteLLM_SpendLogGuardrailIndex" (
+			request_id text, guardrail_id text, policy_id text, start_time timestamp
+		);
+		CREATE TEMP TABLE "LiteLLM_SpendLogs" (
+			request_id text, model text, metadata jsonb, messages jsonb, response jsonb, proxy_server_request jsonb
+		);
+		INSERT INTO "LiteLLM_SpendLogs" VALUES ('python-run','python-model',
+			'{"guardrail_information":[{"guardrail_id":"historical-rule","guardrail_status":"guardrail_intervened","duration":0.2,"confidence_score":0.914}]}',
+			'[{"content":"fixture prompt"}]','"fixture response"',NULL);
+		INSERT INTO "LiteLLM_SpendLogGuardrailIndex" VALUES ('python-run','historical-rule','historical-policy',CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+	`); err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/guardrails/usage/logs"+query+"&policy_id=historical-policy&action=blocked", nil)
+	r.Header.Set("Authorization", "Bearer master")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"score":0.91`) ||
+		!strings.Contains(w.Body.String(), `"latency_ms":200`) || !strings.Contains(w.Body.String(), "fixture prompt") {
+		t.Fatalf("could not read Python guardrail history: %d %s", w.Code, w.Body)
 	}
 }

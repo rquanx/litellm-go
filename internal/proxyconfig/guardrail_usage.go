@@ -396,10 +396,6 @@ func (usage *GuardrailUsage) readRunLogs(w http.ResponseWriter, r *http.Request)
 			}
 			*target = &date
 		}
-		const filter = ` FROM ` + guardrailRunTable + ` WHERE
-			($5='' OR policy_id=$5) AND ($1='' OR guardrail_name=$1 OR guardrail_name=(SELECT guardrail_name FROM ` + guardrailTable + ` WHERE guardrail_id=$1))
-			AND ($2='' OR action=$2) AND ($3::timestamptz IS NULL OR started_at >= $3)
-			AND ($4::timestamptz IS NULL OR started_at <= $4)`
 		args := []any{id, query.Get("action"), start, end, policyID}
 		tx, err := usage.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 		if err != nil {
@@ -407,11 +403,17 @@ func (usage *GuardrailUsage) readRunLogs(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		defer tx.Rollback()
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*)`+filter, args...).Scan(&total); err != nil {
+		source, err := guardrailRunSource(ctx, tx)
+		if err != nil {
+			modelError(w, 500, "Could not locate guardrail run storage")
+			return
+		}
+		const filter = ` FROM runs WHERE ($2='' OR action=$2)`
+		if err := tx.QueryRowContext(ctx, source+`SELECT COUNT(*)`+filter, args...).Scan(&total); err != nil {
 			modelError(w, 500, "Could not count guardrail runs")
 			return
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT id,started_at,action,model,latency_ms`+filter+
+		rows, err := tx.QueryContext(ctx, source+`SELECT id,started_at,action,model,latency_ms,score,input_snippet,output_snippet,reason`+filter+
 			` ORDER BY started_at DESC,id LIMIT $6 OFFSET $7`, append(args, size, int64(page-1)*int64(size))...)
 		if err != nil {
 			modelError(w, 500, "Could not read guardrail runs")
@@ -421,13 +423,18 @@ func (usage *GuardrailUsage) readRunLogs(w http.ResponseWriter, r *http.Request)
 		for rows.Next() {
 			var runID, action, model string
 			var at time.Time
-			var latency float64
-			if err := rows.Scan(&runID, &at, &action, &model, &latency); err != nil {
+			var latency, score *float64
+			var input, output, reason *string
+			if err := rows.Scan(&runID, &at, &action, &model, &latency, &score, &input, &output, &reason); err != nil {
 				modelError(w, 500, "Could not read guardrail run")
 				return
 			}
+			var latencyMS any
+			if latency != nil {
+				latencyMS = math.Round(*latency)
+			}
 			result = append(result, map[string]any{"id": runID, "timestamp": at.UTC(), "action": action, "model": model,
-				"latency_ms": math.Round(latency), "score": nil, "input_snippet": nil, "output_snippet": nil, "reason": nil})
+				"latency_ms": latencyMS, "score": score, "input_snippet": input, "output_snippet": output, "reason": reason})
 		}
 		if rows.Err() != nil || tx.Commit() != nil {
 			modelError(w, 500, "Could not read guardrail runs")
