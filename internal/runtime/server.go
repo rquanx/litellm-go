@@ -76,6 +76,7 @@ type Config struct {
 	PassThrough []PassThroughRoute
 	MCPServers []MCPServer
 	Agents []Agent
+	ResolvePrompt func(*http.Request, map[string]any) (int, error)
 	CallbackNames      []string
 	CallbackHealth func(context.Context, string, InferenceEvent) bool
 	PublicReadinessDetails bool
@@ -485,6 +486,12 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	input := payload.fields
+	if endpoint == "chat-completions" && s.config.ResolvePrompt != nil && input["prompt_id"] != nil {
+		if status, err := s.config.ResolvePrompt(request, input); err != nil {
+			writeError(writer, status, "prompt_error", err.Error())
+			return
+		}
+	}
 	stream := endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream")
 	if alias == "" {
 		alias, _ = input["model"].(string)

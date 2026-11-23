@@ -287,6 +287,7 @@ func main() {
 	if stateDB != nil && keys != nil {
 		config.VectorRegistryLookup = proxyconfig.VectorRegistryLookup(stateDB, keys)
 		config.MilvusIndexLookup = proxyconfig.MilvusIndexLookup(stateDB, keys)
+		config.ResolvePrompt = proxyconfig.StoredPromptResolver(stateDB, keys)
 		credentials, err := proxyconfig.OpenMCPUserCredentialStore(stateDB, config.Token)
 		if err != nil {
 			log.Fatal(err)

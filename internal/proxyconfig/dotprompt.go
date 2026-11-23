@@ -39,6 +39,7 @@ func dotpromptMessages(content string, variables map[string]any) ([]map[string]a
 	if strings.Contains(residue, "{{") || strings.Contains(residue, "{%") || strings.Contains(residue, "{#") {
 		return nil, errors.New("Unsupported expression in dotprompt template")
 	}
+	remaining := 2<<20 - len(residue)
 	content = dotpromptVariable.ReplaceAllStringFunc(content, func(marker string) string {
 		name := dotpromptVariable.FindStringSubmatch(marker)[1]
 		var value any = variables
@@ -49,12 +50,23 @@ func dotpromptMessages(content string, variables map[string]any) ([]map[string]a
 		if value == nil {
 			return ""
 		}
-		if text, ok := value.(string); ok {
-			return text
+		if remaining < 0 {
+			return ""
 		}
-		text, _ := json.Marshal(value)
-		return string(text)
+		text, ok := value.(string)
+		if !ok {
+			raw, _ := json.Marshal(value)
+			text = string(raw)
+		}
+		remaining -= len(text)
+		if remaining < 0 {
+			return ""
+		}
+		return text
 	})
+	if remaining < 0 {
+		return nil, errors.New("Rendered prompt exceeds the size limit")
+	}
 	messages := make([]map[string]any, 0, 4)
 	role := "user"
 	var lines []string
@@ -117,11 +129,7 @@ func (api promptAPI) testPrompt(w http.ResponseWriter, r *http.Request, next htt
 		messages = append(history, input.History...)
 	}
 	fields := map[string]any{"model": model, "messages": messages, "stream": true}
-	for _, key := range []string{"temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "seed", "tools", "tool_choice", "response_format", "reasoning_effort"} {
-		if value := metadata[key]; value != nil {
-			fields[key] = value
-		}
-	}
+	applyDotpromptOptions(fields, metadata)
 	body, err := json.Marshal(fields)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid prompt parameters")
@@ -173,4 +181,12 @@ func (api promptAPI) convertDotprompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modelError(w, http.StatusBadRequest, "A .prompt file is required")
+}
+
+func applyDotpromptOptions(fields, metadata map[string]any) {
+	for _, key := range []string{"temperature", "max_tokens", "max_completion_tokens", "top_p", "frequency_penalty", "presence_penalty", "stop", "seed", "tools", "tool_choice", "response_format", "reasoning_effort"} {
+		if value := metadata[key]; value != nil {
+			fields[key] = value
+		}
+	}
 }
