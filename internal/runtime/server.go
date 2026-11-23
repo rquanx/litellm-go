@@ -497,8 +497,11 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if alias == "" {
 		alias, _ = input["model"].(string)
 	}
+	var postGuardrails []GenericGuardrail
 	if len(s.config.Guardrails) != 0 && (endpoint == "chat-completions" || endpoint == "responses") && modelAllowed(modelScope, alias) {
-		if !s.applyGenericGuardrails(writer, request, alias, input) {
+		var allowed bool
+		postGuardrails, allowed = s.applyGenericGuardrails(writer, request, alias, input, stream)
+		if !allowed {
 			return
 		}
 	}
@@ -608,6 +611,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 		if len(automatic) > 0 {
+			if len(postGuardrails) != 0 {
+				writeError(writer, http.StatusBadRequest, "guardrail_error", "Automatic tool execution requires compatible response guardrails")
+				return
+			}
 			if endpoint == "responses" && s.shouldPollResponse(route, input) {
 				s.startResponsePolling(writer, request, route.Alias, body)
 				return
@@ -628,6 +635,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if s.config.AuthorizeInference && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
+			if len(postGuardrails) != 0 {
+				writeError(writer, http.StatusBadRequest, "guardrail_error", "Background responses require compatible response guardrails")
+				return
+			}
 			originalPollingPayload = body
 		}
 		previous, _ := input["previous_response_id"].(string)
@@ -667,7 +678,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
-	cache := s.prepareInferenceCache(request, endpoint, route.Alias, stream, &payload)
+	var cache inferenceCacheRequest
+	if len(postGuardrails) == 0 {
+		cache = s.prepareInferenceCache(request, endpoint, route.Alias, stream, &payload)
+	}
 	if stream {
 		if !endpoints[endpoint].streaming {
 			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
@@ -767,6 +781,13 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if candidate.Endpoint == "bedrock-embeddings" && strings.HasPrefix(candidate.ModelID, "async_invoke/") {
 				if arn := responseHeaders.Get("X-LiteLLM-Invocation-ARN"); arn != "" {
 					writer.Header().Set("X-LiteLLM-Invocation-ARN", arn)
+				}
+			}
+			if len(postGuardrails) > 0 {
+				var allowed bool
+				body, allowed = s.applyResponseGuardrails(writer, request, route.Alias, postGuardrails, body)
+				if !allowed {
+					return
 				}
 			}
 			if cacheKey != "" {

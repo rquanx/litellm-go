@@ -71,3 +71,43 @@ litellm_settings:
 		t.Fatalf("unexpected model request count %d", inferenceCalls)
 	}
 }
+
+func TestGenericResponseGuardrailRunsBeforeWriting(t *testing.T) {
+	modelRequests, guardRequests := 0, 0
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/chat/completions" {
+			modelRequests++
+			io.WriteString(w, `{"choices":[{"message":{"content":"original","role":"assistant"}}],"id":"fixture"}`)
+			return
+		}
+		guardRequests++
+		raw, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(raw), `"input_type":"response"`) || !strings.Contains(string(raw), `"texts":["original"]`) {
+			t.Errorf("unexpected guardrail input %s", raw)
+		}
+		io.WriteString(w, `{"action":"GUARDRAIL_INTERVENED","texts":["revised"]}`)
+	}))
+	defer fixture.Close()
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true,
+		Guardrails: []runtime.GenericGuardrail{{Name: "response-check", URL: fixture.URL + "/check", Default: true, Post: true}},
+		Routes:     []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{Provider: "openai", ModelID: "fixture", APIBase: fixture.URL, Endpoint: "chat-completions"}}}},
+	})
+	for _, test := range []struct {
+		body   string
+		status int
+	}{
+		{`{"model":"demo","messages":[]}`, 200},
+		{`{"model":"demo","messages":[],"stream":true}`, 400},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(test.body))
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if w.Code != test.status || strings.Contains(w.Body.String(), "original") ||
+			(test.status == 200 && !strings.Contains(w.Body.String(), "revised")) {
+			t.Fatalf("unexpected guardrail output %d %s", w.Code, w.Body)
+		}
+	}
+	if modelRequests != 1 || guardRequests != 1 {
+		t.Fatalf("unexpected request counts %d, %d", modelRequests, guardRequests)
+	}
+}

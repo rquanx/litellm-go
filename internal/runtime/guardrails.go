@@ -10,24 +10,24 @@ import (
 )
 
 type GenericGuardrail struct {
-	Name, URL, APIKey string
-	Default, FailOpen bool
-	Parameters        map[string]any
+	Name, URL, APIKey       string
+	Default, FailOpen, Post bool
+	Parameters              map[string]any
 }
 
-func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model string, input map[string]any) bool {
+func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model string, input map[string]any, stream bool) ([]GenericGuardrail, bool) {
 	requested := make(map[string]bool)
 	if value := input["guardrails"]; value != nil {
 		items, ok := value.([]any)
 		if !ok {
 			writeError(w, 400, "guardrail_error", "Expected a list of guardrail names")
-			return false
+			return nil, false
 		}
 		for _, item := range items {
 			name, ok := item.(string)
 			if !ok || name == "" {
 				writeError(w, 400, "guardrail_error", "Expected a guardrail name")
-				return false
+				return nil, false
 			}
 			requested[name] = true
 		}
@@ -42,19 +42,28 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	}
 	if len(requested) != 0 {
 		writeError(w, 400, "guardrail_error", "Unknown guardrail")
-		return false
+		return nil, false
 	}
+	var post []GenericGuardrail
 	for _, guard := range selected {
-		if !s.checkGenericGuardrail(w, r, guard, model, input) {
-			return false
+		if guard.Post {
+			if stream {
+				writeError(w, 400, "guardrail_error", "Streaming requires a compatible response guardrail")
+				return nil, false
+			}
+			post = append(post, guard)
+			continue
+		}
+		if !s.checkGenericGuardrail(w, r, guard, model, "request", input) {
+			return nil, false
 		}
 	}
-	return true
+	return post, true
 }
 
-func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, guard GenericGuardrail, model string, input map[string]any) bool {
+func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) bool {
 	texts, replace := guardrailText(input)
-	body, _ := json.Marshal(map[string]any{"model": model, "input_type": "request", "texts": texts,
+	body, _ := json.Marshal(map[string]any{"model": model, "input_type": stage, "texts": texts,
 		"structured_messages": input["messages"], "tools": input["tools"], "request_data": map[string]any{},
 		"litellm_version": "1.85.0", "additional_provider_specific_params": guard.Parameters})
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -138,10 +147,14 @@ func guardrailText(input map[string]any) ([]string, func([]string)) {
 		}
 	}
 	add(input, "input")
-	for _, key := range []string{"messages", "input"} {
+	for _, key := range []string{"messages", "input", "output", "choices"} {
 		items, _ := input[key].([]any)
 		for _, raw := range items {
 			message, _ := raw.(map[string]any)
+			if nested, ok := message["message"].(map[string]any); ok {
+				message = nested
+			}
+			add(message, "text")
 			add(message, "content")
 			parts, _ := message["content"].([]any)
 			for _, raw := range parts {
@@ -155,4 +168,23 @@ func guardrailText(input map[string]any) ([]string, func([]string)) {
 			target.object[target.field] = values[i]
 		}
 	}
+}
+
+func (s *Server) applyResponseGuardrails(w http.ResponseWriter, r *http.Request, model string, guards []GenericGuardrail, body []byte) ([]byte, bool) {
+	var fields map[string]any
+	if json.Unmarshal(body, &fields) != nil || fields == nil {
+		writeError(w, http.StatusBadGateway, "guardrail_error", "Could not read inference response")
+		return nil, false
+	}
+	for _, guard := range guards {
+		if !s.checkGenericGuardrail(w, r, guard, model, "response", fields) {
+			return nil, false
+		}
+	}
+	result, err := json.Marshal(fields)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "guardrail_error", "Could not encode checked response")
+		return nil, false
+	}
+	return result, true
 }
