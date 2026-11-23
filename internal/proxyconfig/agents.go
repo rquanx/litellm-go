@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
@@ -37,9 +38,11 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 		}
 		address, err := url.Parse(resolved)
 		provider, _ := entry.Parameters["custom_llm_provider"].(string)
+		agentModel, _ := entry.Parameters["model"].(string)
+		agentCore := provider == "bedrock" && strings.HasPrefix(strings.TrimPrefix(agentModel, "bedrock/"), "agentcore/")
 		pydantic := provider == "pydantic_ai_agents"
-		bridge := provider != "" && provider != "a2a_agent" && !pydantic
-		if (resolved != "" || !bridge) && (err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
+		bridge := provider != "" && provider != "a2a_agent" && !pydantic && !agentCore
+		if (resolved != "" || (!bridge && !agentCore)) && (err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
 			(address.Scheme != "http" && address.Scheme != "https")) {
 			return nil, fmt.Errorf("invalid A2A URL for agent %q", entry.Name)
 		}
@@ -74,7 +77,18 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 				}
 			}
 		}
-		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: resolved, Pydantic: pydantic, Completion: completion, CompletionOptions: options, Card: entry.Card, Headers: headers,
+		var awsConfig *runtime.BedrockConfig
+		var agentJWT, session, user string
+		if agentCore {
+			resolved, awsConfig, agentJWT, err = prepareAgentCore(entry, agentModel)
+			if err != nil {
+				return nil, fmt.Errorf("agent %q: %w", entry.Name, err)
+			}
+			session, _ = entry.Parameters["runtimeSessionId"].(string)
+			user, _ = entry.Parameters["runtimeUserId"].(string)
+			completion = nil
+		}
+		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: resolved, Pydantic: pydantic, AgentCore: awsConfig, AgentJWT: agentJWT, AgentSession: session, AgentUser: user, Completion: completion, CompletionOptions: options, Card: entry.Card, Headers: headers,
 			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), RequireTraceID: requireTraceID, Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
 	}
 	return agents, nil
@@ -127,4 +141,49 @@ func prepareAgentCompletion(entry agentConfig, provider, base string) (runtime.C
 		return runtime.Candidate{}, fmt.Errorf("the A2A completion bridge requires a Chat Completions compatible deployment")
 	}
 	return candidate, nil
+}
+
+func prepareAgentCore(entry agentConfig, model string) (string, *runtime.BedrockConfig, string, error) {
+	id := strings.TrimPrefix(strings.TrimPrefix(model, "bedrock/"), "agentcore/")
+	resource, err := arn.Parse(id)
+	if err != nil || resource.Service != "bedrock-agentcore" || !vertexComponent.MatchString(resource.Region) ||
+		!strings.HasPrefix(resource.Resource, "runtime/") || resource.AccountID == "" {
+		return "", nil, "", fmt.Errorf("an AgentCore Runtime ARN is required")
+	}
+	base, _ := entry.Parameters["aws_bedrock_runtime_endpoint"].(string)
+	base, err = resolveEnv(base)
+	if err != nil {
+		return "", nil, "", err
+	}
+	if base == "" {
+		domain := "amazonaws.com"
+		if resource.Partition == "aws-cn" {
+			domain = "amazonaws.com.cn"
+		}
+		base = "https://bedrock-agentcore." + resource.Region + "." + domain
+	}
+	target, err := url.Parse(base)
+	if err != nil || target.Hostname() == "" || target.User != nil || target.RawQuery != "" || target.Fragment != "" ||
+		(target.Scheme != "https" && target.Scheme != "http") {
+		return "", nil, "", fmt.Errorf("invalid AgentCore runtime endpoint")
+	}
+	address := strings.TrimRight(base, "/") + "/runtimes/" + url.PathEscape(id) + "/invocations"
+	if qualifier, _ := entry.Parameters["qualifier"].(string); qualifier != "" {
+		address += "?" + url.Values{"qualifier": {qualifier}}.Encode()
+	}
+	var settings deployment
+	data, _ := json.Marshal(entry.Parameters)
+	if err := json.Unmarshal(data, &settings.Params); err != nil {
+		return "", nil, "", err
+	}
+	token, err := resolveEnv(settings.Params.APIKey)
+	if err != nil {
+		return "", nil, "", err
+	}
+	settings.Params.AWSRegion = resource.Region
+	if token != "" {
+		return address, &runtime.BedrockConfig{Region: resource.Region}, token, nil
+	}
+	config, err := settings.bedrockConfig()
+	return address, config, "", err
 }

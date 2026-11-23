@@ -15,16 +15,18 @@ import (
 )
 
 type Agent struct {
-	Pydantic bool
-	Completion        *Candidate
-	CompletionOptions map[string]any
-	ID, Name, URL     string
-	Card              map[string]any
-	Headers           http.Header
-	ExtraHeaders      []string
-	AccessGroups      []string
-	RequireTraceID    bool
-	Public            bool
+	AgentCore                         *BedrockConfig
+	AgentJWT, AgentSession, AgentUser string
+	Pydantic                          bool
+	Completion                        *Candidate
+	CompletionOptions                 map[string]any
+	ID, Name, URL                     string
+	Card                              map[string]any
+	Headers                           http.Header
+	ExtraHeaders                      []string
+	AccessGroups                      []string
+	RequireTraceID                    bool
+	Public                            bool
 }
 
 func agentCard(r *http.Request, agent Agent, selector string) map[string]any {
@@ -226,6 +228,25 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 	}
 	for name, values := range agent.Headers {
 		upstream.Header[name] = slices.Clone(values)
+	}
+	if agent.AgentCore != nil {
+		session := agent.AgentSession
+		if session == "" {
+			session = "litellm-session-" + newUUID()
+		}
+		upstream.Header.Set("X-Amzn-Bedrock-AgentCore-Runtime-Session-Id", session)
+		if agent.AgentUser != "" {
+			upstream.Header.Set("X-Amzn-Bedrock-AgentCore-Runtime-User-Id", agent.AgentUser)
+		}
+		if agent.AgentJWT != "" {
+			upstream.Header.Set("Authorization", "Bearer "+agent.AgentJWT)
+		} else {
+			upstream.Header.Del("Authorization")
+			if err := signAWSRequest(r.Context(), upstream, agent.AgentCore, body, "bedrock-agentcore"); err != nil {
+				writeMCPError(w, http.StatusBadGateway, message.ID, -32603, "Could not authorize AgentCore request")
+				return
+			}
+		}
 	}
 	select {
 	case s.sem <- struct{}{}:

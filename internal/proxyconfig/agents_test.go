@@ -279,3 +279,43 @@ agent_list:
 		}
 	}
 }
+
+func TestAgentCoreRelaysSignedA2AEnvelope(t *testing.T) {
+	const runtimeARN = "arn:aws:bedrock-agentcore:us-west-2:123456789012:runtime/fixture"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.EscapedPath(), "%2Ffixture") || r.URL.Query().Get("qualifier") != "TEST" ||
+			!strings.Contains(r.Header.Get("Authorization"), "/us-west-2/bedrock-agentcore/aws4_request") ||
+			len(r.Header.Get("X-Amzn-Bedrock-AgentCore-Runtime-Session-Id")) < 33 {
+			t.Error("incorrect AgentCore request routing or credentials")
+		}
+		var raw map[string]any
+		if json.NewDecoder(r.Body).Decode(&raw) != nil || raw["method"] != "message/send" || raw["jsonrpc"] != "2.0" {
+			t.Error("AgentCore did not receive the A2A envelope")
+		}
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"message":{"parts":[{"kind":"text","text":"agentcore"}]}}}`)
+	}))
+	defer upstream.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+agent_list:
+  - agent_name: agentcore
+    agent_card_params: {name: AgentCore}
+    litellm_params:
+      custom_llm_provider: bedrock
+      model: %q
+      aws_bedrock_runtime_endpoint: %q
+      qualifier: TEST
+      aws_access_key_id: fixture
+      aws_secret_access_key: fixture
+`, "bedrock/agentcore/"+runtimeARN, upstream.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", Agents: config.Agents})
+	r := httptest.NewRequest(http.MethodPost, "/a2a/agentcore", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{}}`))
+	r.Header.Set("Authorization", "Bearer master")
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, r)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"text":"agentcore"`) {
+		t.Fatalf("AgentCore returned %d %s", result.Code, result.Body)
+	}
+}
