@@ -300,7 +300,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	config.PolicyGuardrails = policies.GuardrailsFor(keys)
+	config.ResolvePolicy = policies.Resolver(keys)
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {
@@ -341,7 +341,7 @@ func main() {
 		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)
 	}
-	handler = policies.Handler(handler, config.Token)
+	handler = policies.Handler(handler, config.Token, keys)
 	if customers != nil {
 		handler = customers.Handler(handler)
 	}

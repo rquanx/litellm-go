@@ -65,9 +65,9 @@ policy_attachments:
 	}
 	server := runtime.NewServer(runtime.Config{
 		Token: "master", Routes: config.Routes, Guardrails: config.Guardrails,
-		PolicyGuardrails: registry.GuardrailsFor(nil),
+		ResolvePolicy: registry.Resolver(nil),
 	})
-	handler := registry.Handler(server, "master")
+	handler := registry.Handler(server, "master", nil)
 	request := func(path, token, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -96,12 +96,41 @@ policy_attachments:
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "Policy fixture") || inferenceCalls != 0 {
 		t.Fatalf("policy did not stop inference: %d %s", w.Code, w.Body)
 	}
+	if w.Header().Get("X-LiteLLM-Applied-Policies") != "child" || w.Header().Get("X-LiteLLM-Policy-Sources") != "child=model:demo" {
+		t.Fatalf("unexpected attribution headers: %v", w.Header())
+	}
 }
 
 func TestPolicyRejectsInheritanceCycle(t *testing.T) {
 	_, err := compilePolicies(map[string]policyRule{"a": {Inherit: "b"}, "b": {Inherit: "a"}}, nil)
 	if err == nil {
 		t.Fatal("cyclic policies were accepted")
+	}
+}
+
+func TestPolicyAttachmentImpactCountsTeamAndTagMatchesOnce(t *testing.T) {
+	keys := &KeyRegistry{state: accessState{
+		Teams: map[string]team{"team": {Alias: "prod-east", Metadata: map[string]any{"tags": []string{"health-team"}}}},
+		Keys: map[string]virtualKey{
+			"match":   {Alias: "named", TeamID: "team", Metadata: map[string]any{"tags": []any{"health-service"}}},
+			"unnamed": {TeamID: "team"},
+			"other":   {Alias: "unrelated"},
+		},
+	}}
+	registry, err := OpenPolicyRegistry(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := registry.Handler(http.NotFoundHandler(), "master", keys)
+	request := httptest.NewRequest(http.MethodPost, "/policies/attachments/estimate-impact",
+		strings.NewReader(`{"policy_name":"baseline","teams":["prod-*"],"tags":["health-*"]}`))
+	request.Header.Set("Authorization", "Bearer master")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var impact attachmentImpact
+	expected := attachmentImpact{KeyCount: 2, TeamCount: 1, UnnamedKeys: 1, KeySamples: []string{"named"}, TeamSamples: []string{"prod-east"}}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &impact) != nil || !reflect.DeepEqual(impact, expected) {
+		t.Fatalf("unexpected impact %d %s", response.Code, response.Body)
 	}
 }
 
@@ -134,7 +163,7 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master")
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
 	for path, expected := range map[string]string{
 		"/policies/list?version_status=production":    `"total_count":1`,
 		"/policies/name/production-rule/versions":     `"total_count":2`,
@@ -202,7 +231,7 @@ func TestPostgresPolicyVersionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master")
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
 	call := func(method, path, body string, status int) string {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -267,7 +296,7 @@ func TestPostgresPolicyAttachmentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master")
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer master")

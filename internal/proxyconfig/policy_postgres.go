@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 const policyTable = `"LiteLLM_PolicyTable"`
@@ -62,16 +63,25 @@ func OpenPolicyRegistry(static *PolicyEngine, db *sql.DB) (*PolicyRegistry, erro
 	return registry, nil
 }
 
-func (registry *PolicyRegistry) GuardrailsFor(keys *KeyRegistry) func(*http.Request, string) []string {
+func (registry *PolicyRegistry) Resolver(keys *KeyRegistry) func(*http.Request, string) runtime.GuardrailPolicy {
 	if registry.static == nil && registry.db == nil {
 		return nil
 	}
-	return func(r *http.Request, model string) []string {
+	return func(r *http.Request, model string) runtime.GuardrailPolicy {
 		engine := registry.current.Load()
 		if engine == nil {
-			return nil
+			return runtime.GuardrailPolicy{}
 		}
-		return engine.guardrailsFor(keys, r, model)
+		input := policyContext{Model: model}
+		if keys != nil {
+			input = keys.policyContext(r, model)
+		}
+		resolved := engine.resolve(input, true)
+		result := runtime.GuardrailPolicy{Guardrails: resolved.Guardrails, Matches: make([]runtime.GuardrailPolicyMatch, 0, len(resolved.Matches))}
+		for _, match := range resolved.Matches {
+			result.Matches = append(result.Matches, runtime.GuardrailPolicyMatch{Name: match.Name, Reason: match.Reason})
+		}
+		return result
 	}
 }
 

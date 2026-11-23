@@ -236,14 +236,6 @@ func (engine *PolicyEngine) resolveRule(rule compiledPolicy, input *policyContex
 	return result
 }
 
-func (engine *PolicyEngine) guardrailsFor(keys *KeyRegistry, r *http.Request, model string) []string {
-	input := policyContext{Model: model}
-	if keys != nil {
-		input = keys.policyContext(r, model)
-	}
-	return engine.resolve(input, true).Guardrails
-}
-
 func (keys *KeyRegistry) policyContext(r *http.Request, model string) policyContext {
 	input := policyContext{Model: model}
 	token := runtime.ProxyCredential(r)
@@ -262,13 +254,23 @@ func (keys *KeyRegistry) policyContext(r *http.Request, model string) policyCont
 	}
 	team := keys.state.Teams[teamID]
 	input.Team, input.Key = team.Alias, key.Alias
-	for _, metadata := range []map[string]any{key.Metadata, team.Metadata} {
-		tags, _ := metadata["tags"].([]any)
+	input.Tags = append(policyMetadataTags(key.Metadata), policyMetadataTags(team.Metadata)...)
+	return input
+}
+
+func policyMetadataTags(metadata map[string]any) []string {
+	switch tags := metadata["tags"].(type) {
+	case []string:
+		return slices.Clone(tags)
+	case []any:
+		result := make([]string, 0, len(tags))
 		for _, value := range tags {
 			if tag, ok := value.(string); ok {
-				input.Tags = append(input.Tags, tag)
+				result = append(result, tag)
 			}
 		}
+		return result
+	default:
+		return nil
 	}
-	return input
 }

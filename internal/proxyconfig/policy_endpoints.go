@@ -10,7 +10,7 @@ import (
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
-func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.Handler {
+func (registry *PolicyRegistry) Handler(next http.Handler, master string, keys *KeyRegistry) http.Handler {
 	mux := http.NewServeMux()
 	protected := func(target *http.ServeMux, pattern string, handler func(*PolicyEngine, http.ResponseWriter, *http.Request)) {
 		target.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +50,9 @@ func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.H
 		})
 	}
 	attachments := http.NewServeMux()
+	protected(attachments, "POST /policies/attachments/estimate-impact", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		estimatePolicyImpact(w, r, keys)
+	})
 	for _, pattern := range []string{
 		"GET /policies/attachments/list", "GET /policies/attachments/{attachment_id}",
 		"POST /policies/attachments", "DELETE /policies/attachments/{attachment_id}",

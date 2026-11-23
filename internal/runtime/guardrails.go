@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,16 @@ type GenericGuardrail struct {
 	Name, URL, APIKey       string
 	Default, FailOpen, Post bool
 	Parameters              map[string]any
+}
+
+type GuardrailPolicy struct {
+	Guardrails []string
+	Matches    []GuardrailPolicyMatch
+}
+
+type GuardrailPolicyMatch struct {
+	Name   string
+	Reason string
 }
 
 func (s *Server) ReplaceGuardrails(guards []GenericGuardrail) {
@@ -25,7 +36,7 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	s.mu.RLock()
 	guards := s.guardrails
 	s.mu.RUnlock()
-	if len(guards) == 0 && s.config.PolicyGuardrails == nil {
+	if len(guards) == 0 && s.config.ResolvePolicy == nil {
 		return nil, true
 	}
 	requested := make(map[string]bool)
@@ -45,10 +56,12 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	delete(input, "guardrails")
-	if s.config.PolicyGuardrails != nil {
-		for _, name := range s.config.PolicyGuardrails(r, model) {
+	if s.config.ResolvePolicy != nil {
+		policy := s.config.ResolvePolicy(r, model)
+		for _, name := range policy.Guardrails {
 			requested[name] = true
 		}
+		writePolicyAttribution(w.Header(), policy.Matches)
 	}
 	var selected []GenericGuardrail
 	for _, guard := range guards {
@@ -76,6 +89,21 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	return post, true
+}
+
+func writePolicyAttribution(headers http.Header, matches []GuardrailPolicyMatch) {
+	var names, sources []string
+	for _, match := range matches {
+		if strings.ContainsAny(match.Name+match.Reason, "\r\n\x00") {
+			continue
+		}
+		names = append(names, match.Name)
+		sources = append(sources, match.Name+"="+match.Reason)
+	}
+	if len(names) > 0 {
+		headers.Set("X-LiteLLM-Applied-Policies", strings.Join(names, ","))
+		headers.Set("X-LiteLLM-Policy-Sources", strings.Join(sources, "; "))
+	}
 }
 
 func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) bool {
