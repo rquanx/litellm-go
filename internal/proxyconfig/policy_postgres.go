@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log"
 	"maps"
 	"net/http"
 	"slices"
@@ -111,6 +112,27 @@ func (registry *PolicyRegistry) refresh(ctx context.Context) error {
 	return nil
 }
 
+func (registry *PolicyRegistry) RunRefresh(ctx context.Context) {
+	if registry.db == nil {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := registry.refresh(refreshCtx)
+			cancel()
+			if err != nil && ctx.Err() == nil {
+				log.Print("could not refresh PostgreSQL policy snapshot")
+			}
+		}
+	}
+}
+
 func (registry *PolicyRegistry) compileSnapshot(ctx context.Context, tx *sql.Tx) (*PolicyEngine, error) {
 	definitions := make(map[string]policyRule)
 	var attachments []policyAttachment
@@ -118,24 +140,14 @@ func (registry *PolicyRegistry) compileSnapshot(ctx context.Context, tx *sql.Tx)
 		maps.Copy(definitions, registry.static.definitions)
 		attachments = slices.Clone(registry.static.attachments)
 	}
-	var hasPolicies, hasAttachments bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL,to_regclass($2) IS NOT NULL`, policyTable, policyAttachmentTable).
-		Scan(&hasPolicies, &hasAttachments); err != nil {
+	if err := readProductionPolicies(ctx, tx, definitions); err != nil {
 		return nil, err
 	}
-	if hasPolicies {
-		if err := readProductionPolicies(ctx, tx, definitions); err != nil {
-			return nil, err
-		}
+	dynamic, err := readPolicyAttachments(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
-	if hasAttachments {
-		dynamic, err := readPolicyAttachments(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		attachments = append(attachments, dynamic...)
-	}
-	return compilePolicies(definitions, attachments)
+	return compilePolicies(definitions, append(attachments, dynamic...))
 }
 
 func readProductionPolicies(ctx context.Context, tx *sql.Tx, definitions map[string]policyRule) error {

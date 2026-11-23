@@ -349,6 +349,9 @@ func main() {
 		handler = spend.Handler(handler, server)
 	}
 	address := net.JoinHostPort(*host, strconv.Itoa(*port))
+	if stateDB != nil {
+		go policies.RunRefresh(context.Background())
+	}
 	if config.BackgroundHealthInterval > 0 {
 		go server.RunBackgroundHealthChecks(context.Background())
 	}
