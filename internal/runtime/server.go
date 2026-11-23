@@ -1032,6 +1032,12 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 			return http.StatusBadGateway, nil, headers, true, errors.New("Invalid provider transcription response")
 		}
 	}
+	if err == nil && status/100 == 2 && candidate.Provider == "minimax" && candidate.Endpoint == "speech" {
+		data, err = minimaxSpeechResponse(data)
+		headers.Del("Content-Encoding")
+		headers.Del("Content-Length")
+		headers.Set("Content-Type", minimaxSpeechFormat(payload.fields))
+	}
 	if err == nil && status/100 == 2 && vertexSpeechDeployment(candidate) {
 		data, err = vertexSpeechAudio(data)
 		if err != nil {
@@ -1266,6 +1272,13 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		audioTarget = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1") + "/v1/speech"
 		encoded, err = pollyPayload(payload.fields, candidate.ModelID)
 		if err != nil { err = invalidMediaRequest{err} }
+		contentType = "application/json"
+	} else if candidate.Provider == "minimax" && candidate.Endpoint == "speech" {
+		audioTarget = strings.TrimRight(candidate.APIBase, "/") + "/v1/t2a_v2"
+		encoded, err = minimaxSpeechRequest(payload.fields, candidate.ModelID)
+		if err != nil {
+			err = invalidMediaRequest{err}
+		}
 		contentType = "application/json"
 	} else if vertexSpeechDeployment(candidate) {
 		audioTarget = candidate.APIBase

@@ -631,6 +631,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
 	runway := provider == "runwayml"
 	pgVector := provider == "pg_vector"
+	minimaxSpeech := provider == "minimax" && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "speech-") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	nativeAudio := provider == "elevenlabs" || provider == "deepgram" || provider == "aws_polly"
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	_, explicitOCR := strings.CutPrefix(model, "ocr/")
@@ -645,7 +646,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector && !minimaxSpeech) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -707,6 +708,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
+	}
+	if minimaxSpeech && base == "" {
+		base = os.Getenv("MINIMAX_API_BASE")
+		if base == "" {
+			base = "https://api.minimax.io"
+		}
 	}
 	if base == "" && otherMultipartAudio {
 		switch provider {
@@ -823,6 +830,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		key = ""
 	} else if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+	}
+	if minimaxSpeech && key == "" {
+		key = os.Getenv("MINIMAX_API_KEY")
 	}
 	if key == "" && otherMultipartAudio {
 		switch provider {
@@ -996,7 +1006,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = inferred
 		}
 	}
-	if vertexSpeech {
+	if vertexSpeech || minimaxSpeech {
 		endpoint = "speech"
 	}
 	if azureSpeech {
