@@ -84,6 +84,8 @@ type deployment struct {
 		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
 		AzureTenant string `yaml:"tenant_id" json:"tenant_id,omitempty"`
 		AzureClient string `yaml:"client_id" json:"client_id,omitempty"`
+		AzureUsername string `yaml:"azure_username" json:"azure_username,omitempty"`
+		AzurePassword string `yaml:"azure_password" json:"azure_password,omitempty"`
 		AzureClientSecret string `yaml:"client_secret" json:"client_secret,omitempty"`
 		AzureScope string `yaml:"azure_scope" json:"azure_scope,omitempty"`
 		AzureCredential string `yaml:"azure_credential" json:"azure_credential,omitempty"`
@@ -842,8 +844,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			strings.HasSuffix(parsed.Hostname(), ".openai.azure.com") {
 			azureADToken = os.Getenv("AZURE_AD_TOKEN")
 		}
+		oidc := ""
+		if strings.HasPrefix(azureADToken, "oidc/") {
+			oidc, azureADToken = azureADToken, ""
+		}
 		if key == "" && azureADToken == "" {
-			azureToken, azureIdentityKey, err = entry.azureIdentity(parsed.Scheme == "https" && strings.HasSuffix(parsed.Hostname(), ".openai.azure.com"))
+			azureToken, azureIdentityKey, err = entry.azureIdentity(parsed.Scheme == "https" && strings.HasSuffix(parsed.Hostname(), ".openai.azure.com"), oidc)
 			if err != nil {
 				return runtime.Candidate{}, err
 			}

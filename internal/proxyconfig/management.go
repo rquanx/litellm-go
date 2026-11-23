@@ -224,6 +224,8 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 			{&model.Params.AzureTenant, existing.Params.AzureTenant},
 			{&model.Params.AzureClient, existing.Params.AzureClient},
 			{&model.Params.AzureClientSecret, existing.Params.AzureClientSecret},
+			{&model.Params.AzureUsername, existing.Params.AzureUsername},
+			{&model.Params.AzurePassword, existing.Params.AzurePassword},
 			{&model.Params.AzureScope, existing.Params.AzureScope},
 			{&model.Params.AzureCredential, existing.Params.AzureCredential},
 			{&model.Params.AzureAuthority, existing.Params.AzureAuthority},

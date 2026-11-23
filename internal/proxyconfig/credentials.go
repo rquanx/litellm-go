@@ -73,6 +73,7 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 		"api_key": &entry.Params.APIKey, "api_base": &entry.Params.APIBase, "api_version": &entry.Params.APIVersion,
 		"azure_ad_token": &entry.Params.AzureADToken,
 		"tenant_id": &entry.Params.AzureTenant, "client_id": &entry.Params.AzureClient,
+		"azure_username": &entry.Params.AzureUsername, "azure_password": &entry.Params.AzurePassword,
 		"client_secret": &entry.Params.AzureClientSecret, "azure_scope": &entry.Params.AzureScope,
 		"azure_credential": &entry.Params.AzureCredential, "azure_authority_host": &entry.Params.AzureAuthority,
 		"aws_access_key_id": &entry.Params.AWSAccessKey, "aws_secret_access_key": &entry.Params.AWSSecretKey,
