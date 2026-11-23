@@ -23,6 +23,8 @@ func TestVertexRAGCorpusUploadAndSearch(t *testing.T) {
 			t.Error("wrong Vertex credential")
 		}
 		switch r.Method + " " + r.URL.Path {
+		case "POST /v1/" + parent + "/ragCorpora":
+			io.WriteString(w, `{"name":"`+corpus+`","displayName":"new corpus","createTime":"2026-01-01T00:00:00Z","labels":{"origin":"fixture"}}`)
 		case "POST /v1beta1/" + parent + "/ragCorpora":
 			body, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(body), `"displayName":"fixture corpus"`) || !strings.Contains(string(body), `"endpoint":"embedding-model"`) {
@@ -92,6 +94,12 @@ func TestVertexRAGCorpusUploadAndSearch(t *testing.T) {
 	server.ServeHTTP(result, req)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), fileID) {
 		t.Fatalf("unexpected ingestion result %d %s", result.Code, result.Body)
+	}
+	direct := httptest.NewRecorder()
+	server.ServeHTTP(direct, httptest.NewRequest(http.MethodPost, "/v1/vector_stores", strings.NewReader(`{"custom_llm_provider":"vertex_ai","name":"requested"}`)))
+	if direct.Code != http.StatusOK || !strings.Contains(direct.Body.String(), `"created_at":1767225600`) ||
+		!strings.Contains(direct.Body.String(), `"name":"new corpus"`) || !strings.Contains(direct.Body.String(), `"origin":"fixture"`) {
+		t.Fatalf("unexpected vector store result %d %s", direct.Code, direct.Body)
 	}
 	for _, id := range []string{"123", corpus, "projects/other/locations/us-central1/ragCorpora/123"} {
 		req := httptest.NewRequest(http.MethodPost, "/v1/vector_stores/"+url.PathEscape(id)+"/search",

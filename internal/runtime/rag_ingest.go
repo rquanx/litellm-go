@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -16,9 +17,14 @@ import (
 )
 
 type ragIngestInput struct {
-	Options         map[string]any `json:"ingest_options"`
-	FileURL         string         `json:"file_url"`
-	FileID          string         `json:"file_id"`
+	Options  map[string]any `json:"ingest_options"`
+	FileURL  string         `json:"file_url"`
+	FileID   string         `json:"file_id"`
+	Document *struct {
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
+		Media    string `json:"content_type"`
+	} `json:"file"`
 	filename, media string
 	file            []byte
 }
@@ -31,8 +37,25 @@ func parseRAGIngest(r *http.Request, limit int64) (ragIngestInput, error) {
 	}
 	kind, params, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if kind != "multipart/form-data" {
-		err := json.Unmarshal(body, &input)
-		return input, err
+		if err := json.Unmarshal(body, &input); err != nil {
+			return input, err
+		}
+		if input.Document != nil {
+			document := input.Document
+			input.Document = nil
+			input.file, err = base64.StdEncoding.DecodeString(document.Content)
+			if err != nil || len(input.file) == 0 {
+				return input, errors.New("expected a nonempty base64 document")
+			}
+			input.filename, input.media = document.Filename, document.Media
+			if input.filename == "" {
+				input.filename = "document"
+			}
+			if input.media == "" {
+				input.media = "application/octet-stream"
+			}
+		}
+		return input, nil
 	}
 	form, err := readMultipart(body, params["boundary"])
 	if err != nil {
@@ -109,9 +132,6 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 		return
 	}
 	name, _ := input.Options["name"].(string)
-	if name == "" {
-		name = "litellm-rag-ingest"
-	}
 	if input.FileURL != "" {
 		if len(input.file) != 0 || input.FileID != "" {
 			writeError(w, http.StatusBadRequest, "invalid_request", "Submit one file source")
@@ -134,7 +154,7 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 		return
 	}
 	if provider == "vertex_ai" {
-		if _, ok := input.Options["name"].(string); !ok || name == "litellm-rag-ingest" {
+		if name == "" {
 			name = "litellm-rag-corpus"
 		}
 		s.ingestVertexRAG(w, r, scope, alias, vectors, name, store, input)
@@ -145,6 +165,9 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 		return
 	}
 	if vectors == "" {
+		if name == "" {
+			name = "litellm-rag-ingest"
+		}
 		fields := map[string]any{"name": name, "custom_llm_provider": provider}
 		if alias != "" {
 			fields["model"] = alias

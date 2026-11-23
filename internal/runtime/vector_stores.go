@@ -178,16 +178,19 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		return
 	}
 	if provider == "vertex_ai" {
-		if family != "vector_stores_search" {
-			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Vertex AI supports vector search and RAG corpus creation through ingestion")
-			return
-		}
 		candidate, ok := s.selectGoogleResourceCandidate(alias, deployment, provider, scope, false)
 		if !ok || candidate.Vertex == nil {
 			writeError(w, http.StatusBadRequest, "model_required", "Select a configured Vertex AI deployment")
 			return
 		}
-		s.searchVertexRAG(w, request, candidate, id, fields)
+		switch {
+		case family == "vector_stores_search":
+			s.searchVertexRAG(w, request, candidate, id, fields)
+		case path == vectorStorePath && request.Method == http.MethodPost:
+			s.createVertexVectorStore(w, request, candidate, fields)
+		default:
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Vertex AI supports vector store creation and search")
+		}
 		return
 	}
 	if vertexRAGStorePath(id) {

@@ -150,3 +150,15 @@ func TestRAGIngestAndQueryThroughConfiguredRoutes(t *testing.T) {
 		}
 	}
 }
+
+func TestRAGParsesJSONDocument(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/rag/ingest", strings.NewReader(`{"file":{"filename":"fixture.txt","content":"Zml4dHVyZQ==","content_type":"text/plain"}}`))
+	file, err := parseRAGIngest(req, 1024)
+	if err != nil || file.filename != "fixture.txt" || file.media != "text/plain" || string(file.file) != "fixture" {
+		t.Fatalf("incorrect JSON document: %#v %v", file, err)
+	}
+	req = httptest.NewRequest(http.MethodPost, "/rag/ingest", strings.NewReader(`{"file":{"content":"INVALID*"}}`))
+	if _, err := parseRAGIngest(req, 1024); err == nil {
+		t.Fatal("invalid base64 was accepted")
+	}
+}

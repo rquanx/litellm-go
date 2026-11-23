@@ -122,21 +122,27 @@ func (s *Server) searchVertexRAG(w http.ResponseWriter, r *http.Request, candida
 	writeJSON(w, http.StatusOK, map[string]any{"object": "vector_store.search_results.page", "search_query": query, "data": data})
 }
 
-type vertexRAGOperation struct {
-	Name     string `json:"name"`
-	Done     bool   `json:"done"`
-	Response struct {
-		Name string `json:"name"`
-	} `json:"response"`
-	Error json.RawMessage `json:"error"`
+type vertexRAGCorpusResult struct {
+	Name              string          `json:"name"`
+	DisplayName       string          `json:"displayName"`
+	LegacyDisplayName string          `json:"display_name"`
+	Created           json.RawMessage `json:"createTime"`
+	Labels            map[string]any  `json:"labels"`
 }
 
-func (s *Server) createVertexRAGCorpus(w http.ResponseWriter, r *http.Request, candidate Candidate, payload map[string]any) (string, bool) {
+type vertexRAGOperation struct {
+	Name     string                `json:"name"`
+	Done     bool                  `json:"done"`
+	Response vertexRAGCorpusResult `json:"response"`
+	Error    json.RawMessage       `json:"error"`
+}
+
+func (s *Server) createVertexRAGCorpus(w http.ResponseWriter, r *http.Request, candidate Candidate, version string, payload map[string]any) (vertexRAGCorpusResult, bool) {
 	body, _ := json.Marshal(payload)
 	parent := vertexRAGPrefix(candidate)
-	raw, ok := s.vertexRAGRequest(w, r, candidate, http.MethodPost, "/v1beta1/"+parent+"/ragCorpora", "application/json", body)
+	raw, ok := s.vertexRAGRequest(w, r, candidate, http.MethodPost, "/"+version+"/"+parent+"/ragCorpora", "application/json", body)
 	if !ok {
-		return "", false
+		return vertexRAGCorpusResult{}, false
 	}
 	var operation vertexRAGOperation
 	for attempt := 0; attempt <= 30; attempt++ {
@@ -144,9 +150,14 @@ func (s *Server) createVertexRAGCorpus(w http.ResponseWriter, r *http.Request, c
 		if json.Unmarshal(raw, &operation) != nil {
 			break
 		}
+		if corpus, valid := vertexRAGCorpus(candidate, operation.Name); valid && operation.Name == corpus {
+			var result vertexRAGCorpusResult
+			_ = json.Unmarshal(raw, &result)
+			return result, true
+		}
 		if operation.Done {
 			if corpus, valid := vertexRAGCorpus(candidate, operation.Response.Name); valid && operation.Response.Name == corpus && len(operation.Error) == 0 {
-				return corpus, true
+				return operation.Response, true
 			}
 			break
 		}
@@ -158,16 +169,16 @@ func (s *Server) createVertexRAGCorpus(w http.ResponseWriter, r *http.Request, c
 			select {
 			case <-time.After(2 * time.Second):
 			case <-r.Context().Done():
-				return "", false
+				return vertexRAGCorpusResult{}, false
 			}
 		}
-		raw, ok = s.vertexRAGRequest(w, r, candidate, http.MethodGet, "/v1beta1/"+operation.Name, "", nil)
+		raw, ok = s.vertexRAGRequest(w, r, candidate, http.MethodGet, "/"+version+"/"+operation.Name, "", nil)
 		if !ok {
-			return "", false
+			return vertexRAGCorpusResult{}, false
 		}
 	}
 	writeError(w, http.StatusBadGateway, "upstream_error", "Vertex RAG corpus creation did not complete successfully")
-	return "", false
+	return vertexRAGCorpusResult{}, false
 }
 
 func (s *Server) ingestVertexRAG(w http.ResponseWriter, r *http.Request, scope []string, alias, id, name string, options map[string]any, input ragIngestInput) {
@@ -200,11 +211,11 @@ func (s *Server) ingestVertexRAG(w http.ResponseWriter, r *http.Request, scope [
 		if len(database) > 0 {
 			payload["vectorDbConfig"] = database
 		}
-		corpus, ok = s.createVertexRAGCorpus(w, r, candidate, payload)
+		result, ok := s.createVertexRAGCorpus(w, r, candidate, "v1beta1", payload)
 		if !ok {
 			return
 		}
-		id = corpus
+		corpus, id = result.Name, result.Name
 	}
 	if len(input.file) == 0 {
 		writeRAGIngest(w, id, input.FileID)
@@ -277,4 +288,43 @@ func vertexRAGStorePath(id string) bool {
 	segments := strings.Split(id, "/")
 	return len(segments) == 6 && segments[0] == "projects" && segments[2] == "locations" && segments[4] == "ragCorpora" &&
 		vertexRAGComponent.MatchString(segments[1]) && vertexRAGComponent.MatchString(segments[3]) && vertexRAGComponent.MatchString(segments[5])
+}
+
+func (s *Server) createVertexVectorStore(w http.ResponseWriter, r *http.Request, candidate Candidate, fields map[string]any) {
+	name, _ := fields["name"].(string)
+	if name == "" {
+		name = "litellm-vector-store"
+	}
+	payload := map[string]any{"display_name": name, "description": "Vector store created via LiteLLM"}
+	metadata, _ := fields["metadata"].(map[string]any)
+	if metadata != nil {
+		payload["labels"] = metadata
+	} else {
+		metadata = map[string]any{}
+	}
+	result, ok := s.createVertexRAGCorpus(w, r, candidate, "v1", payload)
+	if !ok {
+		return
+	}
+	if result.Labels != nil {
+		metadata = result.Labels
+	}
+	if result.DisplayName != "" {
+		name = result.DisplayName
+	} else if result.LegacyDisplayName != "" {
+		name = result.LegacyDisplayName
+	}
+	var created int64
+	if json.Unmarshal(result.Created, &created) != nil {
+		var timestamp time.Time
+		if json.Unmarshal(result.Created, &timestamp) == nil && !timestamp.IsZero() {
+			created = timestamp.Unix()
+		}
+	}
+	id := strings.TrimPrefix(result.Name, vertexRAGPrefix(candidate)+"/ragCorpora/")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": id, "object": "vector_store", "created_at": created, "name": name, "bytes": 0, "status": "completed",
+		"file_counts":   map[string]int{"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
+		"expires_after": nil, "expires_at": nil, "last_active_at": nil, "metadata": metadata,
+	})
 }
