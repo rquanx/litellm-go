@@ -52,6 +52,14 @@ func TestVertexRAGCorpusUploadAndSearch(t *testing.T) {
 				t.Errorf("incorrect chunking or file metadata %s", metadata)
 			}
 			io.WriteString(w, `{"ragFile":{"name":"`+fileID+`"}}`)
+		case "POST /v1beta1/" + corpus + "/ragFiles:import":
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			raw, _ := json.Marshal(body)
+			if string(raw) != `{"importRagFilesConfig":{"gcsSource":{"uris":["gs://fixture/documents/import.txt"]},"maxEmbeddingRequestsPerMin":50,"ragFileChunkingConfig":{"chunkOverlap":200,"chunkSize":512}}}` {
+				t.Errorf("wrong Vertex import settings %s", raw)
+			}
+			io.WriteString(w, `{"name":"`+parent+`/operations/import"}`)
 		case "POST /v1/" + parent + ":retrieveContexts":
 			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -70,7 +78,7 @@ func TestVertexRAGCorpusUploadAndSearch(t *testing.T) {
 	}))
 	defer upstream.Close()
 	candidate := Candidate{Provider: "vertex_ai", ModelID: "gemini-2.5-flash", Endpoint: "gemini-generate", APIBase: upstream.URL, DeploymentID: "vertex", Vertex: &VertexConfig{
-		Project: "fixture", Location: "us-central1", TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "vertex-token"}),
+		Project: "fixture", Location: "us-central1", Bucket: "fixture/documents", TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "vertex-token"}),
 	}}
 	server := NewServer(Config{AuthorizeInference: true, Routes: []Route{{Alias: "vertex", Candidates: []Candidate{candidate}}}})
 	var body bytes.Buffer
@@ -94,6 +102,19 @@ func TestVertexRAGCorpusUploadAndSearch(t *testing.T) {
 	server.ServeHTTP(result, req)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), fileID) {
 		t.Fatalf("unexpected ingestion result %d %s", result.Code, result.Body)
+	}
+	for _, object := range []string{"gs://fixture/documents/import.txt", "gs://fixture/other/import.txt"} {
+		result := httptest.NewRecorder()
+		body := `{"file_url":"` + object + `","ingest_options":{"chunking_strategy":{"chunk_size":512},"vector_store":{"custom_llm_provider":"vertex_ai","vector_store_id":"123","max_embedding_requests_per_min":50}}}`
+		server.ServeHTTP(result, httptest.NewRequest(http.MethodPost, "/rag/ingest", strings.NewReader(body)))
+		if strings.Contains(object, "/other/") {
+			if result.Code != http.StatusBadRequest {
+				t.Fatalf("unexpected object outside bucket prefix %d %s", result.Code, result.Body)
+			}
+		} else if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), parent+"/operations/import") ||
+			!strings.Contains(result.Body.String(), `"status":"in_progress"`) {
+			t.Fatalf("unexpected import response %d %s", result.Code, result.Body)
+		}
 	}
 	direct := httptest.NewRecorder()
 	server.ServeHTTP(direct, httptest.NewRequest(http.MethodPost, "/v1/vector_stores", strings.NewReader(`{"custom_llm_provider":"vertex_ai","name":"requested"}`)))

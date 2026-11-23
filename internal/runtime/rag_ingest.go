@@ -137,9 +137,12 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 			writeError(w, http.StatusBadRequest, "invalid_request", "Submit one file source")
 			return
 		}
-		if err := input.download(r, s.config.MaxBodyBytes); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
-			return
+		cloudImport := provider == "vertex_ai" && strings.HasPrefix(input.FileURL, "gs://")
+		if !cloudImport {
+			if err := input.download(r, s.config.MaxBodyBytes); err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+				return
+			}
 		}
 	}
 	if len(input.file) != 0 && input.FileID != "" {
@@ -350,9 +353,13 @@ func (s *Server) ingestGeminiDocument(w http.ResponseWriter, r *http.Request, sc
 }
 
 func writeRAGIngest(w http.ResponseWriter, vectors, file string) {
+	writeRAGIngestResult(w, vectors, file, "completed")
+}
+
+func writeRAGIngestResult(w http.ResponseWriter, vectors, file, status string) {
 	var id any
 	if file != "" {
 		id = file
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": "ingest_" + newUUID(), "status": "completed", "vector_store_id": vectors, "file_id": id})
+	writeJSON(w, http.StatusOK, map[string]any{"id": "ingest_" + newUUID(), "status": status, "vector_store_id": vectors, "file_id": id})
 }

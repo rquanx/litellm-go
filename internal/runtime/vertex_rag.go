@@ -7,7 +7,9 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -188,12 +190,16 @@ func (s *Server) ingestVertexRAG(w http.ResponseWriter, r *http.Request, scope [
 		return
 	}
 	corpus, valid := vertexRAGCorpus(candidate, id)
-	if (id != "" && !valid) || (len(input.file) == 0 && input.FileID == "") {
+	fromGCS := strings.HasPrefix(input.FileURL, "gs://")
+	if (id != "" && !valid) || (len(input.file) == 0 && input.FileID == "" && !fromGCS) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Submit a file and a corpus in the configured Vertex project")
 		return
 	}
 	if len(input.file) != 0 && (!validResourceSegment(input.filename) || strings.ContainsAny(input.filename, "\r\n\x00")) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid Vertex document filename")
+		return
+	}
+	if fromGCS && !s.authorizeVertexRAGImport(w, r, candidate, input.FileURL) {
 		return
 	}
 	if id == "" {
@@ -216,6 +222,10 @@ func (s *Server) ingestVertexRAG(w http.ResponseWriter, r *http.Request, scope [
 			return
 		}
 		corpus, id = result.Name, result.Name
+	}
+	if fromGCS {
+		s.importVertexRAGDocument(w, r, candidate, corpus, id, options, input)
+		return
 	}
 	if len(input.file) == 0 {
 		writeRAGIngest(w, id, input.FileID)
@@ -327,4 +337,70 @@ func (s *Server) createVertexVectorStore(w http.ResponseWriter, r *http.Request,
 		"file_counts":   map[string]int{"in_progress": 0, "completed": 0, "failed": 0, "cancelled": 0, "total": 0},
 		"expires_after": nil, "expires_at": nil, "last_active_at": nil, "metadata": metadata,
 	})
+}
+
+func (s *Server) authorizeVertexRAGImport(w http.ResponseWriter, r *http.Request, candidate Candidate, file string) bool {
+	uri, err := url.Parse(file)
+	bucket, prefix, _ := strings.Cut(candidate.Vertex.Bucket, "/")
+	key := ""
+	if err == nil {
+		key = strings.TrimPrefix(uri.Path, "/")
+	}
+	if err != nil || bucket == "" || uri.Host != bucket || uri.User != nil || uri.RawQuery != "" || uri.Fragment != "" ||
+		!validBedrockRAGKey(key, nil) || strings.ContainsAny(key, "*[]?") ||
+		(prefix != "" && !strings.HasPrefix(key, strings.Trim(prefix, "/")+"/")) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Vertex RAG imports require a GCS object in the configured bucket")
+		return false
+	}
+	if _, _, managed := vertexStorageObject(candidate, file); managed && !s.authorized(r) {
+		owners, err := s.config.ContainerOwners.Read(r.Context(), candidate.DeploymentID, []string{file})
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not check Vertex file ownership")
+			return false
+		}
+		if !slices.Contains(s.containerOwnerScopes(r, false), owners[file]) {
+			writeError(w, http.StatusNotFound, "resource_not_found", "Unknown Vertex file")
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) importVertexRAGDocument(w http.ResponseWriter, r *http.Request, candidate Candidate, corpus, id string, options map[string]any, input ragIngestInput) {
+	config := map[string]any{"gcsSource": map[string]any{"uris": []string{input.FileURL}}}
+	if strategy, _ := input.Options["chunking_strategy"].(map[string]any); strategy != nil {
+		size, overlap := strategy["chunk_size"], strategy["chunk_overlap"]
+		if size != nil || overlap != nil {
+			if size == nil {
+				size = 1024
+			}
+			if overlap == nil {
+				overlap = 200
+			}
+			config["ragFileChunkingConfig"] = map[string]any{"chunkSize": size, "chunkOverlap": overlap}
+		}
+	}
+	if limit := options["max_embedding_requests_per_min"]; limit != nil {
+		config["maxEmbeddingRequestsPerMin"] = limit
+	}
+	body, _ := json.Marshal(map[string]any{"importRagFilesConfig": config})
+	raw, ok := s.vertexRAGRequest(w, r, candidate, http.MethodPost, "/v1beta1/"+corpus+"/ragFiles:import", "application/json", body)
+	if !ok {
+		return
+	}
+	var result vertexRAGOperation
+	if json.Unmarshal(raw, &result) != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex RAG import response")
+		return
+	}
+	operationID, matches := strings.CutPrefix(result.Name, vertexRAGPrefix(candidate)+"/operations/")
+	if !matches || !vertexRAGComponent.MatchString(operationID) || len(result.Error) != 0 {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Vertex RAG returned no import operation")
+		return
+	}
+	status := "in_progress"
+	if result.Done {
+		status = "completed"
+	}
+	writeRAGIngestResult(w, id, result.Name, status)
 }
