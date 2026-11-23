@@ -19,6 +19,17 @@ type GenericGuardrail struct {
 type GuardrailPolicy struct {
 	Guardrails []string
 	Matches    []GuardrailPolicyMatch
+	Pipelines  []PolicyPipeline
+}
+
+type responseGuardrails struct {
+	independent []GenericGuardrail
+	pipelines   []PolicyPipeline
+	available   []GenericGuardrail
+}
+
+func (plan responseGuardrails) active() bool {
+	return len(plan.independent) > 0 || len(plan.pipelines) > 0
 }
 
 type GuardrailPolicyMatch struct {
@@ -32,39 +43,54 @@ func (s *Server) ReplaceGuardrails(guards []GenericGuardrail) {
 	s.mu.Unlock()
 }
 
-func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model string, input map[string]any, stream bool) ([]GenericGuardrail, bool) {
+func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model, endpoint string, input map[string]any, stream bool) (responseGuardrails, bool) {
 	s.mu.RLock()
 	guards := s.guardrails
 	s.mu.RUnlock()
 	if len(guards) == 0 && s.config.ResolvePolicy == nil {
-		return nil, true
+		return responseGuardrails{}, true
 	}
 	requested := make(map[string]bool)
 	if value := input["guardrails"]; value != nil {
 		items, ok := value.([]any)
 		if !ok {
 			writeError(w, 400, "guardrail_error", "Expected a list of guardrail names")
-			return nil, false
+			return responseGuardrails{}, false
 		}
 		for _, item := range items {
 			name, ok := item.(string)
 			if !ok || name == "" {
 				writeError(w, 400, "guardrail_error", "Expected a guardrail name")
-				return nil, false
+				return responseGuardrails{}, false
 			}
 			requested[name] = true
 		}
 	}
 	delete(input, "guardrails")
+	var policy GuardrailPolicy
 	if s.config.ResolvePolicy != nil {
-		policy := s.config.ResolvePolicy(r, model)
+		policy = s.config.ResolvePolicy(r, model)
 		for _, name := range policy.Guardrails {
 			requested[name] = true
 		}
 		writePolicyAttribution(w.Header(), policy.Matches)
 	}
+	plan := responseGuardrails{available: guards}
+	managed := make(map[string]bool)
+	for _, pipeline := range policy.Pipelines {
+		for _, step := range pipeline.Spec.Steps {
+			managed[step.Guardrail] = true
+			delete(requested, step.Guardrail)
+		}
+		if pipeline.Spec.Mode == "post_call" {
+			plan.pipelines = append(plan.pipelines, pipeline)
+		}
+	}
 	var selected []GenericGuardrail
 	for _, guard := range guards {
+		if managed[guard.Name] {
+			continue
+		}
 		if guard.Default || requested[guard.Name] {
 			selected = append(selected, guard)
 			delete(requested, guard.Name)
@@ -72,23 +98,31 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	}
 	if len(requested) != 0 {
 		writeError(w, 400, "guardrail_error", "Unknown guardrail")
-		return nil, false
+		return responseGuardrails{}, false
 	}
-	var post []GenericGuardrail
 	for _, guard := range selected {
 		if guard.Post {
-			if stream {
-				writeError(w, 400, "guardrail_error", "Streaming requires a compatible response guardrail")
-				return nil, false
-			}
-			post = append(post, guard)
+			plan.independent = append(plan.independent, guard)
+		}
+	}
+	if stream && plan.active() {
+		writeError(w, 400, "guardrail_error", "Streaming requires a compatible response guardrail")
+		return responseGuardrails{}, false
+	}
+	for _, pipeline := range policy.Pipelines {
+		if pipeline.Spec.Mode == "pre_call" && !s.enforcePipeline(w, r, pipeline, guards, model, endpoint, stream, input) {
+			return responseGuardrails{}, false
+		}
+	}
+	for _, guard := range selected {
+		if guard.Post {
 			continue
 		}
 		if !s.checkGenericGuardrail(w, r, guard, model, "request", input) {
-			return nil, false
+			return responseGuardrails{}, false
 		}
 	}
-	return post, true
+	return plan, true
 }
 
 func writePolicyAttribution(headers http.Header, matches []GuardrailPolicyMatch) {
@@ -107,6 +141,21 @@ func writePolicyAttribution(headers http.Header, matches []GuardrailPolicyMatch)
 }
 
 func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) bool {
+	failure := s.evaluateGenericGuardrail(r, guard, model, stage, input)
+	if failure != nil {
+		writeError(w, failure.status, failure.kind, failure.message)
+		return false
+	}
+	return true
+}
+
+type guardrailFailure struct {
+	status  int
+	kind    string
+	message string
+}
+
+func (s *Server) evaluateGenericGuardrail(r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) *guardrailFailure {
 	texts, replace := guardrailText(input)
 	body, _ := json.Marshal(map[string]any{"model": model, "input_type": stage, "texts": texts,
 		"structured_messages": input["messages"], "tools": input["tools"], "request_data": map[string]any{},
@@ -115,8 +164,7 @@ func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, g
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, guard.URL, bytes.NewReader(body))
 	if err != nil {
-		writeError(w, 502, "guardrail_error", "Invalid guardrail URL")
-		return false
+		return &guardrailFailure{502, "guardrail_error", "Invalid guardrail URL"}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if guard.APIKey != "" {
@@ -126,26 +174,23 @@ func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, g
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	case <-ctx.Done():
-		writeError(w, 503, "guardrail_error", "Guardrail request timed out")
-		return false
+		return &guardrailFailure{503, "guardrail_error", "Guardrail request timed out"}
 	}
 	client := *s.config.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := client.Do(req)
 	if err != nil {
 		if guard.FailOpen && r.Context().Err() == nil {
-			return true
+			return nil
 		}
-		writeError(w, 502, "guardrail_error", "Could not reach guardrail")
-		return false
+		return &guardrailFailure{502, "guardrail_error", "Could not reach guardrail"}
 	}
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
 		if guard.FailOpen && response.StatusCode >= 502 && response.StatusCode <= 504 {
-			return true
+			return nil
 		}
-		writeError(w, 502, "guardrail_error", "Guardrail service rejected the request")
-		return false
+		return &guardrailFailure{502, "guardrail_error", "Guardrail service rejected the request"}
 	}
 	var verdict struct {
 		Action string   `json:"action"`
@@ -154,26 +199,23 @@ func (s *Server) checkGenericGuardrail(w http.ResponseWriter, r *http.Request, g
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
 	if err != nil || int64(len(raw)) > s.config.MaxBodyBytes || json.Unmarshal(raw, &verdict) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		writeError(w, 502, "guardrail_error", "Invalid guardrail response")
-		return false
+		return &guardrailFailure{502, "guardrail_error", "Invalid guardrail response"}
 	}
 	switch verdict.Action {
 	case "BLOCKED":
 		if verdict.Reason == "" {
 			verdict.Reason = "Guardrail blocked the request"
 		}
-		writeError(w, 400, "content_policy_violation", verdict.Reason)
-		return false
+		return &guardrailFailure{400, "content_policy_violation", verdict.Reason}
 	case "", "NONE":
-		return true
+		return nil
 	case "GUARDRAIL_INTERVENED":
 		if len(verdict.Texts) == len(texts) {
 			replace(verdict.Texts)
-			return true
+			return nil
 		}
 	}
-	writeError(w, 502, "guardrail_error", "Unexpected guardrail action or text count")
-	return false
+	return &guardrailFailure{502, "guardrail_error", "Unexpected guardrail action or text count"}
 }
 
 func guardrailText(input map[string]any) ([]string, func([]string)) {
@@ -215,13 +257,18 @@ func guardrailText(input map[string]any) ([]string, func([]string)) {
 	}
 }
 
-func (s *Server) applyResponseGuardrails(w http.ResponseWriter, r *http.Request, model string, guards []GenericGuardrail, body []byte) ([]byte, bool) {
+func (s *Server) applyResponseGuardrails(w http.ResponseWriter, r *http.Request, model, endpoint string, plan responseGuardrails, body []byte) ([]byte, bool) {
 	var fields map[string]any
 	if json.Unmarshal(body, &fields) != nil || fields == nil {
 		writeError(w, http.StatusBadGateway, "guardrail_error", "Could not read inference response")
 		return nil, false
 	}
-	for _, guard := range guards {
+	for _, pipeline := range plan.pipelines {
+		if !s.enforcePipeline(w, r, pipeline, plan.available, model, endpoint, false, fields) {
+			return nil, false
+		}
+	}
+	for _, guard := range plan.independent {
 		if !s.checkGenericGuardrail(w, r, guard, model, "response", fields) {
 			return nil, false
 		}

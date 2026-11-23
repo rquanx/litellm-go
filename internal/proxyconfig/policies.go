@@ -11,7 +11,8 @@ import (
 )
 
 type policyRule struct {
-	Inherit   string `yaml:"inherit"`
+	Inherit   string                     `yaml:"inherit"`
+	Pipeline  *runtime.GuardrailPipeline `yaml:"pipeline"`
 	Condition struct {
 		Model any `yaml:"model"`
 	} `yaml:"condition"`
@@ -37,10 +38,11 @@ type PolicyEngine struct {
 }
 
 type compiledPolicy struct {
-	chain  []string
-	add    []string
-	remove []string
-	models []policyModelPattern
+	chain    []string
+	add      []string
+	remove   []string
+	models   []policyModelPattern
+	pipeline *runtime.GuardrailPipeline
 }
 
 type policyModelPattern struct {
@@ -66,6 +68,12 @@ func compilePolicies(definitions map[string]policyRule, attachments []policyAtta
 		active[name] = true
 		defer delete(active, name)
 		result := compiledPolicy{}
+		if rule.Pipeline != nil {
+			if err := rule.Pipeline.Validate(); err != nil {
+				return result, err
+			}
+			result.pipeline = rule.Pipeline
+		}
 		if rule.Inherit != "" {
 			parent, err := compile(rule.Inherit)
 			if err != nil {

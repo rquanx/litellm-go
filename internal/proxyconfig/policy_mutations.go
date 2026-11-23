@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 var errPolicyDraftRequired = errors.New("only draft policies can be updated")
@@ -24,7 +25,7 @@ type policyMutation struct {
 	Condition   *struct {
 		Model *string `json:"model"`
 	} `json:"condition"`
-	Pipeline map[string]any `json:"pipeline"`
+	Pipeline *runtime.GuardrailPipeline `json:"pipeline"`
 }
 
 func (registry *PolicyRegistry) writeManagedPolicy(w http.ResponseWriter, r *http.Request) {
@@ -54,8 +55,8 @@ func (registry *PolicyRegistry) writeManagedPolicy(w http.ResponseWriter, r *htt
 			modelError(w, http.StatusUnprocessableEntity, "Expected a policy definition")
 			return
 		}
-		if input.Pipeline != nil {
-			modelError(w, http.StatusUnprocessableEntity, "Guardrail pipelines are unsupported")
+		if input.Pipeline != nil && input.Pipeline.Validate() != nil {
+			modelError(w, http.StatusUnprocessableEntity, "Invalid guardrail pipeline")
 			return
 		}
 	}
@@ -178,12 +179,20 @@ func storePolicyDefinition(ctx context.Context, tx *sql.Tx, id string, input *po
 		}
 		condition = string(raw)
 	}
+	var pipeline any
+	if input.Pipeline != nil {
+		raw, err := json.Marshal(input.Pipeline)
+		if err != nil {
+			return nil, err
+		}
+		pipeline = string(raw)
+	}
 	var record json.RawMessage
 	if id == "" {
 		err := tx.QueryRowContext(ctx, `INSERT INTO `+policyTable+` AS p
-			(policy_id,policy_name,inherit,description,guardrails_add,guardrails_remove,condition,production_at)
-			VALUES ($1,$2,NULLIF($3,''),$4,COALESCE($5::text[],'{}'),COALESCE($6::text[],'{}'),$7::jsonb,CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
-			RETURNING to_jsonb(p)`, newEntityID(), input.Name, input.Inherit, input.Description, pq.Array(input.Add), pq.Array(input.Remove), condition).Scan(&record)
+			(policy_id,policy_name,inherit,description,guardrails_add,guardrails_remove,condition,pipeline,production_at)
+			VALUES ($1,$2,NULLIF($3,''),$4,COALESCE($5::text[],'{}'),COALESCE($6::text[],'{}'),$7::jsonb,$8::jsonb,CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+			RETURNING to_jsonb(p)`, newEntityID(), input.Name, input.Inherit, input.Description, pq.Array(input.Add), pq.Array(input.Remove), condition, pipeline).Scan(&record)
 		return normalizePolicyRecord(record, err)
 	}
 	var status string
@@ -196,7 +205,7 @@ func storePolicyDefinition(ctx context.Context, tx *sql.Tx, id string, input *po
 	err := tx.QueryRowContext(ctx, `UPDATE `+policyTable+` p SET
 		policy_name=COALESCE($2,policy_name),inherit=CASE WHEN $3::text IS NULL THEN inherit ELSE NULLIF($3,'') END,
 		description=COALESCE($4,description),guardrails_add=COALESCE($5,guardrails_add),guardrails_remove=COALESCE($6,guardrails_remove),
-		condition=COALESCE($7,condition),updated_at=CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
-		WHERE policy_id=$1 RETURNING to_jsonb(p)`, id, input.Name, input.Inherit, input.Description, pq.Array(input.Add), pq.Array(input.Remove), condition).Scan(&record)
+		condition=COALESCE($7,condition),pipeline=COALESCE($8,pipeline),updated_at=CURRENT_TIMESTAMP AT TIME ZONE 'UTC'
+		WHERE policy_id=$1 RETURNING to_jsonb(p)`, id, input.Name, input.Inherit, input.Description, pq.Array(input.Add), pq.Array(input.Remove), condition, pipeline).Scan(&record)
 	return normalizePolicyRecord(record, err)
 }

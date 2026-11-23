@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -105,6 +106,99 @@ func TestPolicyRejectsInheritanceCycle(t *testing.T) {
 	_, err := compilePolicies(map[string]policyRule{"a": {Inherit: "b"}, "b": {Inherit: "a"}}, nil)
 	if err == nil {
 		t.Fatal("cyclic policies were accepted")
+	}
+}
+
+func TestPolicyPipelineRunsOrderedChecksAndModifiesResponse(t *testing.T) {
+	var mu sync.Mutex
+	var calls []string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls = append(calls, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/mask/beta/litellm_basic_guardrail_api":
+			io.WriteString(w, `{"action":"GUARDRAIL_INTERVENED","texts":["masked"]}`)
+		case "/check/beta/litellm_basic_guardrail_api":
+			raw, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(raw), `"texts":["masked"]`) {
+				t.Errorf("next step did not receive masked text: %s", raw)
+			}
+			io.WriteString(w, `{"action":"NONE"}`)
+		case "/post/beta/litellm_basic_guardrail_api":
+			io.WriteString(w, `{"action":"BLOCKED","blocked_reason":"fixture verdict"}`)
+		case "/v1/chat/completions":
+			raw, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(raw), "\"content\":\"masked\"") {
+				t.Errorf("inference did not receive masked text: %s", raw)
+			}
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"original response"}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer origin.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/fixture, api_base: %[1]s}
+litellm_settings:
+  guardrails:
+    - guardrail_name: mask
+      litellm_params: {guardrail: generic_guardrail_api, mode: pre_call, api_base: "%[1]s/mask", default_on: true}
+    - guardrail_name: check
+      litellm_params: {guardrail: generic_guardrail_api, mode: pre_call, api_base: "%[1]s/check"}
+    - guardrail_name: post
+      litellm_params: {guardrail: generic_guardrail_api, mode: post_call, api_base: "%[1]s/post"}
+policies:
+  prepare:
+    pipeline:
+      mode: pre_call
+      steps:
+        - {guardrail: missing, on_error: next}
+        - {guardrail: mask, on_pass: next, pass_data: true}
+        - {guardrail: check}
+  publish:
+    pipeline:
+      mode: post_call
+      steps:
+        - {guardrail: post, on_fail: modify_response, modify_response_message: response withheld}
+policy_attachments:
+  - {policy: prepare, scope: '*'}
+  - {policy: publish, scope: '*'}
+`, origin.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := OpenPolicyRegistry(config.Policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{Token: "master", Routes: config.Routes, Guardrails: config.Guardrails, ResolvePolicy: registry.Resolver(nil)})
+	call := func(path, token, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		return w
+	}
+	w := call("/v1/chat/completions", "master", `{"model":"demo","messages":[{"role":"user","content":"original"}]}`)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "response withheld") || strings.Contains(w.Body.String(), "original response") {
+		t.Fatalf("unexpected pipeline response %d %s", w.Code, w.Body)
+	}
+	want := []string{"/mask/beta/litellm_basic_guardrail_api", "/check/beta/litellm_basic_guardrail_api", "/v1/chat/completions", "/post/beta/litellm_basic_guardrail_api"}
+	mu.Lock()
+	got := append([]string{}, calls...)
+	mu.Unlock()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected pipeline order: %v", got)
+	}
+	const testBody = `{"pipeline":{"mode":"pre_call","steps":[{"guardrail":"missing","on_error":"next"},{"guardrail":"mask"}]},"test_messages":[{"role":"user","content":"fixture"}]}`
+	if w = call("/policies/test-pipeline", "invalid", testBody); w.Code != 401 {
+		t.Fatalf("unauthenticated test returned %d", w.Code)
+	}
+	if w = call("/policies/test-pipeline", "master", testBody); w.Code != 200 || !strings.Contains(w.Body.String(), `"outcome":"error"`) || !strings.Contains(w.Body.String(), `"terminal_action":"allow"`) {
+		t.Fatalf("unexpected pipeline test response %d %s", w.Code, w.Body)
 	}
 }
 

@@ -167,6 +167,14 @@ func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTo
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	s.inFlight.Add(1)
 	defer s.inFlight.Add(-1)
+	if request.Method == http.MethodPost && request.URL.Path == "/policies/test-pipeline" {
+		if s.config.Token == "" || !s.authorized(request) {
+			writeError(writer, http.StatusUnauthorized, "authentication_error", "Proxy master key required")
+			return
+		}
+		s.testGuardrailPipeline(writer, request)
+		return
+	}
 	if s.config.AuthorizeInference && s.serveInferenceCacheAdmin(writer, request) {
 		return
 	}
@@ -499,10 +507,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if alias == "" {
 		alias, _ = input["model"].(string)
 	}
-	var postGuardrails []GenericGuardrail
+	var postGuardrails responseGuardrails
 	if (endpoint == "chat-completions" || endpoint == "responses") && modelAllowed(modelScope, alias) {
 		var allowed bool
-		postGuardrails, allowed = s.applyGenericGuardrails(writer, request, alias, input, stream)
+		postGuardrails, allowed = s.applyGenericGuardrails(writer, request, alias, endpoint, input, stream)
 		if !allowed {
 			return
 		}
@@ -613,7 +621,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 		if len(automatic) > 0 {
-			if len(postGuardrails) != 0 {
+			if postGuardrails.active() {
 				writeError(writer, http.StatusBadRequest, "guardrail_error", "Automatic tool execution requires compatible response guardrails")
 				return
 			}
@@ -637,7 +645,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if s.config.AuthorizeInference && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
-			if len(postGuardrails) != 0 {
+			if postGuardrails.active() {
 				writeError(writer, http.StatusBadRequest, "guardrail_error", "Background responses require compatible response guardrails")
 				return
 			}
@@ -681,7 +689,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	var cache inferenceCacheRequest
-	if len(postGuardrails) == 0 {
+	if !postGuardrails.active() {
 		cache = s.prepareInferenceCache(request, endpoint, route.Alias, stream, &payload)
 	}
 	if stream {
@@ -785,9 +793,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 					writer.Header().Set("X-LiteLLM-Invocation-ARN", arn)
 				}
 			}
-			if len(postGuardrails) > 0 {
+			if postGuardrails.active() {
 				var allowed bool
-				body, allowed = s.applyResponseGuardrails(writer, request, route.Alias, postGuardrails, body)
+				body, allowed = s.applyResponseGuardrails(writer, request, route.Alias, endpoint, postGuardrails, body)
 				if !allowed {
 					return
 				}

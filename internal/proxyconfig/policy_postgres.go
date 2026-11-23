@@ -80,6 +80,9 @@ func (registry *PolicyRegistry) Resolver(keys *KeyRegistry) func(*http.Request, 
 		result := runtime.GuardrailPolicy{Guardrails: resolved.Guardrails, Matches: make([]runtime.GuardrailPolicyMatch, 0, len(resolved.Matches))}
 		for _, match := range resolved.Matches {
 			result.Matches = append(result.Matches, runtime.GuardrailPolicyMatch{Name: match.Name, Reason: match.Reason})
+			if pipeline := engine.policies[match.Name].pipeline; pipeline != nil {
+				result.Pipelines = append(result.Pipelines, runtime.PolicyPipeline{Name: match.Name, Spec: *pipeline})
+			}
 		}
 		return result
 	}
@@ -149,8 +152,8 @@ func readProductionPolicies(ctx context.Context, tx *sql.Tx, definitions map[str
 		if err := rows.Scan(&name, &rule.Inherit, pq.Array(&rule.Guardrails.Add), pq.Array(&rule.Guardrails.Remove), &condition, &pipeline); err != nil {
 			return err
 		}
-		if len(pipeline) > 0 && string(pipeline) != "null" {
-			return errors.New("production policy uses an unsupported guardrail pipeline: " + name)
+		if len(pipeline) > 0 && decodePolicyCondition(pipeline, &rule.Pipeline) != nil {
+			return errors.New("invalid database guardrail pipeline: " + name)
 		}
 		if len(condition) > 0 && decodePolicyCondition(condition, &rule.Condition) != nil {
 			return errors.New("invalid database policy condition: " + name)
