@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -32,7 +33,8 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 		return nil
 	}
 	access, ok := s.mcpAccess(r)
-	if !ok {
+	grants, toolsetAccess, toolsetsOK := s.mcpToolsetGrants(r)
+	if !ok && !toolsetsOK {
 		return errors.New("MCP tool discovery requires access to the selected servers")
 	}
 	used := make(map[string]bool)
@@ -52,8 +54,12 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 		address, _ := declaration["server_url"].(string)
 		selector := strings.TrimPrefix(strings.TrimPrefix(address, localMCPToolURL), "/")
 		names := strings.Split(selector, ",")
+		toolset := s.mcpInferenceToolsetFilter(r, names, grants, toolsetAccess)
+		allowed := func(server MCPServer, tool string) bool {
+			return (ok && mcpInferenceServerMatch(server, names) && access(server, tool)) || toolset(server, tool)
+		}
 		for _, server := range s.currentMCPServers() {
-			if !access(server, "") || !mcpInferenceServerMatch(server, names) {
+			if !allowed(server, "") {
 				continue
 			}
 			entries, cached := discovered[server.ID]
@@ -75,7 +81,7 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 			for _, entry := range entries {
 				name, _ := entry["name"].(string)
 				fullName := server.Name + "-" + name
-				if !access(server, name) || !mcpFunctionName.MatchString(fullName) ||
+				if !allowed(server, name) || !mcpFunctionName.MatchString(fullName) ||
 					!mcpInferenceToolAllowed(declaration["allowed_tools"], name, fullName) || used[fullName] {
 					continue
 				}
@@ -347,4 +353,38 @@ func writeMCPInitialResult(w http.ResponseWriter, initial *ragResult, response m
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
+}
+
+func (s *Server) mcpInferenceToolsetFilter(r *http.Request, selectors []string, grants []string, access MCPAccess) MCPAccess {
+	selected := make(map[string]map[string]bool)
+	servers := s.currentMCPServers()
+	if access != nil {
+		s.mu.RLock()
+		toolsets := s.mcpToolsets
+		s.mu.RUnlock()
+		for _, raw := range selectors {
+			selector := strings.TrimSpace(raw)
+			if selector == "" || slices.ContainsFunc(servers, func(server MCPServer) bool { return server.matches(selector) }) {
+				continue
+			}
+			for _, set := range toolsets {
+				if (set.ID != selector && set.Name != selector) || (grants != nil && !slices.Contains(grants, set.ID)) {
+					continue
+				}
+				for _, tool := range set.Tools {
+					if selected[tool.ServerID] == nil {
+						selected[tool.ServerID] = make(map[string]bool)
+					}
+					selected[tool.ServerID][tool.Name] = true
+				}
+			}
+		}
+	}
+	return filterMCPAccess(r, func(server MCPServer, tool string) bool {
+		tools := selected[server.ID]
+		if tool == "" {
+			return len(tools) > 0 && access(server, tool)
+		}
+		return tools[tool] && access(server, tool)
+	})
 }

@@ -59,6 +59,7 @@ func TestInferenceExpandsOnlyPermittedMCPTools(t *testing.T) {
 		MCPServers: []MCPServer{{ID: "fixture", Name: "fixture", URL: mcp.URL, AllowedTools: []string{"allowed"}}},
 		Routes:     []Route{{Alias: "demo", Candidates: []Candidate{{Provider: "openai", Endpoint: "responses", ModelID: "demo", APIBase: model.URL}}}},
 	})
+	server.ReplaceMCPToolsets([]MCPToolset{{ID: "selected", Name: "picked", Tools: []MCPToolsetEntry{{ServerID: "fixture", Name: "allowed"}}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/fixture","allowed_tools":["allowed","private"]}]}`))
 	request.Header.Set("Authorization", "Bearer master")
 	result := httptest.NewRecorder()
@@ -66,14 +67,14 @@ func TestInferenceExpandsOnlyPermittedMCPTools(t *testing.T) {
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "fixture-response") {
 		t.Fatalf("unexpected inference result %d %s", result.Code, result.Body)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/fixture","require_approval":"never"}]}`))
+	request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/picked","require_approval":"never"}]}`))
 	request.Header.Set("Authorization", "Bearer master")
 	result = httptest.NewRecorder()
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "follow-up") {
 		t.Fatalf("unexpected automatic MCP result %d %s", result.Code, result.Body)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","stream":true,"tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/fixture","require_approval":"never"}]}`))
+	request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","stream":true,"tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/picked","require_approval":"never"}]}`))
 	request.Header.Set("Authorization", "Bearer master")
 	result = httptest.NewRecorder()
 	server.ServeHTTP(result, request)
