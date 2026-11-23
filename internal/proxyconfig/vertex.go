@@ -2,6 +2,7 @@ package proxyconfig
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -59,7 +60,7 @@ func (entry deployment) vertexConfig(base string) (*runtime.VertexConfig, string
 	}
 	if entry.Params.APIKey == "" {
 		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 10 * time.Second})
-		credentials, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+		credentials, err := entry.vertexCredentials(ctx)
 		if err != nil {
 			return nil, "", errors.New("could not load Application Default Credentials for Vertex AI")
 		}
@@ -81,4 +82,48 @@ func (entry deployment) vertexConfig(base string) (*runtime.VertexConfig, string
 		}
 	}
 	return config, base, nil
+}
+
+func (entry deployment) vertexCredentials(ctx context.Context) (*google.Credentials, error) {
+	const scope = "https://www.googleapis.com/auth/cloud-platform"
+	value := entry.Params.VertexCredentials
+	if value == nil {
+		value = entry.Params.VertexAICredentials
+	}
+	if value == nil {
+		for _, env := range []string{"VERTEXAI_CREDENTIALS", "VERTEX_CREDENTIALS"} {
+			if setting := os.Getenv(env); setting != "" {
+				value = setting
+				break
+			}
+		}
+	}
+	var data []byte
+	switch input := value.(type) {
+	case nil:
+		return google.FindDefaultCredentials(ctx, scope)
+	case string:
+		resolved, err := resolveEnv(input)
+		if err != nil {
+			return nil, err
+		}
+		resolved = strings.TrimSpace(resolved)
+		if strings.HasPrefix(resolved, "{") {
+			data = []byte(resolved)
+		} else {
+			data, err = os.ReadFile(resolved)
+			if err != nil {
+				return nil, errors.New("could not read configured Vertex credentials")
+			}
+		}
+	case map[string]any:
+		var err error
+		data, err = json.Marshal(input)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, errors.New("Vertex credentials must be a JSON object or a filename")
+	}
+	return google.CredentialsFromJSON(ctx, data, scope)
 }

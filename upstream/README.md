@@ -111,6 +111,8 @@ Bedrock and Polly can use AWS STS role assumption or web identity exchange with 
 
 A local Azure managed identity fixture verifies a single token exchange for both inference and file retrieval. The same request authorization supports Azure Responses, Realtime connection setup and explicit Azure pass-through.
 
+Vertex deployments accept configured Google credential objects or credential file paths in addition to Application Default Credentials. A local service-account fixture verifies project inference, JWT token exchange and token reuse.
+
 The Go Marengo fixture covers inline image encoding, response normalization and token estimation.
 
 Configured Bedrock Claude models accept Anthropic Messages through InvokeModel and InvokeModelWithResponseStream. The Python transformer and Go fixture matched API version, cache directive normalization and beta filtering. Go decodes AWS events into Anthropic SSE and carries cached input and terminal token usage into the message delta. Mantle, Claude Platform and additional Claude feature transformations remain open.

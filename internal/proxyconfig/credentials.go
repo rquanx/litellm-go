@@ -87,6 +87,13 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 			*target = credential.Values[name]
 		}
 	}
+	if entry.Params.VertexCredentials == nil && entry.Params.VertexAICredentials == nil {
+		if value := credential.Values["vertex_credentials"]; value != "" {
+			entry.Params.VertexCredentials = value
+		} else if value := credential.Values["vertex_ai_credentials"]; value != "" {
+			entry.Params.VertexAICredentials = value
+		}
+	}
 	return entry, nil
 }
 
