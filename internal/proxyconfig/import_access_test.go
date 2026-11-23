@@ -35,7 +35,7 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		INSERT INTO "LiteLLM_UserTable" VALUES ('user', 'internal_user', ARRAY['allowed','org-only','user-only']);
 		INSERT INTO "LiteLLM_ObjectPermissionTable" VALUES
 			('team-permission', ARRAY['shared','team-search'], ARRAY['fixture-mcp'], ARRAY['toolset'], NULL),
-			('key-permission', ARRAY['shared','key-search'], NULL, NULL, ARRAY['unsupported']);
+			('key-permission', ARRAY['shared','key-search'], NULL, NULL, ARRAY['fixture-agent']);
 		INSERT INTO "LiteLLM_TeamTable" VALUES ('team', 'org', ARRAY['allowed','org-only','team-only'], '[{"user_id":"user","role":"user"}]', 'team-permission');
 		INSERT INTO "LiteLLM_TeamMembership" VALUES ('team', 'user', 'member-budget');
 		INSERT INTO "LiteLLM_ProjectTable" VALUES ('project','team',ARRAY['allowed'],'org-budget');
@@ -58,12 +58,7 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 	if _, err := db.Exec(`UPDATE "LiteLLM_BudgetTable" SET max_budget = NULL`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportLiteLLMAccess(db); err == nil {
-		t.Fatal("unsupported agent restrictions must block migration")
-	}
-	if _, err := db.Exec(`UPDATE "LiteLLM_ObjectPermissionTable" SET agents = NULL`); err != nil {
-		t.Fatal(err)
-	}
+
 	if count, err := ImportLiteLLMAccess(db); err != nil || count != 1 {
 		t.Fatalf("count=%d, err=%v", count, err)
 	}
@@ -81,6 +76,10 @@ func TestPostgresImportsBoundLiteLLMKeysAndMemberScopes(t *testing.T) {
 		!access(runtime.MCPServer{ID: "fixture-mcp"}, "") ||
 		access(runtime.MCPServer{ID: "other-mcp"}, "") {
 		t.Fatal("imported key did not inherit the team's MCP server grant")
+	}
+	if grants := registry.AuthorizeAgent("fixture-token"); grants == nil ||
+		!grants(runtime.Agent{ID:"fixture-agent"}) || grants(runtime.Agent{ID:"other-agent",Public:true}) {
+		t.Fatal("imported key did not preserve its agent grant")
 	}
 	if grants, _, valid := registry.AuthorizeMCPToolset("fixture-token"); !valid || !slices.Equal(grants, []string{"toolset"}) {
 		t.Fatal("imported key did not inherit the team's MCP toolset grant")
