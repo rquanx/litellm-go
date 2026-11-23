@@ -582,7 +582,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
-	nativeAudio := provider == "elevenlabs" || provider == "deepgram"
+	nativeAudio := provider == "elevenlabs" || provider == "deepgram" || provider == "aws_polly"
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	_, explicitOCR := strings.CutPrefix(model, "ocr/")
 	configuredOCR := entry.Info.Mode == "ocr" || explicitOCR || strings.HasPrefix(model, "mistral-ocr") ||
@@ -640,7 +640,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if base == "" && provider == "anthropic" {
 		base = "https://api.anthropic.com"
 	}
-	if base == "" && nativeAudio {
+	if base == "" && (provider == "elevenlabs" || provider == "deepgram") {
 		if provider == "deepgram" {
 			base = os.Getenv("DEEPGRAM_API_BASE")
 			if base == "" { base = "https://api.deepgram.com" }
@@ -691,13 +691,17 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 	}
 	var bedrock *runtime.BedrockConfig
-	if provider == "bedrock" {
+	if provider == "bedrock" || provider == "aws_polly" {
+		if provider == "aws_polly" && entry.Params.AWSRegion == "" && os.Getenv("AWS_REGION") == "" && os.Getenv("AWS_DEFAULT_REGION") == "" {
+			entry.Params.AWSRegion = "us-east-1"
+		}
 		bedrock, err = entry.bedrockConfig()
 		if err != nil {
 			return runtime.Candidate{}, err
 		}
 		if base == "" {
 			service := "bedrock-runtime"
+			if provider == "aws_polly" { service = "polly" }
 			if entry.bedrockRerank() {
 				service = "bedrock-agent-runtime"
 			}
@@ -813,7 +817,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	endpoint := "chat-completions"
 	if nativeAudio {
 		endpoint = "transcription"
-		if provider == "elevenlabs" && entry.Info.Mode != "audio_transcription" && !strings.HasPrefix(model, "scribe") {
+		if provider == "aws_polly" || provider == "elevenlabs" && entry.Info.Mode != "audio_transcription" && !strings.HasPrefix(model, "scribe") {
 			endpoint = "speech"
 		}
 	}
@@ -883,7 +887,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if configured == "embeddings" && (provider == "cohere" || provider == "cohere_chat") {
 			configured = "cohere-embeddings"
 		}
-		if nativeAudio && configured != "transcription" && !(provider == "elevenlabs" && configured == "speech") {
+		if nativeAudio && !(provider != "aws_polly" && configured == "transcription") && !((provider == "elevenlabs" || provider == "aws_polly") && configured == "speech") {
 			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
 		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
@@ -950,7 +954,7 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	if config.Region == "" || (config.AccessKey == "" && entry.Params.APIKey == "" && os.Getenv("AWS_BEARER_TOKEN_BEDROCK") == "") {
+	if config.Region == "" || (config.AccessKey == "" && (strings.HasPrefix(entry.Params.Model, "aws_polly/") || (entry.Params.APIKey == "" && os.Getenv("AWS_BEARER_TOKEN_BEDROCK") == ""))) {
 		options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(config.Region)}
 		if profile != "" {
 			options = append(options, awsconfig.WithSharedConfigProfile(profile))

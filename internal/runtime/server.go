@@ -1140,7 +1140,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	var encoded []byte
 	var contentType, audioTarget, speechFormat string
 	var err error
-	if vertexSpeechDeployment(candidate) {
+	if candidate.Provider == "aws_polly" {
+		audioTarget = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1") + "/v1/speech"
+		encoded, err = pollyPayload(payload.fields, candidate.ModelID)
+		if err != nil { err = invalidMediaRequest{err} }
+		contentType = "application/json"
+	} else if vertexSpeechDeployment(candidate) {
 		audioTarget = candidate.APIBase
 		encoded, _, err = vertexSpeechPayload(payload.fields)
 		if err != nil { err = invalidMediaRequest{err} }
@@ -1284,9 +1289,15 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		upstream.Header.Set("x-opencode-session", session)
 	}
 	if candidate.Bedrock != nil {
-		if err := authorizeBedrock(ctx, upstream, candidate, encoded, apiKey); err != nil {
+		var authErr error
+		if candidate.Provider == "aws_polly" {
+			authErr = signAWSRequest(ctx, upstream, candidate.Bedrock, encoded, "polly")
+		} else {
+			authErr = authorizeBedrock(ctx, upstream, candidate, encoded, apiKey)
+		}
+		if authErr != nil {
 			release()
-			return nil, err
+			return nil, authErr
 		}
 	}
 	var response *http.Response

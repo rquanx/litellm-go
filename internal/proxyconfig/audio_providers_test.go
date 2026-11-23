@@ -154,3 +154,32 @@ model_list:
 		t.Fatal(w.Body)
 	}
 }
+
+func TestPollySignsSpeechAndReturnsBinaryAudio(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/v1/speech" || !strings.Contains(r.Header.Get("Authorization"), "/us-east-1/polly/aws4_request") ||
+			r.Header.Get("X-Amz-Security-Token") != "fixture-session" || !strings.Contains(string(body), `"VoiceId":"Joanna"`) ||
+			!strings.Contains(string(body), `"TextType":"ssml"`) {
+			t.Errorf("incorrect Polly request: %s %s", r.URL.Path, body)
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		fmt.Fprint(w, "fixture-polly")
+	}))
+	defer fixture.Close()
+	t.Setenv("AUDIO_TEST_BASE", fixture.URL)
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: speech
+    litellm_params: {model: aws_polly/neural, api_base: os.environ/AUDIO_TEST_BASE, aws_region_name: us-east-1, aws_access_key_id: fixture, aws_secret_access_key: fixture-secret, aws_session_token: fixture-session}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/audio/speech", strings.NewReader(`{"model":"speech","input":"<speak>hello</speak>","voice":"alloy"}`)))
+	if w.Code != 200 || w.Header().Get("Content-Type") != "audio/mpeg" || w.Body.String() != "fixture-polly" {
+		t.Fatal(w.Body)
+	}
+}

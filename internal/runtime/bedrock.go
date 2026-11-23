@@ -36,9 +36,12 @@ func authorizeBedrock(ctx context.Context, request *http.Request, candidate Cand
 		request.Header.Set("Authorization", "Bearer "+bearer)
 		return nil
 	}
-	config := candidate.Bedrock
+	return signAWSRequest(ctx, request, candidate.Bedrock, body, "bedrock")
+}
+
+func signAWSRequest(ctx context.Context, request *http.Request, config *BedrockConfig, body []byte, service string) error {
 	if config == nil || config.Region == "" {
-		return errors.New("Bedrock requires a region and AWS credential")
+		return errors.New("AWS signing requires a region and credential")
 	}
 	credentials := aws.Credentials{
 		AccessKeyID: config.AccessKey, SecretAccessKey: config.SecretKey, SessionToken: config.SessionToken,
@@ -47,14 +50,14 @@ func authorizeBedrock(ctx context.Context, request *http.Request, candidate Cand
 		var err error
 		credentials, err = config.Credentials.Retrieve(ctx)
 		if err != nil {
-			return errors.New("could not retrieve AWS credentials for Bedrock")
+			return errors.New("could not retrieve AWS credentials")
 		}
 	}
 	if !credentials.HasKeys() {
-		return errors.New("Bedrock requires AWS credentials")
+		return errors.New("AWS signing requires credentials")
 	}
 	hash := sha256.Sum256(body)
-	return v4.NewSigner().SignHTTP(ctx, credentials, request, hex.EncodeToString(hash[:]), "bedrock", config.Region, time.Now())
+	return v4.NewSigner().SignHTTP(ctx, credentials, request, hex.EncodeToString(hash[:]), service, config.Region, time.Now())
 }
 
 func chatToBedrock(chat map[string]any) map[string]any {
