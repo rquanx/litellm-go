@@ -23,6 +23,7 @@ type policyRule struct {
 }
 
 type policyAttachment struct {
+	source string
 	Policy string   `yaml:"policy" json:"policy_name"`
 	Scope  string   `yaml:"scope" json:"scope"`
 	Teams  []string `yaml:"teams" json:"teams"`
@@ -35,6 +36,12 @@ type PolicyEngine struct {
 	definitions map[string]policyRule
 	policies    map[string]compiledPolicy
 	attachments []policyAttachment
+	versions    map[string]policyVersion
+}
+
+type policyVersion struct {
+	name string
+	rule policyRule
 }
 
 type compiledPolicy struct {
@@ -126,10 +133,12 @@ func compilePolicies(definitions map[string]policyRule, attachments []policyAtta
 }
 
 type policyContext struct {
-	Team  string   `json:"team_alias"`
-	Key   string   `json:"key_alias"`
-	Model string   `json:"model"`
-	Tags  []string `json:"tags"`
+	Team       string   `json:"team_alias"`
+	Key        string   `json:"key_alias"`
+	Model      string   `json:"model"`
+	Tags       []string `json:"tags"`
+	extra      []policyAttachment
+	guardrails []string
 }
 
 func policyMatches(patterns []string, value string) bool {
@@ -202,11 +211,17 @@ func (engine *PolicyEngine) resolve(input policyContext, preview bool) policyRes
 	}
 	seen := make(map[string]bool)
 	effective := make(map[string]bool)
-	for _, a := range engine.attachments {
+	for _, guard := range input.guardrails {
+		effective[guard] = true
+	}
+	for _, a := range append(slices.Clone(engine.attachments), input.extra...) {
 		reason, matches := a.match(input)
-		rule := engine.policies[a.Policy]
-		if !matches || seen[a.Policy] || (preview && !rule.matchesModel(input.Model)) {
+		rule, exists := engine.policies[a.Policy]
+		if !exists || !matches || seen[a.Policy] || (preview && !rule.matchesModel(input.Model)) {
 			continue
+		}
+		if a.source != "" {
+			reason = a.source
 		}
 		seen[a.Policy] = true
 		detail := policyMatchDetail{Name: a.Policy, Reason: reason, Guardrails: engine.resolveRule(rule, &input)}
@@ -256,18 +271,34 @@ func (keys *KeyRegistry) policyContext(r *http.Request, model string) policyCont
 	if key.RotationTarget != "" {
 		key = keys.state.Keys[key.RotationTarget]
 	}
+	project := keys.state.Projects[key.ProjectID]
 	teamID := key.TeamID
-	if teamID == "" && key.ProjectID != "" {
-		teamID = keys.state.Projects[key.ProjectID].TeamID
+	if teamID == "" {
+		teamID = project.TeamID
 	}
 	team := keys.state.Teams[teamID]
 	input.Team, input.Key = team.Alias, key.Alias
-	input.Tags = append(policyMetadataTags(key.Metadata), policyMetadataTags(team.Metadata)...)
+	for _, entry := range []struct {
+		source   string
+		metadata map[string]any
+	}{
+		{"key", key.Metadata}, {"team", team.Metadata}, {"project", project.Metadata},
+	} {
+		input.Tags = append(input.Tags, policyMetadataTags(entry.metadata)...)
+		input.guardrails = append(input.guardrails, policyStringList(entry.metadata["guardrails"])...)
+		for _, name := range policyStringList(entry.metadata["policies"]) {
+			input.extra = append(input.extra, policyAttachment{Policy: name, source: entry.source})
+		}
+	}
 	return input
 }
 
 func policyMetadataTags(metadata map[string]any) []string {
-	switch tags := metadata["tags"].(type) {
+	return policyStringList(metadata["tags"])
+}
+
+func policyStringList(value any) []string {
+	switch tags := value.(type) {
 	case []string:
 		return slices.Clone(tags)
 	case []any:

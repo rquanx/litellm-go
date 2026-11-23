@@ -20,6 +20,8 @@ type GuardrailPolicy struct {
 	Guardrails []string
 	Matches    []GuardrailPolicyMatch
 	Pipelines  []PolicyPipeline
+	Error      string
+	Status     int
 }
 
 type responseGuardrails struct {
@@ -48,6 +50,7 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	guards := s.guardrails
 	s.mu.RUnlock()
 	if len(guards) == 0 && s.config.ResolvePolicy == nil {
+		delete(input, "policies")
 		return responseGuardrails{}, true
 	}
 	requested := make(map[string]bool)
@@ -69,12 +72,17 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	delete(input, "guardrails")
 	var policy GuardrailPolicy
 	if s.config.ResolvePolicy != nil {
-		policy = s.config.ResolvePolicy(r, model)
+		policy = s.config.ResolvePolicy(r, model, input)
+		if policy.Error != "" {
+			writeError(w, policy.Status, "guardrail_error", policy.Error)
+			return responseGuardrails{}, false
+		}
 		for _, name := range policy.Guardrails {
 			requested[name] = true
 		}
 		writePolicyAttribution(w.Header(), policy.Matches)
 	}
+	delete(input, "policies")
 	plan := responseGuardrails{available: guards}
 	managed := make(map[string]bool)
 	for _, pipeline := range policy.Pipelines {

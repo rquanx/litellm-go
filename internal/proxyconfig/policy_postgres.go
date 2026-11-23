@@ -2,6 +2,7 @@ package proxyconfig
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,24 +66,55 @@ func OpenPolicyRegistry(static *PolicyEngine, db *sql.DB) (*PolicyRegistry, erro
 	return registry, nil
 }
 
-func (registry *PolicyRegistry) Resolver(keys *KeyRegistry) func(*http.Request, string) runtime.GuardrailPolicy {
-	if registry.static == nil && registry.db == nil {
+func (registry *PolicyRegistry) Resolver(keys *KeyRegistry, master string) func(*http.Request, string, map[string]any) runtime.GuardrailPolicy {
+	if registry.static == nil && registry.db == nil && keys == nil {
 		return nil
 	}
-	return func(r *http.Request, model string) runtime.GuardrailPolicy {
+	return func(r *http.Request, model string, payload map[string]any) runtime.GuardrailPolicy {
 		engine := registry.current.Load()
-		if engine == nil {
-			return runtime.GuardrailPolicy{}
-		}
 		input := policyContext{Model: model}
 		if keys != nil {
 			input = keys.policyContext(r, model)
+		}
+		if engine == nil {
+			return runtime.GuardrailPolicy{Guardrails: input.guardrails}
+		}
+		for _, field := range []string{"metadata", "litellm_metadata"} {
+			metadata, _ := payload[field].(map[string]any)
+			input.Tags = append(input.Tags, policyMetadataTags(metadata)...)
+		}
+		input.Tags = append(input.Tags, policyStringList(payload["tags"])...)
+		admin := master != "" && subtle.ConstantTimeCompare([]byte(master), []byte(runtime.ProxyCredential(r))) == 1
+		var overrides map[string]policyRule
+		for _, name := range policyStringList(payload["policies"]) {
+			if id, versioned := strings.CutPrefix(name, "policy_"); versioned {
+				if !admin {
+					return runtime.GuardrailPolicy{Error: "Policy version selection requires the proxy master key", Status: http.StatusForbidden}
+				}
+				version, ok := engine.versions[strings.TrimSpace(id)]
+				if !ok {
+					continue
+				}
+				if overrides == nil {
+					overrides = maps.Clone(engine.definitions)
+				}
+				overrides[version.name] = version.rule
+				name = version.name
+			}
+			input.extra = append(input.extra, policyAttachment{Policy: name, source: "request"})
+		}
+		if overrides != nil {
+			replaced, err := compilePolicies(overrides, engine.attachments)
+			if err != nil {
+				return runtime.GuardrailPolicy{Error: "Could not resolve the selected policy version", Status: http.StatusBadRequest}
+			}
+			engine = replaced
 		}
 		resolved := engine.resolve(input, true)
 		result := runtime.GuardrailPolicy{Guardrails: resolved.Guardrails, Matches: make([]runtime.GuardrailPolicyMatch, 0, len(resolved.Matches))}
 		for _, match := range resolved.Matches {
 			result.Matches = append(result.Matches, runtime.GuardrailPolicyMatch{Name: match.Name, Reason: match.Reason})
-			if pipeline := engine.policies[match.Name].pipeline; pipeline != nil {
+			if pipeline := engine.policies[match.Name].pipeline; pipeline != nil && (match.Reason != "request" || admin) {
 				result.Pipelines = append(result.Pipelines, runtime.PolicyPipeline{Name: match.Name, Spec: *pipeline})
 			}
 		}
@@ -140,39 +173,57 @@ func (registry *PolicyRegistry) compileSnapshot(ctx context.Context, tx *sql.Tx)
 		maps.Copy(definitions, registry.static.definitions)
 		attachments = slices.Clone(registry.static.attachments)
 	}
-	if err := readProductionPolicies(ctx, tx, definitions); err != nil {
+	versions, err := readPolicyDefinitions(ctx, tx, definitions)
+	if err != nil {
 		return nil, err
 	}
 	dynamic, err := readPolicyAttachments(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
-	return compilePolicies(definitions, append(attachments, dynamic...))
+	engine, err := compilePolicies(definitions, append(attachments, dynamic...))
+	if err != nil {
+		return nil, err
+	}
+	if engine == nil && len(versions) > 0 {
+		engine = &PolicyEngine{definitions: definitions}
+	}
+	if engine != nil {
+		engine.versions = versions
+	}
+	return engine, nil
 }
 
-func readProductionPolicies(ctx context.Context, tx *sql.Tx, definitions map[string]policyRule) error {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT ON (policy_name) policy_name,COALESCE(inherit,''),guardrails_add,guardrails_remove,condition,pipeline
-		FROM `+policyTable+` WHERE version_status='production' ORDER BY policy_name,version_number DESC`)
+func readPolicyDefinitions(ctx context.Context, tx *sql.Tx, definitions map[string]policyRule) (map[string]policyVersion, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT policy_id,policy_name,version_status,COALESCE(inherit,''),guardrails_add,guardrails_remove,condition,pipeline
+		FROM `+policyTable+` WHERE version_status IN ('production','draft','published') ORDER BY policy_name,version_number DESC`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
+	production := make(map[string]bool)
+	versions := make(map[string]policyVersion)
 	for rows.Next() {
-		var name string
+		var id, name, status string
 		var rule policyRule
 		var condition, pipeline []byte
-		if err := rows.Scan(&name, &rule.Inherit, pq.Array(&rule.Guardrails.Add), pq.Array(&rule.Guardrails.Remove), &condition, &pipeline); err != nil {
-			return err
+		if err := rows.Scan(&id, &name, &status, &rule.Inherit, pq.Array(&rule.Guardrails.Add), pq.Array(&rule.Guardrails.Remove), &condition, &pipeline); err != nil {
+			return nil, err
 		}
 		if len(pipeline) > 0 && decodePolicyCondition(pipeline, &rule.Pipeline) != nil {
-			return errors.New("invalid database guardrail pipeline: " + name)
+			return nil, errors.New("invalid database guardrail pipeline: " + name)
 		}
 		if len(condition) > 0 && decodePolicyCondition(condition, &rule.Condition) != nil {
-			return errors.New("invalid database policy condition: " + name)
+			return nil, errors.New("invalid database policy condition: " + name)
 		}
-		definitions[name] = rule
+		if status != "production" {
+			versions[id] = policyVersion{name: name, rule: rule}
+		} else if !production[name] {
+			definitions[name] = rule
+			production[name] = true
+		}
 	}
-	return rows.Err()
+	return versions, rows.Err()
 }
 
 func decodePolicyCondition(data []byte, target any) error {

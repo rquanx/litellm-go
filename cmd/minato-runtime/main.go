@@ -300,7 +300,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	config.ResolvePolicy = policies.Resolver(keys)
+	config.ResolvePolicy = policies.Resolver(keys, config.Token)
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {

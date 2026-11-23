@@ -49,6 +49,8 @@ policies:
   child:
     inherit: base
     guardrails: {remove: [removed]}
+  named:
+    guardrails: {add: [deny]}
 policy_attachments:
   - policy: child
     teams: ['prod-*']
@@ -66,7 +68,7 @@ policy_attachments:
 	}
 	server := runtime.NewServer(runtime.Config{
 		Token: "master", Routes: config.Routes, Guardrails: config.Guardrails,
-		ResolvePolicy: registry.Resolver(nil),
+		ResolvePolicy: registry.Resolver(nil, "master"),
 	})
 	handler := registry.Handler(server, "master", nil)
 	request := func(path, token, body string) *httptest.ResponseRecorder {
@@ -99,6 +101,10 @@ policy_attachments:
 	}
 	if w.Header().Get("X-LiteLLM-Applied-Policies") != "child" || w.Header().Get("X-LiteLLM-Policy-Sources") != "child=model:demo" {
 		t.Fatalf("unexpected attribution headers: %v", w.Header())
+	}
+	w = request("/v1/chat/completions", "master", `{"model":"demo","messages":[{"role":"user","content":"example"}],"policies":["named"]}`)
+	if w.Code != 400 || w.Header().Get("X-LiteLLM-Applied-Policies") != "child,named" || inferenceCalls != 0 {
+		t.Fatalf("named policy was not applied: %d %v %s", w.Code, w.Header(), w.Body)
 	}
 }
 
@@ -174,7 +180,7 @@ policy_attachments:
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := runtime.NewServer(runtime.Config{Token: "master", Routes: config.Routes, Guardrails: config.Guardrails, ResolvePolicy: registry.Resolver(nil)})
+	server := runtime.NewServer(runtime.Config{Token: "master", Routes: config.Routes, Guardrails: config.Guardrails, ResolvePolicy: registry.Resolver(nil, "master")})
 	call := func(path, token, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -352,6 +358,19 @@ func TestPostgresPolicyVersionLifecycle(t *testing.T) {
 	call(http.MethodPost, "/policies/attachments", `{"policy_name":"fixture","scope":"*"}`, 200)
 	second := idFrom(call(http.MethodPost, "/policies/name/fixture/versions", `{}`, 200))
 	call(http.MethodPut, "/policies/"+second, `{"guardrails_add":["next"]}`, 200)
+	resolver := registry.Resolver(nil, "master")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	payload := map[string]any{"policies": []any{"policy_" + second}}
+	if got := resolver(req, "demo", payload); got.Status != http.StatusForbidden {
+		t.Fatalf("draft preview returned %+v without a master key", got)
+	}
+	req.Header.Set("Authorization", "Bearer master")
+	if got := resolver(req, "demo", payload); !reflect.DeepEqual(got.Guardrails, []string{"next"}) {
+		t.Fatalf("draft preview returned %+v", got)
+	}
+	if got := resolver(req, "demo", nil); !reflect.DeepEqual(got.Guardrails, []string{"first"}) {
+		t.Fatalf("draft preview changed production: %+v", got)
+	}
 	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"production"}`, 400)
 	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"published"}`, 200)
 	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"production"}`, 200)
