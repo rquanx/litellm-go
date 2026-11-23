@@ -953,9 +953,14 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 			return http.StatusBadGateway, nil, headers, true, err
 		}
 	}
-	if err == nil && status/100 == 2 && bedrockCanvasDeployment(candidate) {
-		data, err = bedrockCanvasResponse(data)
+	if err == nil && status/100 == 2 && bedrockImageDeployment(candidate) {
+		data, err = bedrockImageResponse(data)
 		if err != nil {
+			var rejected bedrockImageRejection
+			if errors.As(err, &rejected) {
+				body, _ := json.Marshal(map[string]any{"error": map[string]string{"code": "image_generation_failed", "message": rejected.Error()}})
+				return http.StatusBadRequest, body, headers, false, nil
+			}
 			return http.StatusBadGateway, nil, headers, true, err
 		}
 	}
@@ -998,8 +1003,8 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
-	if bedrockCanvasDeployment(candidate) {
-		payload, err := bedrockCanvasPayload(input, candidate.Endpoint == "image-edit")
+	if bedrockImageDeployment(candidate) {
+		payload, err := bedrockImagePayload(input, candidate)
 		if err != nil {
 			return nil, "", invalidMediaRequest{err}
 		}
@@ -1203,7 +1208,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = audioTarget
 	} else if googleImageDeployment(candidate) {
 		target = googleImageTarget(candidate)
-	} else if bedrockCanvasDeployment(candidate) {
+	} else if bedrockImageDeployment(candidate) {
 		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
 	} else if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
 		target = geminiTarget(candidate, endpoint)

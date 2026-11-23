@@ -8,15 +8,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
-func bedrockCanvasDeployment(candidate Candidate) bool {
-	return candidate.Provider == "bedrock" && strings.Contains(candidate.ModelID, "amazon.nova-canvas") &&
-		(candidate.Endpoint == "image-generation" || candidate.Endpoint == "image-edit")
-}
-
-func bedrockCanvasPayload(input requestPayload, edit bool) (map[string]any, error) {
+func bedrockCanvasPayload(input requestPayload, edit, titan bool) (map[string]any, error) {
 	fields := clone(input.fields)
 	var image, mask string
 	for _, part := range input.form {
@@ -67,7 +61,17 @@ func bedrockCanvasPayload(input requestPayload, edit bool) (map[string]any, erro
 			config[name] = value
 		}
 	}
-	if config["quality"] == "hd" {
+	quality, _ := config["quality"].(string)
+	if titan {
+		switch quality {
+		case "hd", "premium", "high":
+			config["quality"] = "premium"
+		case "standard", "medium", "low":
+			config["quality"] = "standard"
+		default:
+			delete(config, "quality")
+		}
+	} else if quality == "hd" {
 		config["quality"] = "premium"
 	}
 	text, _ := fields["prompt"].(string)
@@ -90,6 +94,13 @@ func bedrockCanvasPayload(input requestPayload, edit bool) (map[string]any, erro
 	}
 	if task == "" {
 		task = "TEXT_IMAGE"
+	}
+	if titan {
+		params := map[string]any{"text": text}
+		if negative, _ := fields["negativeText"].(string); negative != "" {
+			params["negativeText"] = negative
+		}
+		return map[string]any{"taskType": task, "textToImageParams": params, "imageGenerationConfig": config}, nil
 	}
 	name := map[string]string{"TEXT_IMAGE": "textToImageParams", "COLOR_GUIDED_GENERATION": "colorGuidedGenerationParams", "INPAINTING": "inpaintingParams"}[task]
 	if name == "" {
@@ -152,23 +163,4 @@ func bedrockCanvasEdit(fields map[string]any, task, text, image, mask string) (m
 	}
 	params["text"] = text
 	return map[string]any{"taskType": task, name: params}, nil
-}
-
-func bedrockCanvasResponse(body []byte) ([]byte, error) {
-	var response struct {
-		Images []string `json:"images"`
-	}
-	if json.Unmarshal(body, &response) != nil || len(response.Images) == 0 {
-		return nil, errors.New("Nova Canvas returned no images")
-	}
-	data := make([]map[string]string, 0, len(response.Images))
-	for _, image := range response.Images {
-		if image != "" {
-			data = append(data, map[string]string{"b64_json": image})
-		}
-	}
-	if len(data) == 0 {
-		return nil, errors.New("Nova Canvas returned no images")
-	}
-	return json.Marshal(map[string]any{"created": time.Now().Unix(), "data": data})
 }

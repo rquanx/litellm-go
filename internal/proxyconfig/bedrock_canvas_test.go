@@ -85,3 +85,55 @@ model_list:
 	check(httptest.NewRequest("POST", "/v1/images/edits", strings.NewReader(`{"model":"canvas","taskType":"BACKGROUND_REMOVAL","image":"AQID","n":2}`)),
 		`{"backgroundRemovalParams":{"image":"AQID"},"taskType":"BACKGROUND_REMOVAL"}`)
 }
+
+func TestBedrockTitanAndStabilityImageAdapters(t *testing.T) {
+	for _, fixture := range []struct {
+		model, path, input, payload, result string
+		status                              int
+	}{
+		{"amazon.titan-image-generator-v2:0", "/v1/images/generations", `"prompt":"example","quality":"high","negativeText":"haze"`,
+			`{"imageGenerationConfig":{"quality":"premium"},"taskType":"TEXT_IMAGE","textToImageParams":{"negativeText":"haze","text":"example"}}`, `{"images":["AQID"]}`, 200},
+		{"stability.stable-diffusion-xl-v1", "/v1/images/generations", `"prompt":"line\nbreak","size":"512x768","steps":40`,
+			`{"height":768,"steps":40,"text_prompts":[{"text":"line break","weight":1}],"width":512}`, `{"artifacts":[{"base64":"AQID"}]}`, 200},
+		{"stability.sd3-large-v1:0", "/v1/images/generations", `"prompt":"example","aspect_ratio":"16:9"`,
+			`{"aspect_ratio":"16:9","prompt":"example"}`, `{"images":["AQID"],"finish_reasons":[null]}`, 200},
+		{"stability.stable-style-transfer-v1:0", "/v1/images/edits", `"image":"AQID","style_image":"BAUG","style_strength":0.5`,
+			`{"init_image":"AQID","output_format":"png","style_image":"BAUG","style_strength":0.5}`, `{"finish_reasons":["fixture declined"]}`, 400},
+	} {
+		t.Run(fixture.model, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if r.URL.Path != "/model/"+fixture.model+"/invoke" || string(body) != fixture.payload {
+					t.Errorf("unexpected upstream request %s %s", r.URL.Path, body)
+				}
+				io.WriteString(w, fixture.result)
+			}))
+			defer upstream.Close()
+			t.Setenv("MINATO_BEDROCK_IMAGE_FIXTURE_URL", upstream.URL)
+			proxy, err := Load(strings.NewReader(`
+model_list:
+  - model_name: fixture
+    litellm_params:
+      model: bedrock/` + fixture.model + `
+      api_base: os.environ/MINATO_BEDROCK_IMAGE_FIXTURE_URL
+      aws_region_name: us-east-1
+      aws_access_key_id: fixture
+      aws_secret_access_key: fixture-secret
+`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := runtime.NewServer(runtime.Config{Routes: proxy.Routes})
+			request := httptest.NewRequest("POST", fixture.path, strings.NewReader(`{"model":"fixture",`+fixture.input+`}`))
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			expected := `"b64_json":"AQID"`
+			if fixture.status == 400 {
+				expected = `"message":"fixture declined"`
+			}
+			if response.Code != fixture.status || !strings.Contains(response.Body.String(), expected) {
+				t.Fatalf("unexpected result %d %s", response.Code, response.Body)
+			}
+		})
+	}
+}
