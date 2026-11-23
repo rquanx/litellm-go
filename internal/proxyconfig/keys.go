@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -58,6 +59,7 @@ type KeyRegistry struct {
 	mu     sync.RWMutex
 	state  accessState
 	ssoDefaults *SSOUserDefaults
+	teamMemberSpend func(context.Context, string, string) (float64, error)
 }
 
 func LoadKeys(master, path string) (*KeyRegistry, error) {

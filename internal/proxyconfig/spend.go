@@ -48,6 +48,7 @@ func OpenSpendLog(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*SpendLog
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS cache_read_input_tokens BIGINT NOT NULL DEFAULT 0;
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0;
 	ALTER TABLE minato_proxy_spend ADD COLUMN IF NOT EXISTS agent_id TEXT NOT NULL DEFAULT '';
+	CREATE INDEX IF NOT EXISTS minato_proxy_spend_team_member ON minato_proxy_spend (team_id, user_id);
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_agent ON minato_proxy_spend (agent_id, started_at) WHERE agent_id <> '';
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_end_user ON minato_proxy_spend (end_user_id, started_at) WHERE end_user_id <> '';
 	CREATE INDEX IF NOT EXISTS minato_proxy_spend_started_at ON minato_proxy_spend (started_at DESC, request_id);`)
@@ -307,4 +308,18 @@ func (log *SpendLog) dailyBetween(w http.ResponseWriter, request *http.Request, 
 		return
 	}
 	modelJSON(w, http.StatusOK, data)
+}
+
+func (log *SpendLog) TeamMemberSpend(ctx context.Context, team, user string) (float64, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var spend float64
+	err := log.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(spend), 0) FROM minato_proxy_spend WHERE team_id=$1 AND user_id=$2`, team, user).Scan(&spend)
+	return spend, err
+}
+
+func (registry *KeyRegistry) SetTeamMemberSpend(log *SpendLog) {
+	if log != nil {
+		registry.teamMemberSpend = log.TeamMemberSpend
+	}
 }

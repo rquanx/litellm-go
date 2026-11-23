@@ -144,6 +144,8 @@ With `litellm_settings.default_internal_user_params.user_role: internal_user`, a
 
 User-bound keys can read their own user record and teams where the user is a member. Team detail responses limit key records to that user. Removing a team membership invalidates CLI SSO keys issued for that team.
 
+The team membership endpoint returns the role and PostgreSQL spend of the calling user within the selected team. The fixture verifies historical spend attribution, cross-team denial and errors for service keys without a user. Per-member budget metadata remains open.
+
 Both UI discovery aliases matched the Python defaults. The eval creation fixture matched object, timestamp, name, criteria and data source. Go fixtures also verify run cancellation, file ID and cursor translation, and model-scope enforcement.
 
 The Go polling fixture checks the queued response, an intermediate text delta, final usage, owner isolation and deletion while using the normal inference stream processing.

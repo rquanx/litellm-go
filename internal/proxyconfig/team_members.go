@@ -187,3 +187,44 @@ func membershipUser(users map[string]internalUser, id, email string, create bool
 	}
 	return internalUser{ID: id, Email: email, Role: "internal_user", Models: []string{}, Metadata: map[string]any{}}, true
 }
+
+func (registry *KeyRegistry) teamMemberMe(w http.ResponseWriter, r *http.Request) {
+	caller, ok := registry.identifyResourceCaller(r)
+	if !ok {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+		return
+	}
+	if caller.user == "" {
+		modelError(w, http.StatusBadRequest, "API key has no associated user_id")
+		return
+	}
+	id := r.PathValue("team_id")
+	registry.mu.RLock()
+	owner := registry.state.Teams[id]
+	user := registry.state.Users[caller.user]
+	index := memberIndex(owner, caller.user)
+	var member teamMembership
+	if index >= 0 {
+		member = owner.Members[index]
+	}
+	registry.mu.RUnlock()
+	if index < 0 {
+		modelError(w, http.StatusNotFound, "Team membership not found")
+		return
+	}
+	var spend float64
+	if registry.teamMemberSpend != nil {
+		var err error
+		spend, err = registry.teamMemberSpend(r.Context(), id, caller.user)
+		if err != nil {
+			modelError(w, http.StatusServiceUnavailable, "Could not read team member spend")
+			return
+		}
+	}
+	var email any
+	if user.Email != "" {
+		email = user.Email
+	}
+	modelJSON(w, http.StatusOK, map[string]any{"user_id": caller.user, "team_id": id, "team_alias": owner.Alias,
+		"role": member.Role, "user_email": email, "spend": spend, "total_spend": spend, "budget_id": nil, "litellm_budget_table": nil})
+}

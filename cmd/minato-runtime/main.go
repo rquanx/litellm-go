@@ -316,6 +316,7 @@ func main() {
 	}
 	if keys != nil {
 		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
+		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)
 	}
 	if customers != nil {

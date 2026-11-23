@@ -46,6 +46,7 @@ func (registry *KeyRegistry) registerTeamRoutes(mux *http.ServeMux) {
 		registry.setTeamBlocked(w, r, false)
 	})
 	mux.HandleFunc("GET /team/info", registry.teamInfo)
+	mux.HandleFunc("GET /team/{team_id}/members/me", registry.teamMemberMe)
 	mux.HandleFunc("GET /team/list", registry.listTeams)
 	mux.HandleFunc("POST /team/delete", registry.deleteTeams)
 	for _, operation := range []string{"add", "update", "delete"} {
