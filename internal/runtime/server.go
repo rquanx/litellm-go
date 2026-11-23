@@ -209,7 +209,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && (isInteraction || realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
-		request.URL.Path == "/utils/token_counter" || request.URL.Path == "/model_group/info" ||
+		request.URL.Path == "/utils/token_counter" || request.URL.Path == "/utils/transform_request" || request.URL.Path == "/model_group/info" ||
 		strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
@@ -222,6 +222,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if s.config.AuthorizeInference && isInteraction {
 		s.serveInteraction(writer, request, interaction, modelScope)
+		return
+	}
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/transform_request" {
+		s.transformPreview(writer, request, modelScope)
 		return
 	}
 	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
@@ -1113,7 +1117,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	finished := s.trackDeployment(ctx, candidate)
+	preview, _ := ctx.Value(previewContextKey{}).(*rawRequestPreview)
+	finished := func() {}
+	if preview == nil {
+		finished = s.trackDeployment(ctx, candidate)
+	}
 	release := func() {
 		finished()
 		<-s.sem
@@ -1219,6 +1227,15 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		return nil, err
 	}
 	upstream.Header.Set("Content-Type", contentType)
+	if preview != nil {
+		preview.URL = upstream.URL.String()
+		preview.Headers = map[string]string{"Content-Type": contentType}
+		if json.Valid(encoded) {
+			preview.Body = encoded
+		}
+		release()
+		return nil, nil
+	}
 	apiKey := candidate.APIKey
 	if apiKey == "" && candidate.CredentialRef != "" {
 		apiKey = os.Getenv(candidate.CredentialRef)
