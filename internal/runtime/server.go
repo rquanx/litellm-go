@@ -38,6 +38,7 @@ type Config struct {
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
 	ResourceOwnerScopes func(string) []string
 	ContainerOwners     ContainerOwners
+	LegacyFiles         LegacyFileLookup
 	ResponsePolling     ResponsePollingConfig
 	PollingStore        PollingStore
 	InferenceCache      InferenceCacheConfig

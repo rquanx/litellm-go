@@ -183,7 +183,14 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 						alias, _ = payload.fields["model"].(string)
 					}
 					fileID, _ := payload.fields["input_file_id"].(string)
-					if file, ok := decodeResourceID(fileID, "files"); ok {
+					if isLegacyManagedFile(fileID) {
+						if candidate, original, ok := s.resolveLegacyFile(request, fileID, alias, scope); ok && (deployment == "" || deployment == candidate.DeploymentID) {
+							deployment = candidate.DeploymentID
+							payload.fields["input_file_id"] = original
+						} else {
+							err = errors.New("unavailable managed file ID")
+						}
+					} else if file, ok := decodeResourceID(fileID, "files"); ok {
 						deployment = file.Deployment
 						payload.fields["input_file_id"] = file.Original
 					} else if fileAlias, original, ok := decodeLiteLLMResourceID(fileID, "files"); ok {
@@ -214,6 +221,17 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		decoded, err := url.PathUnescape(id)
 		if err != nil {
 			decoded = ""
+		}
+		if family == "files" && isLegacyManagedFile(decoded) {
+			candidate, original, found := s.resolveLegacyFile(request, decoded, alias, scope)
+			if !found || method != http.MethodGet || !resourceActionAllowed(family, action, method) {
+				writeError(writer, http.StatusNotFound, "resource_not_found", "Unknown managed file or resource operation")
+				return
+			}
+			targetPath += "/" + url.PathEscape(original)
+			if action != "" { targetPath += "/" + action }
+			s.forwardOpenAIResource(writer, request, candidate, family, targetPath, "", nil)
+			return
 		}
 		if resource, ok := decodeResourceID(decoded, family); ok {
 			deployment = resource.Deployment

@@ -84,7 +84,14 @@ func (s *Server) fineTuningResource(w http.ResponseWriter, r *http.Request, scop
 		}
 		for _, name := range []string{"training_file", "validation_file"} {
 			if id, _ := fields[name].(string); id != "" {
-				if fileAlias, original, ok := decodeLiteLLMResourceID(id, "files"); ok {
+				if isLegacyManagedFile(id) {
+					candidate, original, ok := s.resolveLegacyFile(r, id, alias, scope)
+					if !ok || (deployment != "" && deployment != candidate.DeploymentID) {
+						writeError(w, http.StatusBadRequest, "invalid_request", "Managed file is unavailable on this deployment")
+						return
+					}
+					deployment, id = candidate.DeploymentID, original
+				} else if fileAlias, original, ok := decodeLiteLLMResourceID(id, "files"); ok {
 					if alias != fileAlias {
 						writeError(w, http.StatusBadRequest, "invalid_request", "Fine-tuning file belongs to a different model")
 						return
