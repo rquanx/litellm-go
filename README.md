@@ -2,7 +2,7 @@
 
 Low-memory Go data plane for Minato.
 
-The Go port tracks the public LiteLLM Python implementation by release. The compatibility baseline and upstream comparison workflow are documented in [LiteLLM Python port](upstream/README.md).
+The Go port tracks the public LiteLLM Python implementation by release. The compatibility baseline and upstream comparison workflow are documented in [LiteLLM Python port](upstream/README.md). The Minato repository defines the full migration strategy, including the boundary between Go and the optional LiteLLM compatibility layer.
 
 The runtime receives versioned route snapshots from Minato and sends OpenAI-compatible requests to CPA, OpenCode, or another provider. It keeps no project database and exposes only runtime, health, and route-management endpoints.
 
