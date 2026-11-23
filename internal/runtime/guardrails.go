@@ -203,7 +203,41 @@ type guardrailFailure struct {
 	message string
 }
 
+type GuardrailEvent struct {
+	Name     string
+	PolicyID string
+	Model    string
+	Outcome  string
+	At       time.Time
+	Duration time.Duration
+}
+
 func (s *Server) evaluateGenericGuardrail(r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) *guardrailFailure {
+	started := time.Now()
+	failure := s.guardrailVerdict(r, guard, model, stage, input)
+	s.recordGuardrail(guard.Name, model, started, failure)
+	return failure
+}
+
+func (s *Server) recordGuardrail(name, model string, started time.Time, failure *guardrailFailure) {
+	s.recordGuardrailRun(name, "", model, started, failure)
+}
+
+func (s *Server) recordGuardrailRun(name, policyID, model string, started time.Time, failure *guardrailFailure) {
+	if s.config.RecordGuardrail == nil {
+		return
+	}
+	outcome := "passed"
+	if failure != nil {
+		outcome = "flagged"
+		if failure.kind == "content_policy_violation" {
+			outcome = "blocked"
+		}
+	}
+	s.config.RecordGuardrail(GuardrailEvent{Name: name, PolicyID: policyID, Model: model, Outcome: outcome, At: started, Duration: time.Since(started)})
+}
+
+func (s *Server) guardrailVerdict(r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) *guardrailFailure {
 	if guard.Azure != nil {
 		return s.evaluateAzureSafety(r, guard, stage, input)
 	}

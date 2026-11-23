@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 )
 
 type streamGuardrailState struct {
@@ -13,7 +14,7 @@ type streamGuardrailState struct {
 	bytes int64
 }
 
-func (s *Server) checkStreamGuardrails(r *http.Request, plan responseGuardrails, state *streamGuardrailState, output []byte) *guardrailFailure {
+func (s *Server) checkStreamGuardrails(r *http.Request, plan responseGuardrails, state *streamGuardrailState, model string, output []byte) *guardrailFailure {
 	if len(output) == 0 {
 		return nil
 	}
@@ -54,11 +55,14 @@ func (s *Server) checkStreamGuardrails(r *http.Request, plan responseGuardrails,
 				text := append(state.texts[choice.Index], content...)
 				state.texts[choice.Index] = text
 				for _, guard := range plan.independent {
+					started := time.Now()
 					for _, part := range azureSafetyChunks(string(text), 10000) {
 						if failure := s.checkAzureSafetyChunk(r, guard, part); failure != nil {
+							s.recordGuardrail(guard.Name, model, started, failure)
 							return failure
 						}
 					}
+					s.recordGuardrail(guard.Name, model, started, nil)
 				}
 			}
 		}

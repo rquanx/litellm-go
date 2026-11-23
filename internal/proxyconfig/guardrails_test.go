@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
@@ -399,4 +400,66 @@ func TestPostgresTeamGuardrailReviewIsScoped(t *testing.T) {
 	}
 	call(http.MethodPost, chat, "team-one", body, 400)
 	call(http.MethodDelete, "/guardrails/"+record.ID, "master", "", 200)
+}
+
+func TestPostgresGuardrailUsageRecordsAndAggregatesOutcomes(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{})
+	if _, err := WithGuardrailRegistry(server, server, keys, db, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenPolicyRegistry(nil, db); err != nil {
+		t.Fatal(err)
+	}
+	usage, err := OpenGuardrailUsage(db, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "metric-fixture-" + newEntityID()
+	policyID := "policy-fixture-" + newEntityID()
+	defer db.Exec(`DELETE FROM `+guardrailMetricsTable+` WHERE guardrail_id=$1`, name)
+	defer db.Exec(`DELETE FROM `+guardrailRunTable+` WHERE guardrail_name=$1`, name)
+	defer db.Exec(`DELETE FROM `+policyMetricsTable+` WHERE policy_id=$1`, policyID)
+	defer db.Exec(`DELETE FROM `+guardrailRunTable+` WHERE policy_id=$1`, policyID)
+	now := time.Now().UTC()
+	for _, action := range []string{"passed", "blocked", "flagged"} {
+		if err := usage.record(context.Background(), runtime.GuardrailEvent{Name: name, Outcome: action, At: now, Duration: time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := usage.record(context.Background(), runtime.GuardrailEvent{PolicyID: policyID, Outcome: "blocked", At: now}); err != nil {
+		t.Fatal(err)
+	}
+	handler := usage.Handler(http.NotFoundHandler(), []runtime.GenericGuardrail{{Name: name, Provider: "generic_guardrail_api"}})
+	query := "?start_date=" + now.Format(time.DateOnly) + "&end_date=" + now.Format(time.DateOnly)
+	for path, expected := range map[string]string{
+		"/guardrails/usage/overview":       `"totalBlocked":1`,
+		"/guardrails/usage/detail/" + name: `"requestsEvaluated":3`,
+		"/guardrails/usage/logs" + query + "&guardrail_id=" + name + "&action=blocked": `"total":1`,
+		"/guardrails/usage/logs" + query + "&policy_id=" + policyID:                    `"total":1`,
+		"/policies/usage/overview": `"id":"` + policyID + `"`,
+	} {
+		if !strings.Contains(path, "?") {
+			path += query
+		}
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), expected) {
+			t.Fatalf("%s returned %d %s", path, w.Code, w.Body)
+		}
+	}
 }

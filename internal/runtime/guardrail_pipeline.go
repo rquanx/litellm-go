@@ -46,6 +46,7 @@ func (p GuardrailPipeline) Validate() error {
 
 type PolicyPipeline struct {
 	Name string
+	ID   string
 	Spec GuardrailPipeline
 }
 
@@ -153,7 +154,13 @@ func (s *Server) testGuardrailPipeline(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enforcePipeline(w http.ResponseWriter, r *http.Request, p PolicyPipeline, guards []GenericGuardrail, model, endpoint string, stream bool, input map[string]any) bool {
+	started := time.Now()
 	result := s.runPipeline(r, p.Spec, guards, model, input)
+	var failure *guardrailFailure
+	if result.Action == "block" || result.Action == "modify_response" {
+		failure = &guardrailFailure{kind: "content_policy_violation"}
+	}
+	s.recordGuardrailRun("", p.ID, model, started, failure)
 	switch result.Action {
 	case "block":
 		writeError(w, 400, "guardrail_pipeline_error", fmt.Sprintf("Content blocked by guardrail pipeline %q", p.Name))

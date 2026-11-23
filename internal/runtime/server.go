@@ -80,6 +80,7 @@ type Config struct {
 	Guardrails []GenericGuardrail
 	ResolvePolicy func(*http.Request, string, map[string]any) GuardrailPolicy
 	GuardrailTeam func(*http.Request) string
+	RecordGuardrail func(GuardrailEvent)
 	CallbackNames      []string
 	CallbackHealth func(context.Context, string, InferenceEvent) bool
 	PublicReadinessDetails bool
@@ -926,7 +927,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			emit := func(frame []byte) bool {
 				output := convert(frame)
 				if guardrails.active() {
-					if failure:=s.checkStreamGuardrails(request,guardrails,&guarded,output);failure!=nil {
+					if failure:=s.checkStreamGuardrails(request,guardrails,&guarded,route.Alias,output);failure!=nil {
 						writeStreamGuardrailError(writer,flush,failure)
 						return false
 					}

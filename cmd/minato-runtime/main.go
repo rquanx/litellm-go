@@ -301,8 +301,12 @@ func main() {
 		log.Fatal(err)
 	}
 	config.ResolvePolicy = policies.Resolver(keys, config.Token)
+	var guardrailUsage *proxyconfig.GuardrailUsage
 	if keys != nil && stateDB != nil {
 		config.GuardrailTeam = keys.GuardrailTeam
+		guardrailUsage,err = proxyconfig.OpenGuardrailUsage(stateDB,keys)
+		if err!=nil {log.Fatal(err)}
+		config.RecordGuardrail=guardrailUsage.Start(context.Background())
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
@@ -347,6 +351,9 @@ func main() {
 		handler = keys.Handler(handler)
 	}
 	handler = policies.Handler(handler, config.Token, keys)
+	if guardrailUsage!=nil {
+		handler=guardrailUsage.Handler(handler,proxy.Guardrails)
+	}
 	if customers != nil {
 		handler = customers.Handler(handler)
 	}

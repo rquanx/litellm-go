@@ -115,7 +115,11 @@ func (registry *PolicyRegistry) Resolver(keys *KeyRegistry, master string) func(
 		for _, match := range resolved.Matches {
 			result.Matches = append(result.Matches, runtime.GuardrailPolicyMatch{Name: match.Name, Reason: match.Reason})
 			if pipeline := engine.policies[match.Name].pipeline; pipeline != nil && (match.Reason != "request" || admin) {
-				result.Pipelines = append(result.Pipelines, runtime.PolicyPipeline{Name: match.Name, Spec: *pipeline})
+				id := engine.policies[match.Name].versionID
+				if id == "" {
+					id = match.Name
+				}
+				result.Pipelines = append(result.Pipelines, runtime.PolicyPipeline{Name: match.Name, ID: id, Spec: *pipeline})
 			}
 		}
 		return result
@@ -214,6 +218,7 @@ func readPolicyDefinitions(ctx context.Context, tx *sql.Tx, definitions map[stri
 		if err := rows.Scan(&id, &name, &status, &rule.Inherit, pq.Array(&rule.Guardrails.Add), pq.Array(&rule.Guardrails.Remove), &condition, &pipeline); err != nil {
 			return nil, err
 		}
+		rule.versionID = id
 		if len(pipeline) > 0 && decodePolicyCondition(pipeline, &rule.Pipeline) != nil {
 			return nil, errors.New("invalid database guardrail pipeline: " + name)
 		}

@@ -11,6 +11,7 @@ import (
 )
 
 type policyRule struct {
+	versionID string
 	Inherit   string                     `yaml:"inherit"`
 	Pipeline  *runtime.GuardrailPipeline `yaml:"pipeline"`
 	Condition struct {
@@ -45,11 +46,12 @@ type policyVersion struct {
 }
 
 type compiledPolicy struct {
-	chain    []string
-	add      []string
-	remove   []string
-	models   []policyModelPattern
-	pipeline *runtime.GuardrailPipeline
+	versionID string
+	chain     []string
+	add       []string
+	remove    []string
+	models    []policyModelPattern
+	pipeline  *runtime.GuardrailPipeline
 }
 
 type policyModelPattern struct {
@@ -74,7 +76,7 @@ func compilePolicies(definitions map[string]policyRule, attachments []policyAtta
 		}
 		active[name] = true
 		defer delete(active, name)
-		result := compiledPolicy{}
+		result := compiledPolicy{versionID: rule.versionID}
 		if rule.Pipeline != nil {
 			if err := rule.Pipeline.Validate(); err != nil {
 				return result, err
