@@ -57,6 +57,9 @@ func (oauth *MCPInteractiveOAuth) fingerprint() [32]byte {
 }
 
 func (s *Server) serveMCPOAuth(w http.ResponseWriter, r *http.Request) bool {
+	if s.serveMCPOAuthDiscovery(w, r) {
+		return true
+	}
 	path := strings.Trim(r.URL.Path, "/")
 	if path == "callback" && r.Method == http.MethodGet {
 		if !strings.HasPrefix(r.URL.Query().Get("state"), "minato-mcp-") {

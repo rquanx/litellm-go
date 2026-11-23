@@ -57,6 +57,16 @@ mcp_servers:
 		server.ServeHTTP(result, req)
 		return result
 	}
+	for path, expected := range map[string]string{
+		"/.well-known/oauth-protected-resource/mcp/fixture": "http://127.0.0.1:4300/mcp/fixture",
+		"/.well-known/oauth-protected-resource/fixture/mcp": "http://127.0.0.1:4300/fixture/mcp",
+		"/.well-known/oauth-authorization-server/fixture":   "http://127.0.0.1:4300/fixture/authorize",
+	} {
+		result := call("GET", path, "", "")
+		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), expected) {
+			t.Fatalf("incorrect OAuth discovery response for %s: %d %s", path, result.Code, result.Body)
+		}
+	}
 	verifier := strings.Repeat("v", 43)
 	digest := sha256.Sum256([]byte(verifier))
 	values := url.Values{"redirect_uri": {"http://127.0.0.1:5321/finish?session=demo"},

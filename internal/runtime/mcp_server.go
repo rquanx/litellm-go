@@ -23,7 +23,10 @@ func (s *Server) serveMCPEndpoint(w http.ResponseWriter, r *http.Request) bool {
 		s.serveMCPForToolset(w, r, strings.TrimSuffix(name, "/mcp"))
 		return true
 	}
-	name, ok := strings.CutSuffix(strings.TrimPrefix(path, "/"), "/mcp")
+	name, ok := strings.CutPrefix(path, "/mcp/")
+	if !ok {
+		name, ok = strings.CutSuffix(strings.TrimPrefix(path, "/"), "/mcp")
+	}
 	if !ok || name == "" || strings.Contains(name, "/") {
 		return false
 	}
