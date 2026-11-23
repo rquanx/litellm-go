@@ -95,6 +95,10 @@ type deployment struct {
 		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
 		AWSSessionToken string `yaml:"aws_session_token" json:"aws_session_token,omitempty"`
 		AWSProfile string `yaml:"aws_profile_name" json:"aws_profile_name,omitempty"`
+		AWSBedrockControlEndpoint string `yaml:"aws_bedrock_control_endpoint" json:"aws_bedrock_control_endpoint,omitempty"`
+		AWSBatchRoleARN string `yaml:"aws_batch_role_arn" json:"aws_batch_role_arn,omitempty"`
+		S3OutputBucket string `yaml:"s3_output_bucket_name" json:"s3_output_bucket_name,omitempty"`
+		S3EncryptionKey string `yaml:"s3_encryption_key_id" json:"s3_encryption_key_id,omitempty"`
 		VertexProject string `yaml:"vertex_project" json:"vertex_project,omitempty"`
 		VertexLocation string `yaml:"vertex_location" json:"vertex_location,omitempty"`
 		WatsonXProject string `yaml:"watsonx_project" json:"watsonx_project,omitempty"`
@@ -944,6 +948,10 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 		{entry.Params.AWSAccessKey, "", &config.AccessKey},
 		{entry.Params.AWSSecretKey, "", &config.SecretKey},
 		{entry.Params.AWSSessionToken, "", &config.SessionToken},
+		{entry.Params.AWSBedrockControlEndpoint, "AWS_ENDPOINT_URL_BEDROCK", &config.ControlBase},
+		{entry.Params.AWSBatchRoleARN, "AWS_BATCH_ROLE_ARN", &config.BatchRole},
+		{entry.Params.S3OutputBucket, "AWS_S3_OUTPUT_BUCKET_NAME", &config.BatchOutputBucket},
+		{entry.Params.S3EncryptionKey, "AWS_S3_ENCRYPTION_KEY_ID", &config.BatchEncryptionKey},
 	} {
 		value, err := resolveEnv(field.value)
 		if err != nil {

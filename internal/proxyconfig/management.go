@@ -247,6 +247,18 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSProfile == "" {
 			model.Params.AWSProfile = existing.Params.AWSProfile
 		}
+		if model.Params.AWSBedrockControlEndpoint == "" {
+			model.Params.AWSBedrockControlEndpoint = existing.Params.AWSBedrockControlEndpoint
+		}
+		if model.Params.AWSBatchRoleARN == "" {
+			model.Params.AWSBatchRoleARN = existing.Params.AWSBatchRoleARN
+		}
+		if model.Params.S3OutputBucket == "" {
+			model.Params.S3OutputBucket = existing.Params.S3OutputBucket
+		}
+		if model.Params.S3EncryptionKey == "" {
+			model.Params.S3EncryptionKey = existing.Params.S3EncryptionKey
+		}
 		if model.Params.VertexProject == "" {
 			model.Params.VertexProject = existing.Params.VertexProject
 		}

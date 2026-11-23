@@ -125,6 +125,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if family == "batches" && s.bedrockAsyncBatchResource(writer, request, alias, provider, scope) {
 		return
 	}
+	if family == "batches" && s.bedrockControlBatchResource(writer, request, alias, provider, scope) {
+		return
+	}
 	var deployment string
 	for _, field := range []string{"after", "before"} {
 		cursor := request.URL.Query().Get(field)
@@ -185,7 +188,17 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 					if alias == "" {
 						alias, _ = payload.fields["model"].(string)
 					}
+					bodyProvider, _ := payload.fields["custom_llm_provider"].(string)
 					fileID, _ := payload.fields["input_file_id"].(string)
+					bedrock := provider == "bedrock" || bodyProvider == "bedrock"
+					if provider == "" && bodyProvider == "" && alias != "" && strings.HasPrefix(fileID, "s3://") {
+						_, status := s.bedrockControlDeployment(request, alias, "", "", scope)
+						bedrock = status == 0
+					}
+					if bedrock {
+						s.createBedrockControlBatch(writer, request, alias, scope, payload.fields)
+						return
+					}
 					if isLegacyManagedFile(fileID) {
 						if candidate, original, ok := s.resolveLegacyFile(request, fileID, alias, scope); ok && (deployment == "" || deployment == candidate.DeploymentID) {
 							deployment = candidate.DeploymentID

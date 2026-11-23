@@ -21,6 +21,10 @@ type BedrockConfig struct {
 	SecretKey    string `json:"secretKey"`
 	SessionToken string `json:"sessionToken,omitempty"`
 	Credentials aws.CredentialsProvider `json:"-"`
+	ControlBase string `json:"controlBase,omitempty"`
+	BatchRole string `json:"batchRole,omitempty"`
+	BatchOutputBucket string `json:"batchOutputBucket,omitempty"`
+	BatchEncryptionKey string `json:"batchEncryptionKey,omitempty"`
 }
 
 func bedrockURL(base, model string, stream bool) string {
