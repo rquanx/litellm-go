@@ -73,6 +73,7 @@ func main() {
 		config.ResponsePolling = proxy.ResponsePolling
 		config.InferenceCache = proxy.InferenceCache
 		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
+		config.SharedHealthChecks = proxy.SharedHealthChecks
 		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
 		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks
 		config.HealthRoutingStaleness = proxy.HealthRoutingStaleness
@@ -258,6 +259,9 @@ func main() {
 		if err != nil { log.Fatal(err) }
 		defer state.Close()
 		config.RoutingState = state
+		if config.SharedHealthChecks {
+			config.HealthCoordinator = state
+		}
 	}
 	var customers *proxyconfig.CustomerRegistry
 	if stateDB != nil && keys != nil {

@@ -35,7 +35,7 @@ func (s *Server) modelHealth(w http.ResponseWriter, r *http.Request, scope []str
 		}
 		deployments = checked
 	} else {
-		results = s.runHealthChecks(r, deployments)
+		results = s.runHealthChecks(r, deployments, false)
 	}
 	healthy, unhealthy := make([]map[string]any, 0), make([]map[string]any, 0)
 	for i, dep := range deployments {
@@ -91,8 +91,9 @@ func (s *Server) healthDeployments(model, id string, scope []string, skipDisable
 	return deployments
 }
 
-func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment) []ModelHealthRecord {
+func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment, shared bool) []ModelHealthRecord {
 	results := make([]ModelHealthRecord, len(deployments))
+	local := make([]bool, len(deployments))
 	ctx := r.Context()
 	var workers sync.WaitGroup
 	concurrency := min(s.config.HealthCheckConcurrency, len(deployments))
@@ -102,29 +103,36 @@ func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment
 			defer workers.Done()
 			for index := worker; index < len(deployments) && ctx.Err() == nil; index += concurrency {
 				deployment := deployments[index]
-				start := time.Now()
-				entry := ModelHealthRecord{ID: newUUID(), Model: deployment.alias, ModelID: deployment.candidate.DeploymentID,
-					Status: "unhealthy", UnhealthyCount: 1, CheckedAt: start, CreatedAt: start}
 				timeout := deployment.candidate.HealthTimeout
 				if timeout <= 0 {
 					timeout = 10 * time.Second
 				}
-				probeCtx, cancel := context.WithTimeout(ctx, timeout)
-				entry.responseStatus = s.probeDeployment(probeCtx, r, deployment.candidate)
-				cancel()
-				if entry.responseStatus >= 200 && entry.responseStatus < 300 {
-					entry.Status, entry.HealthyCount, entry.UnhealthyCount = "healthy", 1, 0
+				probe := func() ModelHealthRecord {
+					start := time.Now()
+					entry := ModelHealthRecord{ID: newUUID(), Model: deployment.alias, ModelID: deployment.candidate.DeploymentID,
+						Status: "unhealthy", UnhealthyCount: 1, CheckedAt: start, CreatedAt: start}
+					probeCtx, cancel := context.WithTimeout(ctx, timeout)
+					defer cancel()
+					entry.responseStatus = s.probeDeployment(probeCtx, r, deployment.candidate)
+					if entry.responseStatus/100 == 2 {
+						entry.Status, entry.HealthyCount, entry.UnhealthyCount = "healthy", 1, 0
+					}
+					entry.ResponseMS = float64(time.Since(entry.CheckedAt)) / float64(time.Millisecond)
+					return entry
 				}
-				entry.ResponseMS = float64(time.Since(start)) / float64(time.Millisecond)
-				results[index] = entry
+				if shared {
+					results[index], local[index] = s.sharedHealthProbe(ctx, deployment, timeout, probe)
+				} else {
+					results[index], local[index] = probe(), true
+				}
 			}
 		}()
 	}
 	workers.Wait()
 	if s.config.HealthHistory != nil {
 		saved := make([]ModelHealthRecord, 0, len(results))
-		for _, result := range results {
-			if result.ID != "" {
+		for index, result := range results {
+			if local[index] && result.ID != "" {
 				saved = append(saved, result)
 			}
 		}
@@ -148,7 +156,7 @@ func (s *Server) RunBackgroundHealthChecks(ctx context.Context) {
 		generation := s.configGeneration
 		s.mu.RUnlock()
 		deployments := s.healthDeployments("", "", nil, true)
-		results := s.runHealthChecks(request, deployments)
+		results := s.runHealthChecks(request, deployments, s.config.HealthCoordinator != nil)
 		cache := make(map[string]ModelHealthRecord, len(results))
 		for _, entry := range results {
 			if entry.ID != "" {

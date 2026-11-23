@@ -33,6 +33,7 @@ type configFile struct {
 		DisableSpendLogs bool `yaml:"disable_spend_logs"`
 		PublicReadinessDetails bool `yaml:"allow_public_health_readiness_details"`
 		BackgroundHealthChecks bool `yaml:"background_health_checks"`
+		SharedHealthChecks bool `yaml:"use_shared_health_check"`
 		HealthCheckInterval int `yaml:"health_check_interval"`
 		HealthCheckConcurrency int `yaml:"health_check_concurrency"`
 		SkipDisabledHealthChecks bool `yaml:"health_check_skip_disabled_background_models"`
@@ -172,6 +173,7 @@ type Config struct {
 	DisableSpendLogs bool
 	PublicReadinessDetails bool
 	BackgroundHealthInterval time.Duration
+	SharedHealthChecks bool
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
 	HealthRoutingStaleness time.Duration
@@ -324,6 +326,7 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, errors.New("invalid health check interval or concurrency")
 	}
 	config.HealthCheckConcurrency = file.General.HealthCheckConcurrency
+	config.SharedHealthChecks = file.General.SharedHealthChecks
 	config.SkipDisabledHealthChecks = file.General.SkipDisabledHealthChecks
 	config.IgnoreTransientHealthErrors = file.General.IgnoreTransientHealthErrors
 	if file.General.BackgroundHealthChecks {

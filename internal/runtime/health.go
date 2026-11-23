@@ -62,7 +62,7 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 	case "/health/history", "/health/latest":
 		s.healthHistory(w, r, scope)
 	case "/health/shared-status":
-		writeJSON(w, http.StatusOK, map[string]any{"shared_health_check_enabled": false, "message": "Shared health check is not enabled"})
+		s.sharedHealthStatus(w, r)
 	default:
 		s.readiness(w, r, path == "/health/readiness/details" || s.config.PublicReadinessDetails)
 	}

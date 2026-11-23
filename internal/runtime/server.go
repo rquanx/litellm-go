@@ -65,6 +65,8 @@ type Config struct {
 	ModelRetryPolicies map[string]RetryPolicy
 	DatabasePing       func(context.Context) error
 	HealthHistory      HealthHistory
+	SharedHealthChecks bool
+	HealthCoordinator HealthCoordinator
 	BackgroundHealthInterval time.Duration
 	HealthCheckConcurrency int
 	SkipDisabledHealthChecks bool
