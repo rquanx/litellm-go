@@ -58,6 +58,8 @@ The health fixture verifies native Responses, image generation, multipart transc
 
 The protocol health fixture verifies a Realtime WebSocket handshake without sending an inference event a one-item OpenAI batch listing, and an OpenAI video task submission using a synthetic prompt. Video probes use the OpenAI, Azure or Veo adapter and create an upstream job when enabled. The probe uses `model_info.mode` to select Realtime or batch. Realtime uses the existing OpenAI, Azure and xAI authentication path. Batch probes use listing for OpenAI, Azure, hosted vLLM and Vertex AI. [Upstream probe handlers](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/litellm_core_utils/health_check_helpers.py)
 
+Health probes accept the LiteLLM model, voice, timeout, token limit, token support and reasoning-effort overrides in `model_info`. The override fixture checks that ordinary inference still uses its configured model and payload. Each probe has its own timeout and shares the configured worker limit. Reasoning-specific token-limit defaults and environment-based overrides remain open. [Upstream health configuration](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/proxy/health_check.py)
+
 The same proxy comparison matched both liveness aliases, public readiness without a database, and healthy and unhealthy counts for a targeted Chat Completions deployment.
 
 The full JSON responses from `/public/endpoints` and `/public/agents/fields` match LiteLLM `v1.85.0`. The blog endpoint matched against a local RSS fixture and both proxies returned their cached feed after the fixture stopped. The Go proxy caches failed feed lookups for one minute to bound repeated remote requests.

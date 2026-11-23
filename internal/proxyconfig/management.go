@@ -338,6 +338,24 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Info.Mode == "" {
 			model.Info.Mode = existing.Info.Mode
 		}
+		if model.Info.HealthModel == "" {
+			model.Info.HealthModel = existing.Info.HealthModel
+		}
+		if model.Info.HealthVoice == "" {
+			model.Info.HealthVoice = existing.Info.HealthVoice
+		}
+		if model.Info.HealthTimeout == 0 {
+			model.Info.HealthTimeout = existing.Info.HealthTimeout
+		}
+		if model.Info.HealthMaxTokens == nil {
+			model.Info.HealthMaxTokens = existing.Info.HealthMaxTokens
+		}
+		if model.Info.HealthSupportsMaxTokens == nil {
+			model.Info.HealthSupportsMaxTokens = existing.Info.HealthSupportsMaxTokens
+		}
+		if model.Info.HealthReasoningEffort == "" {
+			model.Info.HealthReasoningEffort = existing.Info.HealthReasoningEffort
+		}
 		next[index] = model
 	} else {
 		next = append(next, model)

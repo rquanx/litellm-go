@@ -135,6 +135,12 @@ type deployment struct {
 		Endpoints []string `yaml:"supported_endpoints" json:"supported_endpoints,omitempty"`
 		Mode      string   `yaml:"mode" json:"mode,omitempty"`
 		DisableBackgroundHealthCheck bool `yaml:"disable_background_health_check" json:"disable_background_health_check,omitempty"`
+		HealthModel string `yaml:"health_check_model" json:"health_check_model,omitempty"`
+		HealthVoice string `yaml:"health_check_voice" json:"health_check_voice,omitempty"`
+		HealthTimeout float64 `yaml:"health_check_timeout" json:"health_check_timeout,omitempty"`
+		HealthMaxTokens *int `yaml:"health_check_max_tokens" json:"health_check_max_tokens,omitempty"`
+		HealthSupportsMaxTokens *bool `yaml:"health_check_supports_max_tokens" json:"health_check_supports_max_tokens,omitempty"`
+		HealthReasoningEffort string `yaml:"health_check_reasoning_effort" json:"health_check_reasoning_effort,omitempty"`
 	} `yaml:"model_info" json:"model_info"`
 }
 
@@ -647,6 +653,10 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		(entry.Params.RPM != nil && *entry.Params.RPM < 0) || (entry.Params.TPM != nil && *entry.Params.TPM < 0) {
 		return runtime.Candidate{}, errors.New("weight, rpm and tpm must be finite non-negative values")
 	}
+	if entry.Info.HealthTimeout < 0 || entry.Info.HealthTimeout >= float64(math.MaxInt64)/float64(time.Second) || math.IsNaN(entry.Info.HealthTimeout) ||
+		(entry.Info.HealthMaxTokens != nil && *entry.Info.HealthMaxTokens <= 0) {
+		return runtime.Candidate{}, errors.New("health check timeout must be finite and non-negative and health check max tokens must be positive")
+	}
 	settings, hasSettings := openAIProviderSettings[provider]
 	base, err := resolveEnv(entry.Params.APIBase)
 	if err != nil {
@@ -1008,6 +1018,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		Tags: slices.Clone(entry.Params.Tags), TagRegex: patterns, RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
 		HealthMode: entry.Info.Mode, DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
+		HealthModel: strings.TrimPrefix(entry.Info.HealthModel, provider+"/"), HealthVoice: entry.Info.HealthVoice,
+		HealthTimeout: time.Duration(entry.Info.HealthTimeout * float64(time.Second)), HealthMaxTokens: entry.Info.HealthMaxTokens,
+		HealthSupportsMaxTokens: entry.Info.HealthSupportsMaxTokens, HealthReasoningEffort: entry.Info.HealthReasoningEffort,
 		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
 		Vertex: vertex, AzureADToken: azureADToken, AzureToken: azureToken, AzureIdentityKey: azureIdentityKey, WatsonX: watsonx}, nil

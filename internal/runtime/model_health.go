@@ -93,8 +93,7 @@ func (s *Server) healthDeployments(model, id string, scope []string, skipDisable
 
 func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment) []ModelHealthRecord {
 	results := make([]ModelHealthRecord, len(deployments))
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
+	ctx := r.Context()
 	var workers sync.WaitGroup
 	concurrency := min(s.config.HealthCheckConcurrency, len(deployments))
 	for worker := range concurrency {
@@ -106,7 +105,13 @@ func (s *Server) runHealthChecks(r *http.Request, deployments []healthDeployment
 				start := time.Now()
 				entry := ModelHealthRecord{ID: newUUID(), Model: deployment.alias, ModelID: deployment.candidate.DeploymentID,
 					Status: "unhealthy", UnhealthyCount: 1, CheckedAt: start, CreatedAt: start}
-				entry.responseStatus = s.probeDeployment(ctx, r, deployment.candidate)
+				timeout := deployment.candidate.HealthTimeout
+				if timeout <= 0 {
+					timeout = 10 * time.Second
+				}
+				probeCtx, cancel := context.WithTimeout(ctx, timeout)
+				entry.responseStatus = s.probeDeployment(probeCtx, r, deployment.candidate)
+				cancel()
 				if entry.responseStatus >= 200 && entry.responseStatus < 300 {
 					entry.Status, entry.HealthyCount, entry.UnhealthyCount = "healthy", 1, 0
 				}
@@ -191,6 +196,9 @@ func (s *Server) filterUnhealthyCandidates(candidates []Candidate) []Candidate {
 }
 
 func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) int {
+	if candidate.HealthModel != "" {
+		candidate.ModelID = candidate.HealthModel
+	}
 	if candidate.HealthMode == "realtime" {
 		return s.probeRealtime(ctx, candidate)
 	}
@@ -212,18 +220,22 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 		fields = map[string]any{"input": prompt}
 	case isConversationEndpoint(endpoint):
 		endpoint = "chat-completions"
-		fields = map[string]any{"messages": []any{map[string]any{"role": "user", "content": prompt}}, "max_tokens": 5}
+		fields = map[string]any{"messages": []any{map[string]any{"role": "user", "content": prompt}}}
 	case CompatibleEndpoints(endpoint, "embeddings"):
 		endpoint = "embeddings"
 		fields = map[string]any{"input": []string{prompt}}
 	case endpoint == "completions":
-		fields = map[string]any{"prompt": prompt, "max_tokens": 5}
+		fields = map[string]any{"prompt": prompt}
 	case endpoint == "moderations":
 		fields = map[string]any{"input": prompt}
 	case endpoint == "rerank":
 		fields = map[string]any{"query": prompt, "documents": []string{prompt}, "top_n": 1}
 	case endpoint == "speech":
-		fields = map[string]any{"input": prompt, "voice": "alloy"}
+		voice := candidate.HealthVoice
+		if voice == "" {
+			voice = "alloy"
+		}
+		fields = map[string]any{"input": prompt, "voice": voice}
 	case endpoint == "image-generation":
 		fields = map[string]any{"prompt": prompt}
 	case endpoint == "transcription":
@@ -244,6 +256,9 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 		fields = map[string]any{"document": map[string]any{"type": "document_url", "document_url": healthProbePDF}}
 	default:
 		return http.StatusNotImplemented
+	}
+	if fields != nil {
+		applyHealthGenerationOptions(fields, candidate, endpoint)
 	}
 	status, _, _, _, err := s.callJSON(ctx, r, endpoint, candidate, requestPayload{fields: fields, form: form})
 	if err != nil {
@@ -316,4 +331,28 @@ func (s *Server) probeVideo(ctx context.Context, parent *http.Request, candidate
 		return http.StatusRequestTimeout
 	}
 	return result.status
+}
+
+func applyHealthGenerationOptions(fields map[string]any, candidate Candidate, endpoint string) {
+	chat := endpoint == "chat-completions"
+	completion := endpoint == "completions"
+	responses := endpoint == "responses"
+	supportsMaxTokens := chat || completion || responses
+	if candidate.HealthSupportsMaxTokens != nil {
+		supportsMaxTokens = *candidate.HealthSupportsMaxTokens
+	}
+	if supportsMaxTokens {
+		field := "max_tokens"
+		if responses {
+			field = "max_output_tokens"
+		}
+		if candidate.HealthMaxTokens != nil {
+			fields[field] = *candidate.HealthMaxTokens
+		} else if (chat || completion) && !strings.Contains(candidate.ModelID, "*") {
+			fields[field] = 5
+		}
+	}
+	if (chat || completion) && candidate.HealthReasoningEffort != "" {
+		fields["reasoning_effort"] = candidate.HealthReasoningEffort
+	}
 }

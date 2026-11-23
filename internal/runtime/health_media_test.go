@@ -67,3 +67,39 @@ func TestHealthProbesMediaAndNativeResponses(t *testing.T) {
 		t.Fatalf("unexpected health response %d %s", response.Code, response.Body)
 	}
 }
+
+func TestHealthGenerationOverridesKeepInferenceDeployment(t *testing.T) {
+	seen := make(chan map[string]any, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.URL.Path != "/v1/chat/completions" || json.NewDecoder(r.Body).Decode(&body) != nil {
+			t.Errorf("unexpected request to %s", r.URL.Path)
+		}
+		seen <- body
+		io.WriteString(w, `{"id":"fixture","object":"chat.completion","choices":[]}`)
+	}))
+	defer upstream.Close()
+
+	tokens := 23
+	server := NewServer(Config{AuthorizeInference: true, Routes: []Route{{Alias: "service", Candidates: []Candidate{{
+		DeploymentID: "service-id", ModelID: "production-model", Endpoint: "chat-completions", APIBase: upstream.URL,
+		HealthModel: "probe-model", HealthMaxTokens: &tokens, HealthReasoningEffort: "none",
+	}}}}})
+	for _, route := range []struct{ method, path, body string }{
+		{http.MethodGet, "/health?model=service", ""},
+		{http.MethodPost, "/v1/chat/completions", `{"model":"service","messages":[{"role":"user","content":"fixture"}]}`},
+	} {
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, httptest.NewRequest(route.method, route.path, strings.NewReader(route.body)))
+		if output.Code != http.StatusOK {
+			t.Fatalf("%s returned %d: %s", route.path, output.Code, output.Body)
+		}
+	}
+	probe, inference := <-seen, <-seen
+	if probe["model"] != "probe-model" || probe["max_tokens"] != float64(23) || probe["reasoning_effort"] != "none" {
+		t.Fatalf("incorrect probe override: %v", probe)
+	}
+	if inference["model"] != "production-model" || inference["max_tokens"] != nil || inference["reasoning_effort"] != nil {
+		t.Fatalf("health settings escaped to inference: %v", inference)
+	}
+}

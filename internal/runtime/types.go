@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"regexp"
+	"time"
 )
 
 type Route struct {
@@ -46,6 +47,12 @@ type Candidate struct {
 	Bedrock          *BedrockConfig    `json:"bedrock,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 	HealthMode string `json:"-"`
+	HealthModel string `json:"-"`
+	HealthVoice string `json:"-"`
+	HealthTimeout time.Duration `json:"-"`
+	HealthMaxTokens *int `json:"-"`
+	HealthSupportsMaxTokens *bool `json:"-"`
+	HealthReasoningEffort string `json:"-"`
 	DisableBackgroundHealthCheck bool `json:"-"`
 	UseInPassThrough bool `json:"-"`
 }
