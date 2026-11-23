@@ -77,6 +77,7 @@ type Config struct {
 	MCPServers []MCPServer
 	Agents []Agent
 	ResolvePrompt func(*http.Request, map[string]any) (int, error)
+	Guardrails []GenericGuardrail
 	CallbackNames      []string
 	CallbackHealth func(context.Context, string, InferenceEvent) bool
 	PublicReadinessDetails bool
@@ -495,6 +496,11 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	stream := endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream")
 	if alias == "" {
 		alias, _ = input["model"].(string)
+	}
+	if len(s.config.Guardrails) != 0 && (endpoint == "chat-completions" || endpoint == "responses") && modelAllowed(modelScope, alias) {
+		if !s.applyGenericGuardrails(writer, request, alias, input) {
+			return
+		}
 	}
 	customer := requestCustomerID(request, payload)
 	if s.config.Callback != nil {

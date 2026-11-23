@@ -21,6 +21,7 @@ import (
 )
 
 type callbackSettings struct {
+	Guardrails []genericGuardrailSpec `yaml:"guardrails"`
 	SSOUserDefaults *SSOUserDefaults `yaml:"default_internal_user_params"`
 	AzureTokenRefresh bool                 `yaml:"enable_azure_ad_token_refresh"`
 	PublicAgentGroups []string             `yaml:"public_agent_groups"`

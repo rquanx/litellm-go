@@ -75,6 +75,7 @@ func main() {
 		config.InferenceCache = proxy.InferenceCache
 		config.BackgroundHealthInterval = proxy.BackgroundHealthInterval
 		config.SharedHealthChecks = proxy.SharedHealthChecks
+		config.Guardrails = proxy.Guardrails
 		config.HealthCheckConcurrency = proxy.HealthCheckConcurrency
 		config.SkipDisabledHealthChecks = proxy.SkipDisabledHealthChecks
 		config.HealthRoutingStaleness = proxy.HealthRoutingStaleness

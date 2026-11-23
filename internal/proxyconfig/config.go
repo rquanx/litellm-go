@@ -188,6 +188,7 @@ type Config struct {
 	modelGroupAliases map[string]modelGroupAlias
 	credentials map[string]providerCredential
 	Callback GenericCallbacks
+	Guardrails []runtime.GenericGuardrail
 	SSOUserDefaults *SSOUserDefaults
 	LogMessages bool
 	publicModelGroups []string
@@ -262,6 +263,11 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	guardrails, err := prepareGenericGuardrails(file.Callbacks.Guardrails)
+	if err != nil {
+		return Config{}, err
+	}
+	config.Guardrails = guardrails
 	config.SSOUserDefaults = file.Callbacks.SSOUserDefaults
 	if err := config.SSOUserDefaults.validate(); err != nil {
 		return Config{}, err
