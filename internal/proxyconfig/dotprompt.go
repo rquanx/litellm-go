@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
@@ -74,6 +76,51 @@ func dotpromptMessages(content string, variables map[string]any) ([]map[string]a
 	return splitDotpromptMessages(content), nil
 }
 
+func validateDotpromptInput(metadata, variables map[string]any) error {
+	input, _ := metadata["input"].(map[string]any)
+	schema, _ := input["schema"].(map[string]any)
+	for name, kind := range schema {
+		value, present := variables[name]
+		if !present {
+			continue
+		}
+		typeName, ok := kind.(string)
+		if !ok || !dotpromptValueMatches(value, strings.ToLower(typeName)) {
+			return fmt.Errorf("Invalid type for prompt variable %q", name)
+		}
+	}
+	return nil
+}
+
+func dotpromptValueMatches(value any, kind string) bool {
+	switch kind {
+	case "number", "integer", "int", "float":
+		switch number := value.(type) {
+		case int:
+			return kind != "float"
+		case float64:
+			return kind == "number" || kind == "float" ||
+				((kind == "integer" || kind == "int") && math.Trunc(number) == number)
+		case bool:
+			return kind != "float"
+		default:
+			return false
+		}
+	case "boolean", "bool":
+		_, ok := value.(bool)
+		return ok
+	case "array", "list":
+		_, ok := value.([]any)
+		return ok
+	case "object", "dict":
+		_, ok := value.(map[string]any)
+		return ok
+	default:
+		_, ok := value.(string)
+		return ok
+	}
+}
+
 func splitDotpromptMessages(content string) []map[string]any {
 	messages := make([]map[string]any, 0, 4)
 	role := "user"
@@ -120,6 +167,10 @@ func (api promptAPI) testPrompt(w http.ResponseWriter, r *http.Request, next htt
 	model, _ := metadata["model"].(string)
 	if model == "" {
 		modelError(w, http.StatusBadRequest, "Model is required in dotprompt metadata")
+		return
+	}
+	if err := validateDotpromptInput(metadata, input.Variables); err != nil {
+		modelError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	messages, err := dotpromptMessages(content, input.Variables)

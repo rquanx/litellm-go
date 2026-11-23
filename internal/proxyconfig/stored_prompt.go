@@ -69,6 +69,9 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 		metadata, _ = item["metadata"].(map[string]any)
 	}
 	variables, _ := fields["prompt_variables"].(map[string]any)
+	if err := validateDotpromptInput(metadata, variables); err != nil {
+		return http.StatusBadRequest, err
+	}
 	rendered, err := dotpromptMessages(content, variables)
 	if err != nil || len(rendered) == 0 {
 		return http.StatusBadRequest, errors.New("Unsupported or empty stored prompt template")

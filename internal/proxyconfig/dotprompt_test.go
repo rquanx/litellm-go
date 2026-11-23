@@ -41,6 +41,16 @@ func TestDotpromptTestRendersSystemAndStreamsThroughProxy(t *testing.T) {
 	}
 }
 
+func TestDotpromptInputSchemaRejectsSuppliedMismatches(t *testing.T) {
+	meta := map[string]any{"input": map[string]any{"schema": map[string]any{"count": "integer", "omitted": "object"}}}
+	if err := validateDotpromptInput(meta, map[string]any{"count": 2.0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateDotpromptInput(meta, map[string]any{"count": 2.5}); err == nil {
+		t.Fatal("fractional count was accepted as an integer")
+	}
+}
+
 func TestDotpromptJinjaConditionsLoopsAndTemplateLimits(t *testing.T) {
 	template := "System: Inventory\n{% if active %}User: {% for name in names %}{{name|upper}}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
 	messages, err := dotpromptMessages(template, map[string]any{"active": true, "names": []any{"Ada", "Lin"}})
