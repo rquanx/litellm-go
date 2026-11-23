@@ -114,6 +114,66 @@ func TestGenericResponseGuardrailRunsBeforeWriting(t *testing.T) {
 	}
 }
 
+func TestAzureSafetyGuardsUseSeparateRequestAndResponseChecks(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/contentsafety/text:shieldPrompt":
+			raw, _ := io.ReadAll(r.Body)
+			if r.URL.Query().Get("api-version") != "2024-09-01" ||
+				r.Header.Get("Ocp-Apim-Subscription-Key") != "fixture" ||
+				r.Header.Get("Authorization") != "" ||
+				!strings.Contains(string(raw), `"userPrompt":"recent\nquestion"`) ||
+				strings.Contains(string(raw), "older") {
+				t.Errorf("unexpected request shield payload: %s", raw)
+			}
+			io.WriteString(w, `{"userPromptAnalysis":{"attackDetected":false}}`)
+		case "/contentsafety/text:analyze":
+			raw, _ := io.ReadAll(r.Body)
+			if r.URL.Query().Get("api-version") != "fixture-version" ||
+				!strings.Contains(string(raw), `"text":"assistant reply"`) ||
+				!strings.Contains(string(raw), `"categories":["Violence"]`) {
+				t.Errorf("unexpected output moderation payload: %s", raw)
+			}
+			io.WriteString(w, `{"categoriesAnalysis":[{"category":"Violence","severity":4}]}`)
+		case "/v1/chat/completions":
+			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"assistant reply"}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer origin.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/fixture, api_base: %[1]q}
+litellm_settings:
+  guardrails:
+    - guardrail_name: shield
+      litellm_params: {guardrail: azure/prompt_shield, mode: pre_call, api_base: %[1]q, api_key: fixture, default_on: true}
+    - guardrail_name: moderate
+      litellm_params:
+        guardrail: azure/text_moderations
+        mode: post_call
+        api_base: %[1]q
+        api_key: fixture
+        api_version: fixture-version
+        severity_threshold_by_category: {Violence: 4}
+        categories: [Violence]
+        default_on: true
+`, origin.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Routes: config.Routes, Guardrails: config.Guardrails})
+	body := `{"model":"demo","messages":[{"role":"user","content":"older"},{"role":"assistant","content":"previous"},{"role":"user","content":"recent"},{"role":"user","content":[{"type":"text","text":"question"}]}]}`
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, r)
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "Violence crossed severity 4") || strings.Contains(w.Body.String(), "assistant reply") {
+		t.Fatalf("unexpected moderation response %d %s", w.Code, w.Body)
+	}
+}
+
 func TestPostgresGuardrailRegistryPublishesAndRestoresRules(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
 	if dsn == "" {

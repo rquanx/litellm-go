@@ -56,7 +56,7 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 			return nil, err
 		}
 		_ = json.Unmarshal(params, &row.Spec.Params)
-		if row.Spec.Params.Provider != "generic_guardrail_api" {
+		if !supportedGuardrailProvider(row.Spec.Params.Provider) {
 			continue
 		}
 		_ = json.Unmarshal(info, &row.Info)
@@ -113,7 +113,7 @@ func guardrailListEntry(id string, guard runtime.GenericGuardrail, info map[stri
 		info = map[string]any{}
 	}
 	return map[string]any{"guardrail_id": id, "guardrail_name": guard.Name, "guardrail_info": info,
-		"litellm_params": map[string]any{"guardrail": "generic_guardrail_api", "mode": mode, "default_on": guard.Default}}
+		"litellm_params": map[string]any{"guardrail": guard.Provider, "mode": mode, "default_on": guard.Default}}
 }
 
 func (registry *guardrailRegistry) read(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +134,7 @@ func (registry *guardrailRegistry) read(w http.ResponseWriter, r *http.Request) 
 		result = append(result, item)
 	}
 	for key, row := range registry.rows {
-		item := guardrailListEntry(key, runtime.GenericGuardrail{Name: row.Spec.Name, Post: row.Spec.Params.Mode == "post_call", Default: row.Spec.Params.Default}, row.Info)
+		item := guardrailListEntry(key, runtime.GenericGuardrail{Name: row.Spec.Name, Post: row.Spec.Params.Mode == "post_call", Default: row.Spec.Params.Default, Provider: row.Spec.Params.Provider}, row.Info)
 		if id == key || id == row.Spec.Name {
 			modelJSON(w, 200, item)
 			return
@@ -229,5 +229,5 @@ func (registry *guardrailRegistry) write(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	row := next[id]
-	modelJSON(w, 200, guardrailListEntry(id, runtime.GenericGuardrail{Name: row.Spec.Name, Post: row.Spec.Params.Mode == "post_call", Default: row.Spec.Params.Default}, row.Info))
+	modelJSON(w, 200, guardrailListEntry(id, runtime.GenericGuardrail{Name: row.Spec.Name, Post: row.Spec.Params.Mode == "post_call", Default: row.Spec.Params.Default, Provider: row.Spec.Params.Provider}, row.Info))
 }

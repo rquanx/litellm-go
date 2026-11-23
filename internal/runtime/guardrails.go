@@ -14,6 +14,8 @@ type GenericGuardrail struct {
 	Name, URL, APIKey       string
 	Default, FailOpen, Post bool
 	Parameters              map[string]any
+	Provider                string
+	Azure                   *AzureSafetyOptions
 }
 
 type GuardrailPolicy struct {
@@ -164,49 +166,23 @@ type guardrailFailure struct {
 }
 
 func (s *Server) evaluateGenericGuardrail(r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) *guardrailFailure {
+	if guard.Azure != nil {
+		return s.evaluateAzureSafety(r, guard, stage, input)
+	}
 	texts, replace := guardrailText(input)
 	body, _ := json.Marshal(map[string]any{"model": model, "input_type": stage, "texts": texts,
 		"structured_messages": input["messages"], "tools": input["tools"], "request_data": map[string]any{},
 		"litellm_version": "1.85.0", "additional_provider_specific_params": guard.Parameters})
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, guard.URL, bytes.NewReader(body))
-	if err != nil {
-		return &guardrailFailure{502, "guardrail_error", "Invalid guardrail URL"}
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if guard.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+guard.APIKey)
-	}
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	case <-ctx.Done():
-		return &guardrailFailure{503, "guardrail_error", "Guardrail request timed out"}
-	}
-	client := *s.config.HTTPClient
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	response, err := client.Do(req)
-	if err != nil {
-		if guard.FailOpen && r.Context().Err() == nil {
-			return nil
-		}
-		return &guardrailFailure{502, "guardrail_error", "Could not reach guardrail"}
-	}
-	defer response.Body.Close()
-	if response.StatusCode/100 != 2 {
-		if guard.FailOpen && response.StatusCode >= 502 && response.StatusCode <= 504 {
-			return nil
-		}
-		return &guardrailFailure{502, "guardrail_error", "Guardrail service rejected the request"}
-	}
 	var verdict struct {
 		Action string   `json:"action"`
 		Texts  []string `json:"texts"`
 		Reason string   `json:"blocked_reason"`
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
-	if err != nil || int64(len(raw)) > s.config.MaxBodyBytes || json.Unmarshal(raw, &verdict) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+	raw, failure := s.postGuardrail(r, guard, body, "Authorization", "Bearer "+guard.APIKey)
+	if failure != nil || raw == nil {
+		return failure
+	}
+	if json.Unmarshal(raw, &verdict) != nil {
 		return &guardrailFailure{502, "guardrail_error", "Invalid guardrail response"}
 	}
 	switch verdict.Action {
@@ -224,6 +200,46 @@ func (s *Server) evaluateGenericGuardrail(r *http.Request, guard GenericGuardrai
 		}
 	}
 	return &guardrailFailure{502, "guardrail_error", "Unexpected guardrail action or text count"}
+}
+
+func (s *Server) postGuardrail(r *http.Request, guard GenericGuardrail, body []byte, header, credential string) ([]byte, *guardrailFailure) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, guard.URL, bytes.NewReader(body))
+	if err != nil {
+		return nil, &guardrailFailure{502, "guardrail_error", "Invalid guardrail URL"}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if guard.APIKey != "" {
+		req.Header.Set(header, credential)
+	}
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	case <-ctx.Done():
+		return nil, &guardrailFailure{503, "guardrail_error", "Guardrail request timed out"}
+	}
+	client := *s.config.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	response, err := client.Do(req)
+	if err != nil {
+		if guard.FailOpen && r.Context().Err() == nil {
+			return nil, nil
+		}
+		return nil, &guardrailFailure{502, "guardrail_error", "Could not reach guardrail"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		if guard.FailOpen && response.StatusCode >= 502 && response.StatusCode <= 504 {
+			return nil, nil
+		}
+		return nil, &guardrailFailure{502, "guardrail_error", "Guardrail service rejected the request"}
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
+	if err != nil || int64(len(raw)) > s.config.MaxBodyBytes || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, &guardrailFailure{502, "guardrail_error", "Invalid guardrail response"}
+	}
+	return raw, nil
 }
 
 func guardrailText(input map[string]any) ([]string, func([]string)) {
