@@ -197,6 +197,14 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "A Vertex corpus requires the vertex_ai provider")
 		return
 	}
+	if provider == "s3_vectors" {
+		if family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "S3 Vectors supports vector search")
+			return
+		}
+		s.searchS3Vectors(w, request, scope, alias, id, fields)
+		return
+	}
 	if provider == "bedrock" {
 		if family != "vector_stores_search" {
 			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Bedrock knowledge bases support vector search")

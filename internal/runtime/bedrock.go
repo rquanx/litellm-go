@@ -22,6 +22,7 @@ type BedrockConfig struct {
 	SessionToken string `json:"sessionToken,omitempty"`
 	Credentials aws.CredentialsProvider `json:"-"`
 	ControlBase string `json:"controlBase,omitempty"`
+	VectorBase string `json:"vectorBase,omitempty"`
 	AgentControlBase string `json:"agentControlBase,omitempty"`
 	AgentBase string `json:"agentBase,omitempty"`
 	BatchRole string `json:"batchRole,omitempty"`

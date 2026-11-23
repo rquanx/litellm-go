@@ -280,18 +280,22 @@ func (s *Server) sendBedrockControlBatch(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) sendBedrockResource(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target string, body map[string]any) ([]byte, bool) {
+	return s.sendAWSJSONResource(w, r, candidate, method, target, "bedrock", body)
+}
+
+func (s *Server) sendAWSJSONResource(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target, service string, body map[string]any) ([]byte, bool) {
 	var data []byte
 	if body != nil {
 		data, _ = json.Marshal(body)
 	}
 	upstream, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(data))
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock resource URL")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid AWS resource URL")
 		return nil, false
 	}
 	upstream.Header.Set("Content-Type", "application/json")
-	if err := signAWSRequest(r.Context(), upstream, candidate.Bedrock, data, "bedrock"); err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authorize the Bedrock resource request")
+	if err := signAWSRequest(r.Context(), upstream, candidate.Bedrock, data, service); err != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authorize the AWS resource request")
 		return nil, false
 	}
 	select {
@@ -304,13 +308,13 @@ func (s *Server) sendBedrockResource(w http.ResponseWriter, r *http.Request, can
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := client.Do(upstream)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Bedrock resource request failed")
+		writeError(w, http.StatusBadGateway, "upstream_error", "AWS resource request failed")
 		return nil, false
 	}
 	defer response.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(response.Body, s.config.MaxBodyBytes+1))
 	if err != nil || int64(len(raw)) > s.config.MaxBodyBytes || response.StatusCode/100 == 3 {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock resource response")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid AWS resource response")
 		return nil, false
 	}
 	if response.StatusCode/100 != 2 {
