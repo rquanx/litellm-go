@@ -128,6 +128,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if family == "batches" && s.bedrockControlBatchResource(writer, request, alias, provider, scope) {
 		return
 	}
+	if family == "files" && s.bedrockFileContent(writer, request, alias, provider, scope) {
+		return
+	}
 	var deployment string
 	for _, field := range []string{"after", "before"} {
 		cursor := request.URL.Query().Get(field)
@@ -177,6 +180,10 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 				formParts = form.form
 				if requested, _ := form.fields["custom_llm_provider"].(string); requested != "" {
 					provider = requested
+				}
+				if provider == "bedrock" {
+					s.uploadBedrockFile(writer, request, alias, scope, form)
+					return
 				}
 				if provider != "gemini" {
 					body, contentType, err = form.encodeForm("", false, true)

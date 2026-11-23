@@ -256,6 +256,15 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.S3OutputBucket == "" {
 			model.Params.S3OutputBucket = existing.Params.S3OutputBucket
 		}
+		if model.Params.S3Bucket == "" {
+			model.Params.S3Bucket = existing.Params.S3Bucket
+		}
+		if model.Params.S3Endpoint == "" {
+			model.Params.S3Endpoint = existing.Params.S3Endpoint
+		}
+		if model.Params.S3Region == "" {
+			model.Params.S3Region = existing.Params.S3Region
+		}
 		if model.Params.S3EncryptionKey == "" {
 			model.Params.S3EncryptionKey = existing.Params.S3EncryptionKey
 		}

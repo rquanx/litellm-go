@@ -68,6 +68,19 @@ func (s *Server) createBedrockControlBatch(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "Bedrock batches require an S3 input object URI")
 		return
 	}
+	if !s.authorized(r) {
+		if _, err := bedrockS3Target(bedrock, uri); err == nil {
+			owners, err := s.config.ContainerOwners.Read(r.Context(), candidate.DeploymentID, []string{input})
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not check Bedrock file ownership")
+				return
+			}
+			if !slices.Contains(s.containerOwnerScopes(r, false), owners[input]) {
+				writeError(w, http.StatusNotFound, "resource_not_found", "Unknown Bedrock input file")
+				return
+			}
+		}
+	}
 	role, err := arn.Parse(bedrock.BatchRole)
 	if err != nil || role.Service != "iam" || !strings.HasPrefix(role.Resource, "role/") {
 		writeError(w, http.StatusBadRequest, "batch_role_required", "Configure aws_batch_role_arn for the selected Bedrock deployment")
@@ -165,11 +178,11 @@ func (s *Server) bedrockControlBatchResource(w http.ResponseWriter, r *http.Requ
 		return true
 	}
 	var state struct {
-		ARN      string     `json:"jobArn"`
-		Name     string     `json:"jobName"`
-		Model    string     `json:"modelId"`
-		Status   string     `json:"status"`
-		Message  string     `json:"message"`
+		ARN      string          `json:"jobArn"`
+		Name     string          `json:"jobName"`
+		Model    string          `json:"modelId"`
+		Status   string          `json:"status"`
+		Message  string          `json:"message"`
 		Submit   json.RawMessage `json:"submitTime"`
 		Modified json.RawMessage `json:"lastModifiedTime"`
 		End      json.RawMessage `json:"endTime"`
@@ -211,6 +224,20 @@ func (s *Server) bedrockControlBatchResource(w http.ResponseWriter, r *http.Requ
 	}
 	if normalized == "completed" && output != "" {
 		result["output_file_id"] = output
+		if !s.authorized(r) {
+			uri, err := url.Parse(output)
+			if err == nil {
+				_, err = bedrockS3Target(candidate.Bedrock, uri)
+			}
+			if err == nil {
+				owners, lookupErr := s.config.ContainerOwners.Read(r.Context(), candidate.DeploymentID, []string{id})
+				owner := owners[id]
+				if lookupErr != nil || owner == "" || s.config.ContainerOwners.Record(r.Context(), candidate.DeploymentID, output, owner) != nil {
+					writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not record Bedrock output ownership")
+					return true
+				}
+			}
+		}
 	}
 	if at := map[string]string{"completed": "completed_at", "failed": "failed_at", "cancelled": "cancelled_at", "expired": "expired_at"}[normalized]; at != "" {
 		if finished, ok := bedrockControlTimestamp(state.End); ok {

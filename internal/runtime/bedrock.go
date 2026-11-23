@@ -25,6 +25,9 @@ type BedrockConfig struct {
 	BatchRole string `json:"batchRole,omitempty"`
 	BatchOutputBucket string `json:"batchOutputBucket,omitempty"`
 	BatchEncryptionKey string `json:"batchEncryptionKey,omitempty"`
+	S3Bucket string `json:"s3Bucket,omitempty"`
+	S3Endpoint string `json:"s3Endpoint,omitempty"`
+	S3Region string `json:"s3Region,omitempty"`
 }
 
 func bedrockURL(base, model string, stream bool) string {
@@ -61,7 +64,17 @@ func signAWSRequest(ctx context.Context, request *http.Request, config *BedrockC
 		return errors.New("AWS signing requires credentials")
 	}
 	hash := sha256.Sum256(body)
-	return v4.NewSigner().SignHTTP(ctx, credentials, request, hex.EncodeToString(hash[:]), service, config.Region, time.Now())
+	encoded := hex.EncodeToString(hash[:])
+	region := config.Region
+	if service == "s3" {
+		request.Header.Set("X-Amz-Content-Sha256", encoded)
+		if config.S3Region != "" {
+			region = config.S3Region
+		}
+	}
+	return v4.NewSigner().SignHTTP(ctx, credentials, request, encoded, service, region, time.Now(), func(options *v4.SignerOptions) {
+		options.DisableURIPathEscaping = service == "s3"
+	})
 }
 
 func chatToBedrock(chat map[string]any) map[string]any {

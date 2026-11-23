@@ -103,6 +103,8 @@ The Python v1.85.0 transformer and Go fixtures matched nested Gemini batch reque
 
 Go Nova fixtures cover synchronous inference and single-input segmented job submission to S3. Go returns the invocation ARN in `X-LiteLLM-Invocation-ARN`. The batch retrieval endpoint polls the invocation on its configured Bedrock deployment. Go also submits and retrieves Bedrock control-plane jobs with configured batch roles and S3 options. Fixtures cover signed requests, deployment and key isolation, idempotency tokens, and the computed output object URI.
 
+Bedrock Files uploads and streams S3 objects through the existing file endpoints. It converts OpenAI-style JSONL records for configured Nova and Claude models and accepts native Bedrock records. Local fixtures verify S3 signing, prefix checks, and ownership across upload and download. Completed batch output objects can be downloaded after status retrieval when their bucket and prefix match the deployment configuration.
+
 The Go Marengo fixture covers inline image encoding, response normalization and token estimation.
 
 Configured Bedrock Claude models accept Anthropic Messages through InvokeModel and InvokeModelWithResponseStream. The Python transformer and Go fixture matched API version, cache directive normalization and beta filtering. Go decodes AWS events into Anthropic SSE and carries cached input and terminal token usage into the message delta. Mantle, Claude Platform and additional Claude feature transformations remain open.
