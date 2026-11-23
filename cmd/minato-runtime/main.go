@@ -275,6 +275,10 @@ func main() {
 	}
 	if stateDB != nil && keys != nil {
 		var err error
+		handler, err = proxyconfig.WithVectorRegistry(handler, stateDB, keys)
+		if err != nil {
+			log.Fatal(err)
+		}
 		handler, err = proxyconfig.WithMemoryManagement(handler, stateDB, keys)
 		if err != nil { log.Fatal(err) }
 	}

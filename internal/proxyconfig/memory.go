@@ -71,34 +71,38 @@ func WithMemoryManagement(next http.Handler, db *sql.DB, keys *KeyRegistry) (htt
 }
 
 func (api *memoryAPI) identify(r *http.Request) (memoryCaller, bool) {
+	return api.keys.identifyResourceCaller(r)
+}
+
+func (keys *KeyRegistry) identifyResourceCaller(r *http.Request) (memoryCaller, bool) {
 	token := runtime.ProxyCredential(r)
-	if api.keys.master != "" && token == api.keys.master {
+	if keys.master != "" && token == keys.master {
 		return memoryCaller{admin: true}, true
 	}
-	api.keys.mu.RLock()
-	defer api.keys.mu.RUnlock()
-	if _, _, ok := api.keys.authorizeLocked(token); !ok {
+	keys.mu.RLock()
+	defer keys.mu.RUnlock()
+	if _, _, ok := keys.authorizeLocked(token); !ok {
 		return memoryCaller{}, false
 	}
-	key, exists := api.keys.state.Keys[keyDigest(token)]
+	key, exists := keys.state.Keys[keyDigest(token)]
 	if key.RotationTarget != "" {
-		key, exists = api.keys.state.Keys[key.RotationTarget]
+		key, exists = keys.state.Keys[key.RotationTarget]
 	}
 	if !exists || key.Blocked || (key.Expires != nil && !time.Now().Before(*key.Expires)) {
 		return memoryCaller{}, false
 	}
 	teamID := key.TeamID
 	if teamID == "" && key.ProjectID != "" {
-		teamID = api.keys.state.Projects[key.ProjectID].TeamID
+		teamID = keys.state.Projects[key.ProjectID].TeamID
 	}
 	caller := memoryCaller{user: key.UserID, team: teamID}
 	if teamID != "" && key.UserID != "" {
-		team := api.keys.state.Teams[teamID]
+		team := keys.state.Teams[teamID]
 		if index := memberIndex(team, key.UserID); index >= 0 {
 			caller.teamAdmin = team.Members[index].Role == "admin"
 		}
 		if !caller.teamAdmin && team.OrgID != "" {
-			org := api.keys.state.Organizations[team.OrgID]
+			org := keys.state.Organizations[team.OrgID]
 			if index := organizationMemberIndex(org, key.UserID); index >= 0 {
 				caller.teamAdmin = org.Members[index].Role == "org_admin"
 			}
