@@ -1,10 +1,12 @@
 package proxyconfig
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -109,5 +111,54 @@ func TestGenericResponseGuardrailRunsBeforeWriting(t *testing.T) {
 	}
 	if modelRequests != 1 || guardRequests != 1 {
 		t.Fatalf("unexpected request counts %d, %d", modelRequests, guardRequests)
+	}
+}
+
+func TestPostgresGuardrailRegistryPublishesAndRestoresRules(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "fixture-" + newEntityID()
+	server := runtime.NewServer(runtime.Config{})
+	handler, err := WithGuardrailRegistry(http.NotFoundHandler(), server, keys, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	body := `{"guardrail":{"guardrail_name":"` + name + `","litellm_params":{"guardrail":"generic_guardrail_api","mode":"pre_call","api_base":"http://127.0.0.1:12345","api_key":"secret-fixture"},"guardrail_info":{"description":"fixture"}}}`
+	created := call(http.MethodPost, "/guardrails", body)
+	var row struct {
+		ID string `json:"guardrail_id"`
+	}
+	if created.Code != 200 || json.Unmarshal(created.Body.Bytes(), &row) != nil || row.ID == "" || strings.Contains(created.Body.String(), "secret-fixture") {
+		t.Fatalf("unexpected guardrail create: %d %s", created.Code, created.Body)
+	}
+	handler, err = WithGuardrailRegistry(http.NotFoundHandler(), server, keys, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := call(http.MethodGet, "/guardrails/"+row.ID+"/info", "")
+	if result.Code != 200 || !strings.Contains(result.Body.String(), name) || strings.Contains(result.Body.String(), "secret-fixture") {
+		t.Fatalf("unexpected restored guardrail %d %s", result.Code, result.Body)
+	}
+	deleted := call(http.MethodDelete, "/guardrails/"+row.ID, "")
+	if deleted.Code != 200 {
+		t.Fatalf("delete returned %d %s", deleted.Code, deleted.Body)
 	}
 }

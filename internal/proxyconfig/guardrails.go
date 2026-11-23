@@ -10,16 +10,16 @@ import (
 )
 
 type genericGuardrailSpec struct {
-	Name   string `yaml:"guardrail_name"`
+	Name   string `yaml:"guardrail_name" json:"guardrail_name"`
 	Params struct {
-		Provider   string         `yaml:"guardrail"`
-		Mode       string         `yaml:"mode"`
-		APIBase    string         `yaml:"api_base"`
-		APIKey     string         `yaml:"api_key"`
-		Default    bool           `yaml:"default_on"`
-		Fallback   string         `yaml:"unreachable_fallback"`
-		Parameters map[string]any `yaml:"additional_provider_specific_params"`
-	} `yaml:"litellm_params"`
+		Provider   string         `yaml:"guardrail" json:"guardrail"`
+		Mode       string         `yaml:"mode" json:"mode"`
+		APIBase    string         `yaml:"api_base" json:"api_base"`
+		APIKey     string         `yaml:"api_key" json:"api_key"`
+		Default    bool           `yaml:"default_on" json:"default_on"`
+		Fallback   string         `yaml:"unreachable_fallback" json:"unreachable_fallback"`
+		Parameters map[string]any `yaml:"additional_provider_specific_params" json:"additional_provider_specific_params"`
+	} `yaml:"litellm_params" json:"litellm_params"`
 }
 
 func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGuardrail, error) {

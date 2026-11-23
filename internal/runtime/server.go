@@ -90,6 +90,7 @@ type Server struct {
 	routes map[string]Route
 	configuredRoutes map[string]Route
 	agents []Agent
+	guardrails []GenericGuardrail
 	searchTools []SearchTool
 	mcpServers []MCPServer
 	mcpToolsets []MCPToolset
@@ -138,7 +139,7 @@ func NewServer(config Config) *Server {
 		routes[route.Alias] = route
 	}
 	server := &Server{config: config, routes: make(map[string]Route), configuredRoutes: routes,
-		passThrough: config.PassThrough, agents: config.Agents,
+		passThrough: config.PassThrough, agents: config.Agents, guardrails: config.Guardrails,
 		mcpServers: config.MCPServers,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent), veoReads: make(chan struct{}, 1)}
 	if config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0 {
@@ -498,7 +499,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		alias, _ = input["model"].(string)
 	}
 	var postGuardrails []GenericGuardrail
-	if len(s.config.Guardrails) != 0 && (endpoint == "chat-completions" || endpoint == "responses") && modelAllowed(modelScope, alias) {
+	if (endpoint == "chat-completions" || endpoint == "responses") && modelAllowed(modelScope, alias) {
 		var allowed bool
 		postGuardrails, allowed = s.applyGenericGuardrails(writer, request, alias, input, stream)
 		if !allowed {

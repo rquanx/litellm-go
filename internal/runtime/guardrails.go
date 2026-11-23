@@ -15,7 +15,19 @@ type GenericGuardrail struct {
 	Parameters              map[string]any
 }
 
+func (s *Server) ReplaceGuardrails(guards []GenericGuardrail) {
+	s.mu.Lock()
+	s.guardrails = guards
+	s.mu.Unlock()
+}
+
 func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, model string, input map[string]any, stream bool) ([]GenericGuardrail, bool) {
+	s.mu.RLock()
+	guards := s.guardrails
+	s.mu.RUnlock()
+	if len(guards) == 0 {
+		return nil, true
+	}
 	requested := make(map[string]bool)
 	if value := input["guardrails"]; value != nil {
 		items, ok := value.([]any)
@@ -34,7 +46,7 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	}
 	delete(input, "guardrails")
 	var selected []GenericGuardrail
-	for _, guard := range s.config.Guardrails {
+	for _, guard := range guards {
 		if guard.Default || requested[guard.Name] {
 			selected = append(selected, guard)
 			delete(requested, guard.Name)
