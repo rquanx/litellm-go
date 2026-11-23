@@ -182,6 +182,13 @@ def main():
     })
     vertex_content_output = json.dumps(vertex_content_models, indent=2) + "\n"
     vertex_content_target = ROOT / "internal/runtime/vertex-embed-content-models.json"
+    beta_headers = json.loads(subprocess.check_output(
+        ["git", "-C", args.checkout, "show", f"{revision}:litellm/anthropic_beta_headers_config.json"]
+    ))
+    bedrock_beta_output = json.dumps({
+        name: value for name, value in beta_headers["bedrock"].items() if value is not None
+    }, sort_keys=True, indent=2) + "\n"
+    bedrock_beta_target = ROOT / "internal/runtime/bedrock-anthropic-beta.json"
     public = public_catalogs(args.checkout, revision, upstream_prices)
     if args.check:
         if TARGET.read_text(encoding="utf-8") != output or SETTINGS.read_text(encoding="utf-8") != settings_output:
@@ -196,6 +203,8 @@ def main():
         print(f"{len(cache_prices)} cache prices match LiteLLM {revision}")
         if vertex_content_target.read_text(encoding="utf-8") != vertex_content_output:
             raise SystemExit("Vertex embedContent model list differs from the pinned LiteLLM source")
+        if bedrock_beta_target.read_text(encoding="utf-8") != bedrock_beta_output:
+            raise SystemExit("Bedrock Anthropic beta mappings differ from the pinned LiteLLM source")
         for name, data in public.items():
             if gzip.decompress((TARGET.parent / name).read_bytes()) != gzip.decompress(data):
                 raise SystemExit(f"{name} differs from the pinned LiteLLM source")
@@ -206,6 +215,7 @@ def main():
         PRICES.write_text(price_output, encoding="utf-8")
         CACHE_PRICES.write_text(cache_output, encoding="utf-8")
         vertex_content_target.write_text(vertex_content_output, encoding="utf-8")
+        bedrock_beta_target.write_text(bedrock_beta_output, encoding="utf-8")
         for name, data in public.items():
             (TARGET.parent / name).write_bytes(data)
 

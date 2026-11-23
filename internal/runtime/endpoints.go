@@ -97,5 +97,5 @@ func servesEndpoint(request, provider string) bool {
 		return isGeminiEndpoint(provider)
 	}
 	return CompatibleEndpoints(request, provider) &&
-		(request != "anthropic-messages" || provider == "anthropic-messages")
+		(request != "anthropic-messages" || provider == "anthropic-messages" || provider == "bedrock-converse")
 }

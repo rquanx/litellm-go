@@ -627,11 +627,11 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 				if isGeminiEndpoint(candidate.Endpoint) {
 					attempt["usage"] = geminiUsage(payload)
 				}
-				if candidate.Endpoint == "anthropic-messages" && endpoint != "anthropic-count-tokens" {
+				if (candidate.Endpoint == "anthropic-messages" || bedrockClaudeMessages(endpoint, candidate)) && endpoint != "anthropic-count-tokens" {
 					usage, _ := payload["usage"].(map[string]any)
 					attempt["usage"] = anthropicUsage(usage)
 				}
-				if candidate.Endpoint == "bedrock-converse" {
+				if candidate.Endpoint == "bedrock-converse" && endpoint != "anthropic-messages" {
 					attempt["usage"] = bedrockUsage(payload["usage"])
 				}
 			}
@@ -862,6 +862,9 @@ func (s *Server) eligibleCandidates(ctx context.Context, candidates []Candidate,
 	}
 	eligible := make([]Candidate, 0, len(candidates))
 	for _, candidate := range candidates {
+		if endpoint == "anthropic-messages" && candidate.Endpoint == "bedrock-converse" && !bedrockClaudeMessages(endpoint, candidate) {
+			continue
+		}
 		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || (!googleImageDeployment(candidate) && !nativeAudioDeployment(candidate))) {
 			if candidate.DeploymentID != "" {
 				index := slices.IndexFunc(eligible, func(existing Candidate) bool {
@@ -1180,7 +1183,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	var encoded []byte
 	var contentType, audioTarget, speechFormat string
 	var err error
-	if candidate.Provider == "aws_polly" {
+	invokeClaude := bedrockClaudeMessages(endpoint, candidate)
+	if invokeClaude {
+		encoded, err = bedrockClaudePayload(payload.fields, candidate.ModelID, request.Header.Values("anthropic-beta"))
+		contentType = "application/json"
+	} else if candidate.Provider == "aws_polly" {
 		audioTarget = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1") + "/v1/speech"
 		encoded, err = pollyPayload(payload.fields, candidate.ModelID)
 		if err != nil { err = invalidMediaRequest{err} }
@@ -1255,6 +1262,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/rerank") + "/rerank"
 	} else if candidate.Endpoint == "rerank" {
 		target = rerankTarget(candidate)
+	} else if invokeClaude {
+		action := "/invoke"
+		if stream {
+			action = "/invoke-with-response-stream"
+		}
+		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + action
 	} else if endpoint == "bedrock-count-tokens" {
 		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/count-tokens"
 	} else if candidate.Endpoint == "bedrock-converse" {
@@ -1356,7 +1369,12 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	}
 	response.Body = &releaseBody{ReadCloser: response.Body, release: release}
 	if candidate.Endpoint == "bedrock-converse" && stream && response.StatusCode >= 200 && response.StatusCode < 300 {
-		response.Body = newBedrockSSEBody(response.Body)
+		if invokeClaude {
+			alias, _ := payload.fields["model"].(string)
+			response.Body = newBedrockClaudeSSE(response.Body, alias)
+		} else {
+			response.Body = newBedrockSSEBody(response.Body)
+		}
 		response.Header.Set("Content-Type", "text/event-stream")
 	}
 	return response, nil
@@ -1377,6 +1395,9 @@ func (body *releaseBody) Close() error {
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
 	if endpoint == "anthropic-count-tokens" {
 		return body
+	}
+	if endpoint == "anthropic-messages" && candidateEndpoint == "bedrock-converse" {
+		return rewriteModel(body, alias)
 	}
 	if candidateEndpoint == "bedrock-converse" {
 		var native map[string]any

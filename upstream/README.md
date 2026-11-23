@@ -105,6 +105,8 @@ Go Nova fixtures cover synchronous inference and single-input segmented job subm
 
 The Go Marengo fixture covers inline image encoding, response normalization and token estimation.
 
+Configured Bedrock Claude models accept Anthropic Messages through InvokeModel and InvokeModelWithResponseStream. The Python transformer and Go fixture matched API version, cache directive normalization and beta filtering. Go decodes AWS events into Anthropic SSE and carries cached input and terminal token usage into the message delta. Mantle, Claude Platform and additional Claude feature transformations remain open.
+
 Python v1.85.0 and Go request fixtures matched Nova Canvas generation and masked inpainting, Titan generation, and Stability SDXL and SD3 generation. Go fixtures also cover Canvas background removal, Stability style transfer and Bedrock rejection responses.
 
 Both UI discovery aliases matched the Python defaults. The eval creation fixture matched object, timestamp, name, criteria and data source. Go fixtures also verify run cancellation, file ID and cursor translation, and model-scope enforcement.
