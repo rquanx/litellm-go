@@ -324,6 +324,8 @@ func main() {
 		}
 		handler, err = proxyconfig.WithMemoryManagement(handler, stateDB, keys)
 		if err != nil { log.Fatal(err) }
+		handler, err = proxyconfig.WithPromptManagement(handler, stateDB, keys)
+		if err != nil { log.Fatal(err) }
 	}
 	if keys != nil {
 		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
