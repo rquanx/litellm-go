@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -116,5 +117,36 @@ func TestManagedAgentVisibilitySurvivesRestart(t *testing.T) {
 	handler = open()
 	if hub := call("GET", "/public/agent_hub", "", "", 200); strings.TrimSpace(hub) != "[]" {
 		t.Fatal(hub)
+	}
+}
+
+func TestPostgresImportsLiteLLMAgents(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL);
+		CREATE TEMP TABLE "LiteLLM_AgentsTable" (agent_id TEXT, agent_name TEXT, agent_card_params JSONB, static_headers JSONB, litellm_params JSONB);
+		INSERT INTO "LiteLLM_AgentsTable" VALUES ('source-id','imported','{"url":"https://agent.example.test","name":"Import"}',
+			'{"Authorization":"Bearer source-secret"}','{"custom_llm_provider":"a2a_agent"}');`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := Config{MasterKey: "fixture-master", publicAgents: []string{"imported"}}
+	if count, err := ImportLiteLLMAgents(db, config); err != nil || count != 1 {
+		t.Fatalf("agent import failed: %d %v", count, err)
+	}
+	store := postgresModels(db, config.MasterKey)
+	store.name = "agents"
+	var state managedAgents
+	if err := store.load(&state); err != nil || len(state.Entries) != 1 || state.Entries[0].ID != "source-id" ||
+		state.Entries[0].Headers["Authorization"] != "Bearer source-secret" || len(state.Public) != 1 || state.Public[0] != "imported" {
+		t.Fatalf("could not restore imported agent: %v", err)
 	}
 }
