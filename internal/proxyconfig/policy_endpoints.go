@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -11,8 +12,8 @@ import (
 
 func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.Handler {
 	mux := http.NewServeMux()
-	protected := func(pattern string, handler func(*PolicyEngine, http.ResponseWriter, *http.Request)) {
-		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+	protected := func(target *http.ServeMux, pattern string, handler func(*PolicyEngine, http.ResponseWriter, *http.Request)) {
+		target.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if master == "" || subtle.ConstantTimeCompare([]byte(master), []byte(runtime.ProxyCredential(r))) != 1 {
 				modelError(w, http.StatusUnauthorized, "Proxy master key required")
 				return
@@ -28,20 +29,43 @@ func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.H
 			handler(registry.current.Load(), w, r)
 		})
 	}
-	protected("POST /policies/resolve", (*PolicyEngine).previewPolicy)
-	protected("POST /policy/test", (*PolicyEngine).previewPolicy)
-	protected("GET /policy/list", (*PolicyEngine).listPolicies)
-	protected("GET /policy/info/{policy_name}", (*PolicyEngine).listPolicies)
+	protected(mux, "POST /policies/resolve", (*PolicyEngine).previewPolicy)
+	protected(mux, "POST /policy/test", (*PolicyEngine).previewPolicy)
+	protected(mux, "GET /policy/list", (*PolicyEngine).listPolicies)
+	protected(mux, "GET /policy/info/{policy_name}", (*PolicyEngine).listPolicies)
+	for _, pattern := range []string{
+		"GET /policies/list", "GET /policies/{policy_id}", "GET /policies/name/{policy_name}/versions",
+		"GET /policies/{policy_id}/resolved-guardrails", "GET /policies/compare",
+	} {
+		protected(mux, pattern, func(engine *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+			registry.readManagedPolicy(engine, w, r)
+		})
+	}
+	for _, pattern := range []string{
+		"POST /policies", "PUT /policies/{policy_id}", "DELETE /policies/{policy_id}",
+		"POST /policies/name/{policy_name}/versions", "PUT /policies/{policy_id}/status", "DELETE /policies/name/{policy_name}/all-versions",
+	} {
+		protected(mux, pattern, func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+			registry.writeManagedPolicy(w, r)
+		})
+	}
+	attachments := http.NewServeMux()
 	for _, pattern := range []string{
 		"GET /policies/attachments/list", "GET /policies/attachments/{attachment_id}",
 		"POST /policies/attachments", "DELETE /policies/attachments/{attachment_id}",
 	} {
-		protected(pattern, func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		protected(attachments, pattern, func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
 			registry.attachmentEndpoint(w, r)
 		})
 	}
 	mux.Handle("/", next)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/policies/attachments" || strings.HasPrefix(r.URL.Path, "/policies/attachments/") {
+			attachments.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 func (engine *PolicyEngine) previewPolicy(w http.ResponseWriter, r *http.Request) {

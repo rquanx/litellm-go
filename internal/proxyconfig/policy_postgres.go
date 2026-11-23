@@ -16,6 +16,18 @@ import (
 )
 
 const policyTable = `"LiteLLM_PolicyTable"`
+const policySchema = ` (
+	policy_id TEXT PRIMARY KEY, policy_name TEXT NOT NULL,
+	version_number INTEGER NOT NULL DEFAULT 1, version_status TEXT NOT NULL DEFAULT 'production',
+	parent_version_id TEXT, is_latest BOOLEAN NOT NULL DEFAULT true,
+	published_at TIMESTAMP(3), production_at TIMESTAMP(3),
+	inherit TEXT, description TEXT,
+	guardrails_add TEXT[] NOT NULL DEFAULT '{}', guardrails_remove TEXT[] NOT NULL DEFAULT '{}',
+	condition JSONB DEFAULT '{}', pipeline JSONB,
+	created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), created_by TEXT,
+	updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), updated_by TEXT,
+	UNIQUE (policy_name,version_number)
+)`
 const policyAttachmentTable = `"LiteLLM_PolicyAttachmentTable"`
 const policyAttachmentSchema = ` (
 	attachment_id TEXT PRIMARY KEY, policy_name TEXT NOT NULL, scope TEXT,
@@ -37,6 +49,9 @@ func OpenPolicyRegistry(static *PolicyEngine, db *sql.DB) (*PolicyRegistry, erro
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if db != nil {
+		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+policyTable+policySchema); err != nil {
+			return nil, err
+		}
 		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+policyAttachmentTable+policyAttachmentSchema); err != nil {
 			return nil, err
 		}
@@ -127,12 +142,23 @@ func readProductionPolicies(ctx context.Context, tx *sql.Tx, definitions map[str
 		if len(pipeline) > 0 && string(pipeline) != "null" {
 			return errors.New("production policy uses an unsupported guardrail pipeline: " + name)
 		}
-		if len(condition) > 0 && json.Unmarshal(condition, &rule.Condition) != nil {
+		if len(condition) > 0 && decodePolicyCondition(condition, &rule.Condition) != nil {
 			return errors.New("invalid database policy condition: " + name)
 		}
 		definitions[name] = rule
 	}
 	return rows.Err()
+}
+
+func decodePolicyCondition(data []byte, target any) error {
+	if len(data) > 0 && data[0] == '"' {
+		var encoded string
+		if err := json.Unmarshal(data, &encoded); err != nil {
+			return err
+		}
+		data = []byte(encoded)
+	}
+	return json.Unmarshal(data, target)
 }
 
 func readPolicyAttachments(ctx context.Context, tx *sql.Tx) ([]policyAttachment, error) {

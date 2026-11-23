@@ -117,14 +117,11 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	statements := []string{
-		`CREATE TEMP TABLE ` + policyTable + ` (
-			policy_name text, version_number integer, version_status text, inherit text,
-			guardrails_add text[], guardrails_remove text[], condition jsonb, pipeline jsonb
-		)`,
+		`CREATE TEMP TABLE ` + policyTable + policySchema,
 		`CREATE TEMP TABLE ` + policyAttachmentTable + policyAttachmentSchema,
-		`INSERT INTO ` + policyTable + ` VALUES
-			('production-rule',1,'production',NULL,ARRAY['first'],'{}',NULL,NULL),
-			('production-rule',2,'draft',NULL,ARRAY['next'],'{}',NULL,NULL)`,
+		`INSERT INTO ` + policyTable + ` (policy_id,policy_name,version_number,version_status,guardrails_add) VALUES
+			('v1','production-rule',1,'production',ARRAY['first']),
+			('v2','production-rule',2,'draft',ARRAY['next'])`,
 		`INSERT INTO ` + policyAttachmentTable + ` (attachment_id,policy_name,scope)
 			VALUES ('attachment','production-rule','*')`,
 	}
@@ -138,6 +135,20 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := registry.Handler(http.NotFoundHandler(), "master")
+	for path, expected := range map[string]string{
+		"/policies/list?version_status=production":    `"total_count":1`,
+		"/policies/name/production-rule/versions":     `"total_count":2`,
+		"/policies/compare?version_a=v1&version_b=v2": `"field_diffs":{"guardrails_add":`,
+		"/policies/v2/resolved-guardrails":            `"resolved_guardrails":["first"]`,
+	} {
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), expected) {
+			t.Fatalf("%s returned %d %s", path, w.Code, w.Body)
+		}
+	}
 	resolve := func(query string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, "/policies/resolve"+query, strings.NewReader(`{}`))
 		r.Header.Set("Authorization", "Bearer master")
@@ -166,6 +177,70 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 		t.Fatalf("expected invalid inheritance to fail refresh, got %d %s", w.Code, w.Body)
 	}
 	check("", "next")
+}
+
+func TestPostgresPolicyVersionLifecycle(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		`CREATE TEMP TABLE ` + policyTable + policySchema,
+		`CREATE TEMP TABLE ` + policyAttachmentTable + policyAttachmentSchema,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry, err := OpenPolicyRegistry(nil, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := registry.Handler(http.NotFoundHandler(), "master")
+	call := func(method, path, body string, status int) string {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s %s returned %d %s", method, path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	idFrom := func(response string) string {
+		t.Helper()
+		var record struct {
+			ID string `json:"policy_id"`
+		}
+		if json.Unmarshal([]byte(response), &record) != nil || record.ID == "" {
+			t.Fatalf("missing policy ID: %s", response)
+		}
+		return record.ID
+	}
+	first := idFrom(call(http.MethodPost, "/policies", `{"policy_name":"fixture","guardrails_add":["first"]}`, 200))
+	call(http.MethodPut, "/policies/"+first, `{"guardrails_add":["unexpected"]}`, 400)
+	call(http.MethodPost, "/policies/attachments", `{"policy_name":"fixture","scope":"*"}`, 200)
+	second := idFrom(call(http.MethodPost, "/policies/name/fixture/versions", `{}`, 200))
+	call(http.MethodPut, "/policies/"+second, `{"guardrails_add":["next"]}`, 200)
+	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"production"}`, 400)
+	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"published"}`, 200)
+	call(http.MethodPut, "/policies/"+second+"/status", `{"version_status":"production"}`, 200)
+	if got := registry.current.Load().resolve(policyContext{}, true).Guardrails; !reflect.DeepEqual(got, []string{"next"}) {
+		t.Fatalf("production was not updated: %v", got)
+	}
+	if got := call(http.MethodGet, "/policies/"+first, "", 200); !strings.Contains(got, `"version_status":"published"`) {
+		t.Fatalf("previous production was not demoted: %s", got)
+	}
+	call(http.MethodDelete, "/policies/"+first, "", 200)
+	call(http.MethodDelete, "/policies/"+second, "", 500)
+	call(http.MethodGet, "/policies/"+second, "", 200)
 }
 
 func TestPostgresPolicyAttachmentLifecycle(t *testing.T) {
