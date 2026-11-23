@@ -181,6 +181,16 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email st
 			user = candidate
 		}
 	}
+	if user.ID == "" && verified && email != "" && s.keys.ssoDefaults.enabled() {
+		for _, candidate := range s.keys.state.Users {
+			if strings.EqualFold(candidate.Email, email) {
+				modelError(w, http.StatusForbidden, "SSO email is already bound to another identity")
+				return internalUser{}, false, ""
+			}
+		}
+		user = internalUser{ID: "sso-" + keyDigest(binding+"\x00"+subject), Role: "internal_user",
+			Email: strings.ToLower(email), Models: s.keys.ssoDefaults.Models}
+	}
 	if user.ID == "" || user.Role != "internal_user" {
 		modelError(w, http.StatusForbidden, "SSO identity has no active internal user")
 		return internalUser{}, false, ""
@@ -209,22 +219,9 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, subject, email string,
 		return "", time.Time{}, false
 	}
 
-	next := s.keys.state
-	if !bound {
-		metadata := maps.Clone(user.Metadata)
-		if metadata == nil {
-			metadata = make(map[string]any)
-		}
-		identities, _ := metadata["sso_subjects"].(map[string]any)
-		identities = maps.Clone(identities)
-		if identities == nil {
-			identities = make(map[string]any)
-		}
-		identities[binding] = subject
-		metadata["sso_subjects"] = identities
-		user.Metadata = metadata
-		next.Users = maps.Clone(next.Users)
-		next.Users[user.ID] = user
+	next, ok := s.bindSSOUser(w, user, bound, binding, subject)
+	if !ok {
+		return "", time.Time{}, false
 	}
 	next.Keys = maps.Clone(next.Keys)
 	for digest, key := range next.Keys {

@@ -145,7 +145,7 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 	s.keys.mu.Lock()
 	defer s.keys.mu.Unlock()
 	identity := flow.identity
-	user, _, _ := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
+	user, bound, binding := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
 	if user.ID == "" {
 		return
 	}
@@ -153,8 +153,12 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 		modelError(w, http.StatusForbidden, "CLI login user binding changed")
 		return
 	}
+	next, ok := s.bindSSOUser(w, user, bound, binding, identity.Subject)
+	if !ok {
+		return
+	}
 	teams := make([]string, 0)
-	for id, team := range s.keys.state.Teams {
+	for id, team := range next.Teams {
 		if team.Blocked {
 			continue
 		}
@@ -168,7 +172,7 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 	slices.Sort(teams)
 	details := make([]map[string]string, 0, len(teams))
 	for _, id := range teams {
-		details = append(details, map[string]string{"team_id": id, "team_alias": s.keys.state.Teams[id].Alias})
+		details = append(details, map[string]string{"team_id": id, "team_alias": next.Teams[id].Alias})
 	}
 	result := map[string]any{"status": "ready", "user_id": user.ID, "teams": teams, "team_details": details}
 	selected := r.URL.Query().Get("team_id")
@@ -189,7 +193,6 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	expires := now.Add(24 * time.Hour)
 	token := newKeyToken()
-	next := s.keys.state
 	next.Keys = maps.Clone(next.Keys)
 	next.Keys[keyDigest(token)] = virtualKey{Alias: "cli-sso:" + user.ID, UserID: user.ID, TeamID: selected, Models: []string{}, CreatedAt: &now, Expires: &expires}
 	if !s.keys.apply(w, next) {

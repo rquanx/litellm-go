@@ -174,3 +174,54 @@ func TestCLISSORequiresConfirmationAndConsumesTeamKeyOnce(t *testing.T) {
 		t.Fatal("CLI login could be redeemed again")
 	}
 }
+
+func TestSSOProvisioningStoresUserAndDefaultTeamsAtomically(t *testing.T) {
+	cfg, err := Load(strings.NewReader(`
+model_list:
+  - model_name: approved
+    litellm_params:
+      model: openai/fixture
+      api_base: http://127.0.0.1:4000
+litellm_settings:
+  default_internal_user_params:
+    user_role: internal_user
+    models: [approved]
+    teams:
+      - provisioned
+      - team_id: missing
+        user_role: admin
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.SetSSOUserDefaults(cfg.SSOUserDefaults)
+	registry.state.Teams["provisioned"] = team{ID: "provisioned"}
+	server := &uiSSOServer{keys: registry, config: uiSSOConfig{provider: "generic", userInfo: "https://sso.example.invalid/me"}}
+	first := httptest.NewRecorder()
+	if _, _, ok := server.issueSession(first, "subject", "LOGIN@example.invalid", true); ok ||
+		first.Code != http.StatusServiceUnavailable || len(registry.state.Users) != 0 || len(registry.state.Teams["provisioned"].Members) != 0 {
+		t.Fatalf("failed provisioning committed partial state: %d %s", first.Code, first.Body)
+	}
+	registry.state.Teams["missing"] = team{ID: "missing"}
+	if _, _, ok := server.issueSession(httptest.NewRecorder(), "subject", "LOGIN@example.invalid", false); ok {
+		t.Fatal("unverified email triggered account provisioning")
+	}
+	if _, _, ok := server.issueSession(httptest.NewRecorder(), "subject", "LOGIN@example.invalid", true); !ok {
+		t.Fatal("verified SSO provisioning failed")
+	}
+	for _, user := range registry.state.Users {
+		if user.Email != "login@example.invalid" || len(user.Models) != 1 || user.Models[0] != "approved" {
+			t.Fatalf("unexpected provisioned user: %+v", user)
+		}
+	}
+	if len(registry.state.Users) != 1 || len(registry.state.Keys) != 1 || len(registry.state.Teams["provisioned"].Members) != 1 {
+		t.Fatal("missing expected user, key or default membership")
+	}
+	if roles := registry.state.Teams["missing"].Members; len(roles) != 1 || roles[0].Role != "admin" {
+		t.Fatal("configured default team role was lost")
+	}
+}

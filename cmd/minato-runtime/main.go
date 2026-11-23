@@ -315,6 +315,7 @@ func main() {
 		if err != nil { log.Fatal(err) }
 	}
 	if keys != nil {
+		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
 		handler = keys.Handler(handler)
 	}
 	if customers != nil {

@@ -136,9 +136,11 @@ Configured Bedrock Claude models accept Anthropic Messages through InvokeModel a
 
 Python v1.85.0 and Go request fixtures matched Nova Canvas generation and masked inpainting, Titan generation, and Stability SDXL and SD3 generation. Go fixtures also cover Canvas background removal, Stability style transfer and Bedrock rejection responses.
 
-The browser SSO routes support OAuth authorization codes with S256 PKCE and authenticated UserInfo. The local generic provider fixture verifies callback binding, single-use state and a signed UI token carrying an expiring key scoped to an existing internal user. First login binds the provider subject using a verified email. Microsoft and providers without verified email can use a preconfigured subject binding. OAuth state is process-local. Automatic provisioning, team and role mappings, control plane flows remain open. [Upstream UI SSO](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/proxy/management_endpoints/ui_sso.py)
+The browser SSO routes support OAuth authorization codes with S256 PKCE and authenticated UserInfo. The local generic provider fixture verifies callback binding, single-use state and a signed UI token carrying an expiring key scoped to an existing internal user. First login binds the provider subject using a verified email. Microsoft and providers without verified email can use a preconfigured subject binding. OAuth state is process-local. Automatic provisioning for viewer roles, identity-provider team and role mappings, and control plane flows remain open. [Upstream UI SSO](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/proxy/management_endpoints/ui_sso.py)
 
 The CLI SSO fixture verifies pending polling, browser code confirmation, polling secret checks, team selection and single redemption. The CLI receives an expiring virtual key with the selected team scope. LiteLLM uses a CLI JWT. Pending flows are local to one proxy instance.
+
+With `litellm_settings.default_internal_user_params.user_role: internal_user`, a verified new SSO identity can provision an account with configured model scopes and team memberships. The fixture verifies that a missing team leaves the account and memberships uncommitted. Dynamic identity-provider group mappings remain open.
 
 Both UI discovery aliases matched the Python defaults. The eval creation fixture matched object, timestamp, name, criteria and data source. Go fixtures also verify run cancellation, file ID and cursor translation, and model-scope enforcement.
 

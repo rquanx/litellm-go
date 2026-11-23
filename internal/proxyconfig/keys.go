@@ -57,6 +57,7 @@ type KeyRegistry struct {
 	store  stateStore
 	mu     sync.RWMutex
 	state  accessState
+	ssoDefaults *SSOUserDefaults
 }
 
 func LoadKeys(master, path string) (*KeyRegistry, error) {

@@ -188,6 +188,7 @@ type Config struct {
 	modelGroupAliases map[string]modelGroupAlias
 	credentials map[string]providerCredential
 	Callback GenericCallbacks
+	SSOUserDefaults *SSOUserDefaults
 	LogMessages bool
 	publicModelGroups []string
 	publicModelLinks map[string]any
@@ -261,6 +262,10 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	config.SSOUserDefaults = file.Callbacks.SSOUserDefaults
+	if err := config.SSOUserDefaults.validate(); err != nil {
+		return Config{}, err
+	}
 	config.EnableTagFiltering = file.Router.EnableTagFiltering
 	config.azureTokenRefresh = file.Callbacks.AzureTokenRefresh
 	config.TagsMatchAll = file.Router.TagFilteringMatchAny != nil && !*file.Router.TagFilteringMatchAny
