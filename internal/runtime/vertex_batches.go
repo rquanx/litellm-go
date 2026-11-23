@@ -76,6 +76,19 @@ func (s *Server) createVertexBatch(w http.ResponseWriter, r *http.Request, alias
 		writeError(w, http.StatusBadRequest, "invalid_request", "Vertex AI batches require a GCS object URI")
 		return
 	}
+	if !s.authorized(r) {
+		if _, _, managed := vertexStorageObject(candidate, fileID); managed {
+			owners, err := s.config.ContainerOwners.Read(r.Context(), candidate.DeploymentID, []string{fileID})
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not check Vertex file ownership")
+				return
+			}
+			if !slices.Contains(s.containerOwnerScopes(r, false), owners[fileID]) {
+				writeError(w, http.StatusNotFound, "resource_not_found", "Unknown Vertex batch input")
+				return
+			}
+		}
+	}
 	prefix := fileID[:strings.LastIndexByte(fileID, '/')]
 	model := strings.TrimPrefix(candidate.ModelID, "models/")
 	if !strings.HasPrefix(model, "publishers/") && !strings.HasPrefix(model, "projects/") {
@@ -160,6 +173,17 @@ func (s *Server) vertexBatchResource(w http.ResponseWriter, r *http.Request, ali
 		if json.Unmarshal(result, &job) != nil {
 			writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex batch response")
 		} else if response := job.response(candidate); response != nil && response["id"] == encodeResourceID(vertexBatchFamily, candidate.DeploymentID, id) {
+			if response["status"] == "completed" && !s.authorized(r) {
+				output, _ := response["output_file_id"].(string)
+				if _, _, managed := vertexStorageObject(candidate, output); managed {
+					owners, lookupErr := s.config.ContainerOwners.Read(r.Context(), candidate.DeploymentID, []string{"vertex_batch:" + id})
+					owner := owners["vertex_batch:"+id]
+					if lookupErr != nil || owner == "" || s.config.ContainerOwners.Record(r.Context(), candidate.DeploymentID, output, owner) != nil {
+						writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not record Vertex output ownership")
+						return true
+					}
+				}
+			}
 			writeJSON(w, http.StatusOK, response)
 		} else {
 			writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex batch identifier")

@@ -134,6 +134,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if family == "files" && s.bedrockFileContent(writer, request, alias, provider, scope) {
 		return
 	}
+	if family == "files" && s.vertexFileResource(writer, request, alias, provider, scope) {
+		return
+	}
 	var deployment string
 	for _, field := range []string{"after", "before"} {
 		cursor := request.URL.Query().Get(field)
@@ -186,6 +189,10 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 				}
 				if provider == "bedrock" {
 					s.uploadBedrockFile(writer, request, alias, scope, form)
+					return
+				}
+				if provider == "vertex_ai" {
+					s.uploadVertexFile(writer, request, alias, scope, form)
 					return
 				}
 				if provider != "gemini" {

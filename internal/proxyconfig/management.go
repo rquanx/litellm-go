@@ -308,6 +308,12 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.VertexLocation == "" {
 			model.Params.VertexLocation = existing.Params.VertexLocation
 		}
+		if model.Params.GCSBucket == "" {
+			model.Params.GCSBucket = existing.Params.GCSBucket
+		}
+		if model.Params.GCSEndpoint == "" {
+			model.Params.GCSEndpoint = existing.Params.GCSEndpoint
+		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}

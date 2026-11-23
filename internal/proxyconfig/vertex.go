@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -38,6 +39,24 @@ func (entry deployment) vertexConfig(base string) (*runtime.VertexConfig, string
 		location = "us-central1"
 	}
 	config := &runtime.VertexConfig{Project: project, Location: location}
+	config.Bucket, err = resolveEnv(entry.Params.GCSBucket)
+	if err != nil {
+		return nil, "", err
+	}
+	if config.Bucket == "" {
+		config.Bucket = os.Getenv("GCS_BUCKET_NAME")
+	}
+	config.StorageBase, err = resolveEnv(entry.Params.GCSEndpoint)
+	if err != nil {
+		return nil, "", err
+	}
+	if config.StorageBase != "" {
+		target, err := url.Parse(config.StorageBase)
+		if err != nil || (target.Scheme != "https" && target.Scheme != "http") || target.Hostname() == "" ||
+			target.User != nil || target.RawQuery != "" || target.Fragment != "" {
+			return nil, "", errors.New("gcs_endpoint must be an HTTP or HTTPS URL without credentials, query or fragment")
+		}
+	}
 	if entry.Params.APIKey == "" {
 		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 10 * time.Second})
 		credentials, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")

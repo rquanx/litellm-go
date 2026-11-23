@@ -117,6 +117,8 @@ type deployment struct {
 		S3EncryptionKey string `yaml:"s3_encryption_key_id" json:"s3_encryption_key_id,omitempty"`
 		VertexProject string `yaml:"vertex_project" json:"vertex_project,omitempty"`
 		VertexLocation string `yaml:"vertex_location" json:"vertex_location,omitempty"`
+		GCSBucket string `yaml:"bucket_name" json:"bucket_name,omitempty"`
+		GCSEndpoint string `yaml:"gcs_endpoint" json:"gcs_endpoint,omitempty"`
 		WatsonXProject string `yaml:"watsonx_project" json:"watsonx_project,omitempty"`
 		WatsonXSpace string `yaml:"space_id" json:"space_id,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
