@@ -15,13 +15,15 @@ import (
 )
 
 type Agent struct {
-	ID, Name, URL  string
-	Card           map[string]any
-	Headers        http.Header
-	ExtraHeaders   []string
-	AccessGroups   []string
-	RequireTraceID bool
-	Public         bool
+	Completion        *Candidate
+	CompletionOptions map[string]any
+	ID, Name, URL     string
+	Card              map[string]any
+	Headers           http.Header
+	ExtraHeaders      []string
+	AccessGroups      []string
+	RequireTraceID    bool
+	Public            bool
 }
 
 func agentCard(r *http.Request, agent Agent, selector string) map[string]any {
@@ -178,6 +180,10 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 				s.config.Callback(recorder.event)
 			}
 		}()
+	}
+	if agent.Completion != nil {
+		s.relayAgentCompletion(w, r, agent, message)
+		return
 	}
 	body, _ := json.Marshal(message)
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, agent.URL, bytes.NewReader(body))

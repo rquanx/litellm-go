@@ -189,3 +189,46 @@ func TestAgentGrantsAllowPrivateGroup(t *testing.T) {
 		t.Fatalf("wrong agent list %d %s", result.Code, result.Body)
 	}
 }
+
+func TestA2ACompletionBridgeFormatsModelMessages(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var fields map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&fields)
+		raw, _ := json.Marshal(fields)
+		if r.URL.Path != "/v1/chat/completions" || !strings.Contains(string(raw), `"content":"Hello\nWorld"`) || fields["model"] != "fixture" ||
+			r.Header.Get("Authorization") != "Bearer fixture-key" {
+			t.Errorf("incorrect completion bridge request %s %s", r.URL.Path, raw)
+		}
+		if fields["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"reply \"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"fixture\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		} else {
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"reply fixture"}}]}`)
+		}
+	}))
+	defer upstream.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+agent_list:
+  - agent_name: bridge
+    agent_card_params: {name: bridge, url: %q}
+    litellm_params: {custom_llm_provider: openai, model: fixture, api_key: fixture-key}
+`, upstream.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", Agents: config.Agents})
+	for _, method := range []string{"message/send", "message/stream"} {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":"id","method":%q,"params":{"message":{"role":"user","parts":[{"kind":"text","text":"Hello"},{"kind":"text","text":"World"}]}}}`, method)
+		r := httptest.NewRequest(http.MethodPost, "/a2a/bridge", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, r)
+		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "reply fixture") {
+			t.Fatalf("bridge %s returned %d %s", method, result.Code, result.Body)
+		}
+		if method == "message/stream" && (!strings.Contains(result.Body.String(), `"kind":"task"`) ||
+			!strings.Contains(result.Body.String(), `"state":"completed"`)) {
+			t.Fatalf("bridge did not deliver streaming task lifecycle %s", result.Body)
+		}
+	}
+}

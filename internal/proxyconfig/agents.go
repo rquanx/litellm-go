@@ -36,12 +36,11 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 			return nil, err
 		}
 		address, err := url.Parse(resolved)
-		if err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
-			(address.Scheme != "http" && address.Scheme != "https") {
+		provider, _ := entry.Parameters["custom_llm_provider"].(string)
+		bridge := provider != "" && provider != "a2a_agent"
+		if (resolved != "" || !bridge) && (err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
+			(address.Scheme != "http" && address.Scheme != "https")) {
 			return nil, fmt.Errorf("invalid A2A URL for agent %q", entry.Name)
-		}
-		if provider, _ := entry.Parameters["custom_llm_provider"].(string); provider != "" && provider != "a2a_agent" {
-			return nil, fmt.Errorf("unsupported provider bridge for agent %q", entry.Name)
 		}
 		encoded, err := json.Marshal(entry)
 		if err != nil {
@@ -60,7 +59,21 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 			headers.Set(name, resolved)
 		}
 		requireTraceID, _ := entry.Parameters["require_trace_id_on_calls_to_agent"].(bool)
-		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: address.String(), Card: entry.Card, Headers: headers,
+		var completion *runtime.Candidate
+		options := make(map[string]any)
+		if bridge {
+			configured, err := prepareAgentCompletion(entry, provider, resolved)
+			if err != nil {
+				return nil, fmt.Errorf("agent %q: %w", entry.Name, err)
+			}
+			completion = &configured
+			for _, key := range []string{"temperature", "top_p", "max_tokens", "max_completion_tokens", "stop", "seed", "reasoning_effort"} {
+				if value, ok := entry.Parameters[key]; ok {
+					options[key] = value
+				}
+			}
+		}
+		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: resolved, Completion: completion, CompletionOptions: options, Card: entry.Card, Headers: headers,
 			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), RequireTraceID: requireTraceID, Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
 	}
 	return agents, nil
@@ -87,4 +100,30 @@ func (registry *KeyRegistry) AuthorizeAgent(token string) func(runtime.Agent) bo
 		}
 		return restricted || agent.Public
 	}
+}
+
+func prepareAgentCompletion(entry agentConfig, provider, base string) (runtime.Candidate, error) {
+	var model deployment
+	model.Alias, model.Info.ID = entry.Name, entry.ID
+	data, _ := json.Marshal(entry.Parameters)
+	if err := json.Unmarshal(data, &model.Params); err != nil {
+		return runtime.Candidate{}, err
+	}
+	if model.Params.Model == "" {
+		return runtime.Candidate{}, fmt.Errorf("a model is required for the A2A completion bridge")
+	}
+	if !strings.HasPrefix(model.Params.Model, provider+"/") {
+		model.Params.Model = provider + "/" + model.Params.Model
+	}
+	if model.Params.APIBase == "" {
+		model.Params.APIBase = base
+	}
+	candidate, err := model.candidate()
+	if err != nil {
+		return runtime.Candidate{}, err
+	}
+	if !runtime.CompatibleEndpoints("chat-completions", candidate.Endpoint) {
+		return runtime.Candidate{}, fmt.Errorf("the A2A completion bridge requires a Chat Completions compatible deployment")
+	}
+	return candidate, nil
 }
