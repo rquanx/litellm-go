@@ -904,6 +904,14 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 			return http.StatusBadGateway, nil, headers, true, errors.New("Invalid provider transcription response")
 		}
 	}
+	if err == nil && status/100 == 2 && vertexSpeechDeployment(candidate) {
+		data, err = vertexSpeechAudio(data)
+		if err != nil {
+			return http.StatusBadGateway, nil, headers, true, errors.New("Invalid Vertex speech audio response")
+		}
+		_, media, _ := vertexSpeechPayload(payload.fields)
+		headers.Set("Content-Type", media)
+	}
 	if err == nil && status/100 == 2 && googleImageDeployment(candidate) {
 		data, err = googleImageResponse(data)
 		if err != nil {
@@ -1093,9 +1101,21 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		payload.fields = fields
 	}
 	var encoded []byte
-	var contentType, audioTarget string
+	var contentType, audioTarget, speechFormat string
 	var err error
-	if nativeAudioDeployment(candidate) {
+	if vertexSpeechDeployment(candidate) {
+		audioTarget = candidate.APIBase
+		encoded, _, err = vertexSpeechPayload(payload.fields)
+		if err != nil { err = invalidMediaRequest{err} }
+		contentType = "application/json"
+	} else if azureSpeechDeployment(candidate) {
+		audioTarget, err = azureSpeechTarget(candidate.APIBase)
+		if err == nil {
+			encoded, speechFormat, err = azureSpeechRequest(payload.fields)
+			if err != nil { err = invalidMediaRequest{err} }
+		}
+		contentType = "application/ssml+xml"
+	} else if nativeAudioDeployment(candidate) {
 		audioTarget, encoded, contentType, err = audioProviderRequest(payload, candidate)
 		if err != nil { err = invalidMediaRequest{err} }
 	} else {
@@ -1175,7 +1195,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if apiKey == "" && candidate.CredentialRef != "" {
 		apiKey = os.Getenv(candidate.CredentialRef)
 	}
-	if candidate.Provider == "elevenlabs" {
+	if speechFormat != "" {
+		upstream.Header.Set("X-Microsoft-OutputFormat", speechFormat)
+		if apiKey != "" { upstream.Header.Set("Ocp-Apim-Subscription-Key", apiKey) }
+		if candidate.AzureADToken != "" { upstream.Header.Set("Authorization", "Bearer "+candidate.AzureADToken) }
+	} else if candidate.Provider == "elevenlabs" {
 		upstream.Header.Set("xi-api-key", apiKey)
 	} else if candidate.Provider == "deepgram" {
 		upstream.Header.Set("Authorization", "Token "+apiKey)
@@ -1203,6 +1227,9 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 	} else if candidate.Bedrock == nil {
 		providerKeyHeaders(upstream.Header, candidate, apiKey)
+	}
+	if vertexSpeechDeployment(candidate) {
+		upstream.Header.Set("X-Goog-User-Project", candidate.Vertex.Project)
 	}
 	for key, value := range candidate.Headers {
 		upstream.Header.Set(key, value)

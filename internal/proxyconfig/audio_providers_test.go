@@ -93,3 +93,64 @@ model_list:
 		}
 	}
 }
+
+func TestAzureSpeechModelUsesSSMLWithoutOpenAIVersion(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/cognitiveservices/v1" || r.Header.Get("Content-Type") != "application/ssml+xml" ||
+			r.Header.Get("Ocp-Apim-Subscription-Key") != "fixture" ||
+			r.Header.Get("X-Microsoft-OutputFormat") != "riff-24khz-16bit-mono-pcm" ||
+			!strings.Contains(string(body), "en-US-JennyNeural") || !strings.Contains(string(body), "+50%") ||
+			!strings.Contains(string(body), "&lt;tag&gt; &amp; content") {
+			t.Errorf("incorrect Azure speech request: %s %v %s", r.URL.Path, r.Header, body)
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		fmt.Fprint(w, "fixture-wav")
+	}))
+	defer fixture.Close()
+	t.Setenv("AUDIO_TEST_BASE", fixture.URL)
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: speech
+    litellm_params: {model: azure/speech/neural, api_key: fixture, api_base: os.environ/AUDIO_TEST_BASE}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/audio/speech", strings.NewReader(`{"model":"speech","input":"<tag> & content","voice":"alloy","response_format":"wav","speed":1.5}`)))
+	if w.Code != 200 || w.Header().Get("Content-Type") != "audio/wav" || w.Body.String() != "fixture-wav" {
+		t.Fatal(w.Body)
+	}
+}
+
+func TestVertexSpeechDecodesAudio(t *testing.T) {
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/v1/text:synthesize" || r.Header.Get("Authorization") != "Bearer fixture" ||
+			r.Header.Get("X-Goog-User-Project") != "fixture" || !strings.Contains(string(body), `"audioEncoding":"OGG_OPUS"`) ||
+			!strings.Contains(string(body), `"name":"en-US-Studio-O"`) || !strings.Contains(string(body), `"ssml"`) {
+			t.Errorf("incorrect Vertex speech request: %s %s", r.URL.Path, body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"audioContent":"Zml4dHVyZQ=="}`)
+	}))
+	defer fixture.Close()
+	t.Setenv("AUDIO_TEST_BASE", fixture.URL+"/v1/text:synthesize")
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: speech
+    litellm_params: {model: vertex_ai/tts, api_key: fixture, api_base: os.environ/AUDIO_TEST_BASE, vertex_project: fixture}
+    model_info: {mode: audio_speech}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{Routes: config.Routes})
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest("POST", "/v1/audio/speech", strings.NewReader(`{"model":"speech","input":"<speak>hello</speak>","voice":"alloy","response_format":"opus"}`)))
+	if w.Code != 200 || w.Header().Get("Content-Type") != "audio/ogg" || w.Body.String() != "fixture" {
+		t.Fatal(w.Body)
+	}
+}

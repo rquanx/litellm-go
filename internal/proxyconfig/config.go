@@ -575,6 +575,10 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_base: %w", err)
 	}
+	vertexSpeech := provider == "vertex_ai" && (entry.Info.Mode == "audio_speech" || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
+	if vertexSpeech && base == "" {
+		base = "https://texttospeech.googleapis.com/v1/text:synthesize"
+	}
 	var vertex *runtime.VertexConfig
 	if provider == "vertex_ai" {
 		vertex, base, err = entry.vertexConfig(base)
@@ -760,7 +764,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			azureADToken = os.Getenv("AZURE_AD_TOKEN")
 		}
 	}
-	if provider == "azure" && version == "" && !strings.HasSuffix(strings.TrimRight(base, "/"), "/openai/v1") {
+	azureSpeech := provider == "azure" && strings.HasPrefix(model, "speech/")
+	if provider == "azure" && !azureSpeech && version == "" && !strings.HasSuffix(strings.TrimRight(base, "/"), "/openai/v1") {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
@@ -815,6 +820,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = inferred
 		}
 	}
+	if vertexSpeech {
+		endpoint = "speech"
+	}
+	if azureSpeech {
+		endpoint = "speech"
+		if key == "" { key = os.Getenv("AZURE_SPEECH_KEY") }
+	}
 	if partnerOCR || documentIntelligence {
 		endpoint = "ocr"
 	}
@@ -832,7 +844,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if nativeAudio && configured != "transcription" && !(provider == "elevenlabs" && configured == "speech") {
 			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
-		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" &&
+		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint) {
