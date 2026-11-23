@@ -319,3 +319,33 @@ agent_list:
 		t.Fatalf("AgentCore returned %d %s", result.Code, result.Body)
 	}
 }
+
+func TestAgentHealthListProbesOnlyVisibleAgents(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" || r.Method != http.MethodGet || r.URL.Path == "/private" {
+			t.Error("health probe accessed a private agent or forwarded credentials")
+		}
+		if r.URL.Path == "/unavailable" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer provider.Close()
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master",
+		AuthorizeKey: func(key string) ([]string, bool) { return nil, key == "scoped" },
+		Agents: []runtime.Agent{
+			{ID: "available", Name: "available", Public: true, URL: provider.URL + "/available", Card: map[string]any{}},
+			{ID: "unavailable", Name: "unavailable", Public: true, URL: provider.URL + "/unavailable", Card: map[string]any{}},
+			{ID: "private", Name: "private", URL: provider.URL + "/private", Card: map[string]any{}},
+		},
+	})
+	r := httptest.NewRequest(http.MethodGet, "/v1/agents?health_check=true", nil)
+	r.Header.Set("Authorization", "Bearer scoped")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, r)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"agent_id":"available"`) ||
+		strings.Contains(response.Body.String(), `"agent_id":"unavailable"`) {
+		t.Fatalf("unexpected health results %d %s", response.Code, response.Body)
+	}
+}

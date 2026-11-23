@@ -3,6 +3,7 @@ package runtime
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 )
 
 type Agent struct {
@@ -101,11 +104,13 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request) bool {
 			"litellm_params": map[string]bool{"is_public": agent.Public}}
 	}
 	if isList {
-		reply := make([]map[string]any, 0)
-		for _, agent := range agents {
-			if allowed(agent) {
-				reply = append(reply, describe(agent))
-			}
+		visible := slices.DeleteFunc(slices.Clone(agents), func(agent Agent) bool { return !allowed(agent) })
+		if r.URL.Query().Get("health_check") == "true" {
+			visible = s.reachableAgents(r.Context(), visible)
+		}
+		reply := make([]map[string]any, 0, len(visible))
+		for _, agent := range visible {
+			reply = append(reply, describe(agent))
 		}
 		writeJSON(w, http.StatusOK, reply)
 		return true
@@ -281,4 +286,62 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 		return
 	}
 	writeRawResponse(w, response.StatusCode, response.Header, data)
+}
+
+func (s *Server) reachableAgents(ctx context.Context, agents []Agent) []Agent {
+	if len(agents) == 0 {
+		return agents
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	client := *s.config.HTTPClient
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	healthy := make([]bool, len(agents))
+	jobs := make(chan int)
+	var workers sync.WaitGroup
+	for range min(len(agents), s.config.HealthCheckConcurrency) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				address := agents[index].URL
+				if address == "" {
+					healthy[index] = true
+					continue
+				}
+				healthy[index] = s.probeAgent(ctx, &client, address)
+			}
+		}()
+	}
+	for index := range agents {
+		jobs <- index
+	}
+	close(jobs)
+	workers.Wait()
+	result := make([]Agent, 0, len(agents))
+	for index, agent := range agents {
+		if healthy[index] {
+			result = append(result, agent)
+		}
+	}
+	return result
+}
+
+func (s *Server) probeAgent(ctx context.Context, client *http.Client, address string) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return false
+	}
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return false
+	}
+	defer func() { <-s.sem }()
+	response, err := client.Do(request)
+	if err != nil {
+		return false
+	}
+	response.Body.Close()
+	return response.StatusCode < 500
 }
