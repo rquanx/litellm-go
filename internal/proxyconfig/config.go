@@ -638,12 +638,14 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		strings.Contains(model, "deepseek-ocr") ||
 		slices.Contains(entry.Info.Endpoints, "/v1/ocr")
 	mistralOCR := provider == "mistral" && configuredOCR
-	mistralAudio := provider == "mistral" && !configuredOCR && (entry.Info.Mode == "audio_transcription" || strings.HasPrefix(model, "voxtral-") || slices.Contains(entry.Info.Endpoints, "/v1/audio/transcriptions"))
+	audioConfigured := entry.Info.Mode == "audio_transcription" || slices.Contains(entry.Info.Endpoints, "/v1/audio/transcriptions")
+	mistralAudio := provider == "mistral" && !configuredOCR && (audioConfigured || strings.HasPrefix(model, "voxtral-"))
+	otherMultipartAudio := (provider == "ovhcloud" || provider == "scaleway") && (audioConfigured || strings.Contains(model, "whisper"))
 	partnerOCR := configuredOCR && (provider == "vertex_ai" ||
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !runway && !pgVector) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -705,6 +707,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
+	}
+	if base == "" && otherMultipartAudio {
+		base = "https://api.scaleway.ai/v1"
+		if provider == "ovhcloud" {
+			base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+		}
 	}
 	if base == "" && (mistralOCR || mistralAudio) {
 		base = "https://api.mistral.ai/v1"
@@ -812,6 +820,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	} else if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
+	if key == "" && otherMultipartAudio {
+		variable := "SCW_SECRET_KEY"
+		if provider == "ovhcloud" {
+			variable = "OVHCLOUD_API_KEY"
+		}
+		key = os.Getenv(variable)
+	}
 	if key == "" && (mistralOCR || mistralAudio) {
 		key = os.Getenv("MISTRAL_API_KEY")
 	}
@@ -918,7 +933,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if mistralOCR {
 		endpoint = "ocr"
 	}
-	if mistralAudio {
+	if mistralAudio || otherMultipartAudio {
 		endpoint = "transcription"
 	}
 	if provider == "anthropic" {

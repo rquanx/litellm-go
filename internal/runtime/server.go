@@ -936,7 +936,7 @@ func (s *Server) eligibleCandidates(ctx context.Context, candidates []Candidate,
 		if endpoint == "anthropic-messages" && candidate.Endpoint == "bedrock-converse" && !bedrockClaudeMessages(endpoint, candidate) {
 			continue
 		}
-		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || (!googleImageDeployment(candidate) && !nativeAudioDeployment(candidate))) {
+		if candidateAllowed(scope, candidate) && servesEndpoint(endpoint, candidate.Endpoint) && (!stream || (!googleImageDeployment(candidate) && !nativeAudioDeployment(candidate) && !multipartAudioDeployment(candidate))) {
 			if candidate.DeploymentID != "" {
 				index := slices.IndexFunc(eligible, func(existing Candidate) bool {
 					return existing.DeploymentID == candidate.DeploymentID && existing.RoutingGroup == candidate.RoutingGroup
@@ -1022,8 +1022,9 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 		return s.googleEmbeddings(ctx, request, candidate, payload)
 	}
 	status, data, headers, retryable, err := s.callProviderJSON(ctx, request, endpoint, candidate, payload)
-	if err == nil && status/100 == 2 && candidate.Provider == "mistral" && candidate.Endpoint == "transcription" {
-		data, err = mistralTranscriptionResponse(data)
+	if err == nil && status/100 == 2 && multipartAudioDeployment(candidate) {
+		data, err = multipartAudioResponse(data, headers.Get("Content-Type"), candidate.Provider)
+		headers.Set("Content-Type", "application/json")
 	}
 	if err == nil && status/100 == 2 && nativeAudioDeployment(candidate) && candidate.Endpoint == "transcription" {
 		data, err = providerTranscription(data, candidate.Provider)
@@ -1278,8 +1279,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			if err != nil { err = invalidMediaRequest{err} }
 		}
 		contentType = "application/ssml+xml"
-	} else if candidate.Provider == "mistral" && candidate.Endpoint == "transcription" {
-		audioTarget, encoded, contentType, err = mistralTranscriptionRequest(payload, candidate)
+	} else if multipartAudioDeployment(candidate) {
+		audioTarget, encoded, contentType, err = multipartAudioRequest(payload, candidate)
 		if err != nil {
 			err = invalidMediaRequest{err}
 		}
