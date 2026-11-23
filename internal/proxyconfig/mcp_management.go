@@ -27,9 +27,16 @@ func (registry *modelRegistry) compileMCP(managed map[string]mcpServerConfig) ([
 		if server.Command != "" || server.Transport == "stdio" {
 			return nil, fmt.Errorf("stdio MCP server %q requires local configuration", name)
 		}
+		if !server.mcpApproved() {
+			continue
+		}
 		combined[name] = server
 	}
 	return prepareMCPServers(combined)
+}
+
+func (server mcpServerConfig) mcpApproved() bool {
+	return server.ApprovalStatus == "" || server.ApprovalStatus == "active" || server.ApprovalStatus == "approved"
 }
 
 func (registry *modelRegistry) registerMCPRoutes(mux *http.ServeMux) {
@@ -41,6 +48,12 @@ func (registry *modelRegistry) registerMCPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE "+mcpServerPath+"/{server_id}", registry.writeMCPServer)
 	mux.HandleFunc("POST /mcp-rest/test/connection", registry.testMCPServer)
 	mux.HandleFunc("POST /mcp-rest/test/tools/list", registry.testMCPServer)
+	if registry.keys != nil {
+		mux.HandleFunc("POST "+mcpServerPath+"/register", registry.submitMCPServer)
+		mux.HandleFunc("GET "+mcpServerPath+"/submissions", registry.listMCPSubmissions)
+		mux.HandleFunc("PUT "+mcpServerPath+"/{server_id}/approve", registry.reviewMCPServer)
+		mux.HandleFunc("PUT "+mcpServerPath+"/{server_id}/reject", registry.reviewMCPServer)
+	}
 }
 
 func (registry *modelRegistry) testMCPServer(w http.ResponseWriter, r *http.Request) {
@@ -157,6 +170,7 @@ func (registry *modelRegistry) writeMCPServer(w http.ResponseWriter, r *http.Req
 			if entry.ServerID == id {
 				existing = name
 				if r.Method == http.MethodPut {
+					input.ApprovalStatus, input.SubmittedAt, input.SubmittedBy, input.ReviewNotes = entry.ApprovalStatus, entry.SubmittedAt, entry.SubmittedBy, entry.ReviewNotes
 					if input.Headers == nil {
 						input.Headers = entry.Headers
 					}
@@ -188,24 +202,31 @@ func (registry *modelRegistry) writeMCPServer(w http.ResponseWriter, r *http.Req
 		}
 		next[input.Name] = input.mcpServerConfig
 	}
+	if err := registry.replaceMCPServers(w, next); err != nil {
+		return
+	}
+	if r.Method == http.MethodDelete {
+		modelJSON(w, http.StatusOK, map[string]string{"message": "MCP server deleted successfully"})
+		return
+	}
+	modelJSON(w, http.StatusOK, mcpServerEntry(input.Name, input.mcpServerConfig))
+}
+
+func (registry *modelRegistry) replaceMCPServers(w http.ResponseWriter, next map[string]mcpServerConfig) error {
 	servers, err := registry.compileMCP(next)
 	if err != nil {
 		modelError(w, http.StatusBadRequest, err.Error())
-		return
+		return err
 	}
 	if registry.store != nil {
 		if err := registry.store.save(modelState{Models: registry.models, Credentials: registry.credentials,
 			Router: registry.router, SearchTools: registry.searchTools, PassThrough: registry.passThrough,
 			MCPServers: next, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub}); err != nil {
 			stateWriteError(w, err)
-			return
+			return err
 		}
 	}
 	registry.mcpServers = next
 	registry.server.ReplaceMCPServers(servers)
-	if r.Method == http.MethodDelete {
-		modelJSON(w, http.StatusOK, map[string]string{"message": "MCP server deleted successfully"})
-		return
-	}
-	modelJSON(w, http.StatusOK, mcpServerEntry(input.Name, input.mcpServerConfig))
+	return nil
 }

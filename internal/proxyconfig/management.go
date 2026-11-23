@@ -18,6 +18,7 @@ import (
 )
 
 type modelRegistry struct {
+	keys *KeyRegistry
 	server *runtime.Server
 	base   Config
 	token  string
@@ -34,15 +35,15 @@ type modelRegistry struct {
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
-	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"))
+	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"),nil)
 }
 
-func WithPostgresModelManagement(server *runtime.Server, config Config, token string, db *sql.DB) (http.Handler, error) {
-	return withModelManagement(server, config, token, postgresModels(db, token))
+func WithPostgresModelManagement(server *runtime.Server, config Config, token string, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
+	return withModelManagement(server, config, token, postgresModels(db, token),keys)
 }
 
-func withModelManagement(server *runtime.Server, config Config, token string, store stateStore) (http.Handler, error) {
-	registry := &modelRegistry{server: server, base: config, token: token, store: store}
+func withModelManagement(server *runtime.Server, config Config, token string, store stateStore,keys *KeyRegistry) (http.Handler, error) {
+	registry := &modelRegistry{server: server, base: config, token: token, store: store,keys:keys}
 	registry.base.models = slices.Clone(config.models)
 	if store != nil {
 		if token == "" {

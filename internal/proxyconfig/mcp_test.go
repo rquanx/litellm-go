@@ -39,12 +39,13 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 			'{"auth_value":"fixture-import-token"}','{"X-Fixture":"value"}',NULL),
 			('oauth-id','oauth-fixture','http','http://localhost:1/mcp','active','oauth2',
 			'{"client_id":"fixture-client","client_secret":"fixture-oauth-secret"}',NULL,'http://localhost:1/token'),
-			('pending','unreviewed','stdio',NULL,'pending',NULL,NULL,NULL,NULL);`)
+			('pending','unreviewed','stdio',NULL,'pending',NULL,NULL,NULL,NULL),
+			('review-id','queued','http','http://localhost:1/mcp','pending_review',NULL,NULL,NULL,NULL);`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config := Config{MasterKey: "fixture-master"}
-	if count, err := ImportLiteLLMMCPServers(db, config); err != nil || count != 2 {
+	if count, err := ImportLiteLLMMCPServers(db, config); err != nil || count != 3 {
 		t.Fatalf("import count %d: %v", count, err)
 	}
 	var state modelState
@@ -53,8 +54,11 @@ func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 	}
 	entry := state.MCPServers["fixture"]
 	if entry.ServerID != "fixture-id" || entry.Headers["Authorization"] != "Bearer fixture-import-token" ||
-		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 2 {
+		entry.Headers["X-Fixture"] != "value" || len(state.MCPServers) != 3 {
 		t.Fatal("stored MCP server did not retain its ID and credentials")
+	}
+	if queued := state.MCPServers["queued"]; queued.ServerID != "review-id" || queued.ApprovalStatus != "pending_review" {
+		t.Fatalf("pending MCP server did not retain its review status: %+v", queued)
 	}
 	oauth := state.MCPServers["oauth-fixture"]
 	if oauth.AuthType != "oauth2" || oauth.ClientID != "fixture-client" || oauth.ClientSecret != "fixture-oauth-secret" || oauth.TokenURL != "http://localhost:1/token" {
@@ -115,6 +119,59 @@ func TestManagedMCPServersPersistAndPublish(t *testing.T) {
 	call("GET", mcpServerPath+"/"+created.ServerID, "", 404)
 }
 
+func TestMCPServerSubmissionRequiresApprovalBeforePublication(t *testing.T) {
+	const master = "fixture-master"
+	keys, err := LoadKeys(master, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Teams["team"] = team{ID: "team"}
+	keys.state.Keys[keyDigest("member")] = virtualKey{TeamID: "team"}
+	state := filepath.Join(t.TempDir(), "models.json")
+	open := func() http.Handler {
+		server := runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true})
+		handler, err := withModelManagement(server, Config{}, master, chooseStateStore(state, nil, "models"), keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler
+	}
+	handler := open()
+	call := func(method, path, key, body string, status int) string {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+key)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != status || strings.Contains(w.Body.String(), "fixture-provider-secret") {
+			t.Fatalf("%s %s returned %d %s", method, path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	call(http.MethodPost, mcpServerPath+"/register", "member", `{"server_name":"stdio","transport":"stdio","command":"fixture"}`, 400)
+	response := call(http.MethodPost, mcpServerPath+"/register", "member",
+		`{"server_name":"pending","transport":"http","url":"http://127.0.0.1:1/mcp","available_on_public_internet":true,"static_headers":{"Authorization":"fixture-provider-secret"}}`, 201)
+	var created mcpServerInput
+	if json.Unmarshal([]byte(response), &created) != nil || created.ServerID == "" || created.ApprovalStatus != "pending_review" {
+		t.Fatalf("unexpected submission %s", response)
+	}
+	handler = open()
+	const hub = "/public/mcp_hub"
+	if body := call(http.MethodGet, hub, "", "", 200); strings.TrimSpace(body) != "[]" {
+		t.Fatalf("pending server was published: %s", body)
+	}
+	path := mcpServerPath + "/" + created.ServerID
+	call(http.MethodPut, path+"/approve", "member", "", 401)
+	call(http.MethodPut, path+"/approve", master, "", 200)
+	if body := call(http.MethodGet, hub, "", "", 200); !strings.Contains(body, created.ServerID) {
+		t.Fatalf("approved server was not published: %s", body)
+	}
+	call(http.MethodPut, path+"/reject", master, `{"review_notes":"fixture"}`, 200)
+	if body := call(http.MethodGet, hub, "", "", 200); strings.TrimSpace(body) != "[]" {
+		t.Fatalf("rejected server was still public: %s", body)
+	}
+}
+
 func TestMCPRESTUsesScopedStreamableHTTPSessions(t *testing.T) {
 	var closed atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +187,8 @@ func TestMCPRESTUsesScopedStreamableHTTPSessions(t *testing.T) {
 			return
 		}
 		var message struct {
-			ID string `json:"id"`
-			Method string `json:"method"`
+			ID     string         `json:"id"`
+			Method string         `json:"method"`
 			Params map[string]any `json:"params"`
 		}
 		if json.NewDecoder(r.Body).Decode(&message) != nil {

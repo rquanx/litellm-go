@@ -25,6 +25,9 @@ func (registry *modelRegistry) publicMCPHub(w http.ResponseWriter, _ *http.Reque
 	for index, group := range []map[string]mcpServerConfig{registry.base.staticMCPServers, registry.mcpServers} {
 		for _, name := range slices.Sorted(maps.Keys(group)) {
 			entry := group[name]
+			if !entry.mcpApproved() {
+				continue
+			}
 			resolved, err := resolveEnv(entry.URL)
 			if err != nil {
 				continue

@@ -110,7 +110,6 @@ func readLiteLLMMCPToolsets(ctx context.Context, db *sql.DB) ([]runtime.MCPTools
 func decodeLiteLLMMCPServer(payload []byte, salt string) (string, mcpServerConfig, bool, error) {
 	var row struct {
 		mcpServerInput
-		ApprovalStatus string `json:"approval_status"`
 		AuthType string `json:"auth_type"`
 		SpecPath string `json:"spec_path"`
 		DelegateAuth bool `json:"delegate_auth_to_upstream"`
@@ -122,10 +121,11 @@ func decodeLiteLLMMCPServer(payload []byte, salt string) (string, mcpServerConfi
 	if json.Unmarshal(payload, &row) != nil {
 		return "", mcpServerConfig{}, false, errors.New("invalid LiteLLM MCP server row")
 	}
-	if row.ApprovalStatus != "" && row.ApprovalStatus != "active" && row.ApprovalStatus != "approved" {
-		return "", mcpServerConfig{}, true, nil
-	}
 	entry := row.mcpServerConfig
+	if !entry.mcpApproved() && (entry.Transport=="stdio" || entry.Command!="" ||
+		(entry.ApprovalStatus!="pending_review" && entry.ApprovalStatus!="rejected")) {
+		return "",mcpServerConfig{},true,nil
+	}
 	entry.ImportedAuthType = row.AuthType
 	name := row.Name
 	if name == "" {

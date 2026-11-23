@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 	"maps"
 	"net/http"
 	"net/url"
@@ -31,6 +32,10 @@ func mcpPublicTransport(transport string) string {
 }
 
 type mcpServerConfig struct {
+	ApprovalStatus string `yaml:"-" json:"approval_status,omitempty"`
+	SubmittedAt *time.Time `yaml:"-" json:"submitted_at,omitempty"`
+	SubmittedBy string `yaml:"-" json:"submitted_by,omitempty"`
+	ReviewNotes string `yaml:"-" json:"review_notes,omitempty"`
 	URL string `yaml:"url" json:"url"`
 	Transport string `yaml:"transport" json:"transport"`
 	Alias string `yaml:"alias" json:"alias,omitempty"`
