@@ -3,11 +3,12 @@ package runtime
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 )
 
 func multipartAudioDeployment(candidate Candidate) bool {
-	return candidate.Endpoint == "transcription" && (candidate.Provider == "mistral" || candidate.Provider == "ovhcloud" || candidate.Provider == "scaleway")
+	return candidate.Endpoint == "transcription" && slices.Contains([]string{"mistral", "ovhcloud", "scaleway", "fireworks_ai"}, candidate.Provider)
 }
 
 func multipartAudioRequest(input requestPayload, candidate Candidate) (string, []byte, string, error) {
@@ -22,7 +23,11 @@ func multipartAudioRequest(input requestPayload, candidate Candidate) (string, [
 			hasFile = true
 		case "model":
 			hasModel = true
-		case "language", "temperature", "timestamp_granularities", "timestamp_granularities[]", "response_format":
+		case "language", "timestamp_granularities", "timestamp_granularities[]", "response_format":
+		case "temperature":
+			if candidate.Provider == "fireworks_ai" {
+				continue
+			}
 		case "diarize":
 			if candidate.Provider != "mistral" {
 				continue
@@ -44,7 +49,11 @@ func multipartAudioRequest(input requestPayload, candidate Candidate) (string, [
 	}
 	input.form = form
 	data, media, err := input.encodeMultipart(candidate.ModelID, false)
-	return strings.TrimRight(candidate.APIBase, "/") + "/audio/transcriptions", data, media, err
+	base := strings.TrimRight(candidate.APIBase, "/")
+	if candidate.Provider == "fireworks_ai" && !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base + "/audio/transcriptions", data, media, err
 }
 
 func multipartAudioResponse(raw []byte, media, provider string) ([]byte, error) {
@@ -54,6 +63,15 @@ func multipartAudioResponse(raw []byte, media, provider string) ([]byte, error) 
 	var original map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &original); err != nil {
 		return nil, err
+	}
+	if provider == "fireworks_ai" {
+		if len(original["text"]) == 0 {
+			return nil, errors.New("Missing transcription text")
+		}
+		if original["usage"] == nil {
+			original["usage"] = json.RawMessage("null")
+		}
+		return json.Marshal(original)
 	}
 	text := original["text"]
 	if provider == "ovhcloud" && (len(text) == 0 || string(text) == "null" || string(text) == `""`) {

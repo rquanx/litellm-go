@@ -640,7 +640,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	mistralOCR := provider == "mistral" && configuredOCR
 	audioConfigured := entry.Info.Mode == "audio_transcription" || slices.Contains(entry.Info.Endpoints, "/v1/audio/transcriptions")
 	mistralAudio := provider == "mistral" && !configuredOCR && (audioConfigured || strings.HasPrefix(model, "voxtral-"))
-	otherMultipartAudio := (provider == "ovhcloud" || provider == "scaleway") && (audioConfigured || strings.Contains(model, "whisper"))
+	otherMultipartAudio := slices.Contains([]string{"ovhcloud", "scaleway", "fireworks_ai"}, provider) && (audioConfigured || strings.Contains(model, "whisper"))
 	partnerOCR := configuredOCR && (provider == "vertex_ai" ||
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
@@ -709,9 +709,13 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		base = "https://generativelanguage.googleapis.com"
 	}
 	if base == "" && otherMultipartAudio {
-		base = "https://api.scaleway.ai/v1"
-		if provider == "ovhcloud" {
+		switch provider {
+		case "scaleway":
+			base = "https://api.scaleway.ai/v1"
+		case "ovhcloud":
 			base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
+		case "fireworks_ai":
+			base = "https://audio-prod.api.fireworks.ai/v1"
 		}
 	}
 	if base == "" && (mistralOCR || mistralAudio) {
@@ -821,11 +825,18 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
 	if key == "" && otherMultipartAudio {
-		variable := "SCW_SECRET_KEY"
-		if provider == "ovhcloud" {
-			variable = "OVHCLOUD_API_KEY"
+		switch provider {
+		case "scaleway":
+			key = os.Getenv("SCW_SECRET_KEY")
+		case "ovhcloud":
+			key = os.Getenv("OVHCLOUD_API_KEY")
+		case "fireworks_ai":
+			for _, variable := range []string{"FIREWORKS_API_KEY", "FIREWORKS_AI_API_KEY", "FIREWORKSAI_API_KEY", "FIREWORKS_AI_TOKEN"} {
+				if key = os.Getenv(variable); key != "" {
+					break
+				}
+			}
 		}
-		key = os.Getenv(variable)
 	}
 	if key == "" && (mistralOCR || mistralAudio) {
 		key = os.Getenv("MISTRAL_API_KEY")
