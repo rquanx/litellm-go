@@ -222,6 +222,16 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		if err != nil {
 			decoded = ""
 		}
+		if family == "batches" {
+			if model, native, managed := decodeLegacyBatchID(decoded); managed {
+				if resolved, found := s.legacyBatchDeployment(alias, model, scope); !found || (deployment != "" && deployment != resolved) {
+					writeError(writer, http.StatusNotFound, "resource_not_found", "Unknown managed batch deployment")
+					return
+				} else {
+					deployment, decoded = resolved, native
+				}
+			}
+		}
 		if family == "files" && isLegacyManagedFile(decoded) {
 			candidate, original, found := s.resolveLegacyFile(request, decoded, alias, scope)
 			if !found || method != http.MethodGet || !resourceActionAllowed(family, action, method) {

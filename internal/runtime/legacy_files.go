@@ -67,3 +67,47 @@ func (s *Server) resolveLegacyFile(r *http.Request, id, alias string, scope []st
 	}
 	return selected, original, selected.DeploymentID != ""
 }
+
+func decodeLegacyBatchID(id string) (string, string, bool) {
+	encoded, found := strings.CutPrefix(id, "batch_")
+	if !found || len(encoded) > 8192 {
+		return "", "", false
+	}
+	for _, codec := range []*base64.Encoding{base64.RawURLEncoding, base64.RawStdEncoding} {
+		raw, err := codec.DecodeString(strings.TrimRight(encoded, "="))
+		if err != nil {
+			continue
+		}
+		fields, ok := strings.CutPrefix(string(raw), "litellm_proxy;model_id:")
+		if !ok {
+			continue
+		}
+		model, original, ok := strings.Cut(fields, ";llm_batch_id:")
+		if ok && model != "" && validResourceSegment(original) {
+			return model, original, true
+		}
+	}
+	return "", "", false
+}
+
+func (s *Server) legacyBatchDeployment(alias, model string, scope []string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var matched string
+	for name, route := range s.configuredRoutes {
+		if (alias != "" && alias != name) || !modelAllowed(scope, name) {
+			continue
+		}
+		for _, candidate := range route.Candidates {
+			if (candidate.Provider != "openai" && candidate.Provider != "azure") || !candidateAllowed(scope, candidate) ||
+				(candidate.DeploymentID != model && name != model) || candidate.DeploymentID == "" {
+				continue
+			}
+			if matched != "" && matched != candidate.DeploymentID {
+				return "", false
+			}
+			matched = candidate.DeploymentID
+		}
+	}
+	return matched, matched != ""
+}

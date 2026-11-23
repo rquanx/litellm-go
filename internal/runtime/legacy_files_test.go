@@ -18,6 +18,8 @@ func TestLiteLLMManagedFileLookupAndBatchInput(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/files/file-underlying/content":
 			fmt.Fprint(w, "fixture body")
+		case "/v1/batches/batch-fixture":
+			fmt.Fprint(w, `{"id":"batch-fixture","status":"completed"}`)
 		case "/v1/batches":
 			data, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(data), `"input_file_id":"file-underlying"`) || strings.Contains(string(data), legacy) {
@@ -51,6 +53,10 @@ func TestLiteLLMManagedFileLookupAndBatchInput(t *testing.T) {
 		return w.Body.String()
 	}
 	if result := call("GET", "/v1/files/"+url.PathEscape(legacy)+"/content", ""); result != "fixture body" {
+		t.Fatal(result)
+	}
+	legacyBatch := "batch_" + base64.RawStdEncoding.EncodeToString([]byte("litellm_proxy;model_id:deployment;llm_batch_id:batch-fixture"))
+	if result := call("GET", "/v1/batches/"+url.PathEscape(legacyBatch), ""); !strings.Contains(result, `"status":"completed"`) {
 		t.Fatal(result)
 	}
 	call("POST", "/v1/batches", `{"input_file_id":"`+legacy+`","endpoint":"/v1/chat/completions","completion_window":"24h"}`)
