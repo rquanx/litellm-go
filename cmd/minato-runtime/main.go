@@ -262,6 +262,12 @@ func main() {
 	}
 	if stateDB != nil && keys != nil {
 		config.VectorRegistryLookup = proxyconfig.VectorRegistryLookup(stateDB, keys)
+		credentials, err := proxyconfig.OpenMCPUserCredentialStore(stateDB, config.Token)
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.MCPUserOAuthStore = credentials
+		config.MCPUserOAuthIdentity = keys.MCPUserIdentity
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server

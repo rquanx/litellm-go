@@ -38,6 +38,8 @@ type Config struct {
 	AuthorizeMCP       func(string) (MCPAccess, bool)
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
 	ResourceOwnerScopes func(string) []string
+	MCPUserOAuthStore MCPUserOAuthStore
+	MCPUserOAuthIdentity func(*http.Request) string
 	ContainerOwners     ContainerOwners
 	LegacyFiles         LegacyFileLookup
 	LegacyVectorStores  LegacyFileLookup

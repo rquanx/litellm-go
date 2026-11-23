@@ -215,6 +215,11 @@ func (s *Server) mcpRequestServer(r *http.Request, server MCPServer) MCPServer {
 	if value := r.Header.Get("X-MCP-Auth"); value != "" && headers.Get("Authorization") == "" {
 		headers.Set("Authorization", value)
 	}
+	if headers.Get("Authorization") == "" {
+		if token := s.loadMCPUserOAuth(r, server); token != "" {
+			headers.Set("Authorization", "Bearer "+token)
+		}
+	}
 	server.Headers = headers
 	return server
 }
