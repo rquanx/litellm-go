@@ -103,7 +103,7 @@ func (log *SpendLog) Record(event runtime.InferenceEvent) {
 	if event.Provider == "a2a_agent" {
 		agentID = event.ModelID
 	}
-	_, _ = log.db.ExecContext(ctx, `INSERT INTO minato_proxy_spend
+	result, err := log.db.ExecContext(ctx, `INSERT INTO minato_proxy_spend
 		(request_id,started_at,ended_at,api_key,key_alias,user_id,team_id,project_id,model,model_group,model_id,provider,call_type,status,prompt_tokens,completion_tokens,total_tokens,spend,cache_hit,end_user_id,
 		cache_read_input_tokens,cache_creation_input_tokens,agent_id)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
@@ -111,6 +111,12 @@ func (log *SpendLog) Record(event runtime.InferenceEvent) {
 		event.ID, start, end, event.KeyDigest, key.Alias, key.UserID, key.TeamID, key.ProjectID, event.Model, event.ModelGroup,
 		event.ModelID, event.Provider, event.CallType, event.Status, event.Prompt, event.Completion, event.Total, event.Spend, event.CacheHit, event.EndUser,
 		event.CacheReadInputTokens, event.CacheCreationInputTokens, agentID)
+	if err != nil || event.EndUser == "" || event.Spend == nil {
+		return
+	}
+	if count, _ := result.RowsAffected(); count == 1 {
+		_, _ = log.db.ExecContext(ctx, `UPDATE `+customerTable+` SET spend=spend+$2 WHERE user_id=$1`, event.EndUser, *event.Spend)
+	}
 }
 
 func (log *SpendLog) Start(ctx context.Context) func(runtime.InferenceEvent) {

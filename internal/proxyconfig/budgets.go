@@ -24,15 +24,20 @@ type budgetRecord struct {
 	Model map[string]any `json:"model_max_budget"`
 }
 
+func openBudgetTable(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+budgetTable+` (
+		budget_id TEXT PRIMARY KEY,max_budget DOUBLE PRECISION,soft_budget DOUBLE PRECISION,
+		max_parallel_requests INTEGER,tpm_limit INTEGER,rpm_limit INTEGER,budget_duration TEXT,budget_reset_at TIMESTAMPTZ,
+		model_max_budget JSONB,created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	return err
+}
+
 func WithBudgetManagement(next http.Handler,db *sql.DB,keys *KeyRegistry) (http.Handler,error) {
 	if db==nil {return next,nil}
 	ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second)
 	defer cancel()
-	if _,err:=db.ExecContext(ctx,`CREATE TABLE IF NOT EXISTS `+budgetTable+` (
-		budget_id TEXT PRIMARY KEY,max_budget DOUBLE PRECISION,soft_budget DOUBLE PRECISION,
-		max_parallel_requests INTEGER,tpm_limit INTEGER,rpm_limit INTEGER,budget_duration TEXT,budget_reset_at TIMESTAMPTZ,
-		model_max_budget JSONB,created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`);err!=nil {return nil,err}
+	if err:=openBudgetTable(ctx,db);err!=nil {return nil,err}
 	api:=&budgetAPI{db:db,keys:keys}
 	mux:=http.NewServeMux()
 	mux.HandleFunc("POST /budget/new",api.write)

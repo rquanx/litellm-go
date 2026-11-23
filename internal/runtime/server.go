@@ -570,6 +570,12 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
+	if customerPolicy.BudgetError != "" {
+		writeJSON(writer, http.StatusTooManyRequests, map[string]any{"error": map[string]any{
+			"message": customerPolicy.BudgetError, "type": "budget_exceeded", "param": nil, "code": "429",
+		}})
+		return
+	}
 	s.mu.RLock()
 	route, ok := s.routes[alias]
 	if !ok {

@@ -8,6 +8,7 @@ import (
 
 type CustomerPolicy struct {
 	Blocked bool
+	BudgetError string
 	Region string
 	DefaultModel string
 }

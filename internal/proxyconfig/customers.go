@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -42,6 +43,9 @@ func OpenCustomers(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*Custome
 	if err != nil {
 		return nil, errors.New("could not initialize end-user storage")
 	}
+	if err := openBudgetTable(ctx, db); err != nil {
+		return nil, err
+	}
 	return &CustomerRegistry{db: db, keys: keys}, nil
 }
 
@@ -49,12 +53,19 @@ func (registry *CustomerRegistry) Policy(ctx context.Context, id string) (runtim
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	var policy runtime.CustomerPolicy
-	err := registry.db.QueryRowContext(ctx, `SELECT blocked,COALESCE(allowed_model_region,''),COALESCE(default_model,'')
-		FROM `+customerTable+` WHERE user_id=$1`, id).Scan(&policy.Blocked, &policy.Region, &policy.DefaultModel)
+	var spent float64
+	var limit *float64
+	err := registry.db.QueryRowContext(ctx, `SELECT c.blocked,COALESCE(c.allowed_model_region,''),COALESCE(c.default_model,''),c.spend,b.max_budget
+		FROM `+customerTable+` c LEFT JOIN `+budgetTable+` b ON b.budget_id=c.budget_id WHERE c.user_id=$1`, id).
+		Scan(&policy.Blocked, &policy.Region, &policy.DefaultModel, &spent, &limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return runtime.CustomerPolicy{}, nil
 	}
-	return policy, err
+	if err != nil || limit == nil || policy.Blocked { return policy, err }
+	if spent > *limit {
+		policy.BudgetError = fmt.Sprintf("ExceededBudget: End User=%s over budget. Spend=%g, Budget=%g", id, spent, *limit)
+	}
+	return policy, nil
 }
 
 func (registry *CustomerRegistry) Handler(next http.Handler) http.Handler {
@@ -163,16 +174,16 @@ func (registry *CustomerRegistry) write(ctx context.Context, body io.Reader, cre
 	if json.Unmarshal(fields["user_id"], &id) != nil || !validCustomerID(id) {
 		return customer{}, customerInputError{errors.New("user_id is required")}
 	}
-	for _, name := range []string{"max_budget", "budget_duration", "object_permission", "tpm_limit", "rpm_limit", "budget_id", "object_permission_id"} {
+	for _, name := range []string{"max_budget", "budget_duration", "object_permission", "tpm_limit", "rpm_limit", "object_permission_id"} {
 		if value := fields[name]; len(value) != 0 && string(value) != "null" {
 			return customer{}, customerInputError{errors.New("Unsupported customer setting: " + name)}
 		}
 	}
-	var alias, region, defaultModel *string
+	var alias, region, defaultModel, budgetID *string
 	var blocked *bool
 	var spend *float64
 	for name, target := range map[string]any{"alias": &alias, "blocked": &blocked, "spend": &spend,
-		"allowed_model_region": &region, "default_model": &defaultModel} {
+		"allowed_model_region": &region, "default_model": &defaultModel, "budget_id": &budgetID} {
 		if value := fields[name]; len(value) > 0 && json.Unmarshal(value, target) != nil {
 			return customer{}, customerInputError{errors.New("Invalid customer setting: " + name)}
 		}
@@ -183,20 +194,27 @@ func (registry *CustomerRegistry) write(ctx context.Context, body io.Reader, cre
 	if region != nil && *region != "eu" && *region != "us" {
 		return customer{}, customerInputError{errors.New("allowed_model_region must be eu or us")}
 	}
+	if budgetID != nil {
+		var exists bool
+		if err := registry.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM `+budgetTable+` WHERE budget_id=$1)`, *budgetID).Scan(&exists); err != nil { return customer{}, err }
+		if !exists { return customer{}, customerInputError{errors.New("Budget not found")} }
+	}
 	if create {
 		return scanCustomer(registry.db.QueryRowContext(ctx, `INSERT INTO `+customerTable+
-			` (user_id,alias,spend,blocked,allowed_model_region,default_model)
-			VALUES ($1,$2,COALESCE($3,0),COALESCE($4,false),$5,$6) RETURNING `+customerColumns,
-			id, alias, spend, blocked, region, defaultModel))
+			` (user_id,alias,spend,blocked,allowed_model_region,default_model,budget_id)
+			VALUES ($1,$2,COALESCE($3,0),COALESCE($4,false),$5,$6,$7) RETURNING `+customerColumns,
+			id, alias, spend, blocked, region, defaultModel, budgetID))
 	}
 	_, aliasSupplied := fields["alias"]
 	_, regionSupplied := fields["allowed_model_region"]
 	_, modelSupplied := fields["default_model"]
+	_, budgetSupplied := fields["budget_id"]
 	return scanCustomer(registry.db.QueryRowContext(ctx, `UPDATE `+customerTable+`
 		SET alias=CASE WHEN $2 THEN $3 ELSE alias END, spend=COALESCE($4,spend), blocked=COALESCE($5,blocked),
 		allowed_model_region=CASE WHEN $6 THEN $7 ELSE allowed_model_region END,
-		default_model=CASE WHEN $8 THEN $9 ELSE default_model END
-		WHERE user_id=$1 RETURNING `+customerColumns, id, aliasSupplied, alias, spend, blocked, regionSupplied, region, modelSupplied, defaultModel))
+		default_model=CASE WHEN $8 THEN $9 ELSE default_model END,
+		budget_id=CASE WHEN $10 THEN $11 ELSE budget_id END
+		WHERE user_id=$1 RETURNING `+customerColumns, id, aliasSupplied, alias, spend, blocked, regionSupplied, region, modelSupplied, defaultModel, budgetSupplied, budgetID))
 }
 
 func (registry *CustomerRegistry) bulk(ctx context.Context, action string, ids []string) (any, error) {
