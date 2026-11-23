@@ -45,6 +45,9 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	if err != nil {
 		return http.StatusServiceUnavailable, errors.New("Could not load stored prompt")
 	}
+	if prompt.Params["prompt_integration"] == "generic_prompt_management" {
+		return renderGenericPrompt(r, fields, prompt)
+	}
 	if prompt.Params["prompt_integration"] != "dotprompt" {
 		return http.StatusBadRequest, errors.New("Unsupported prompt integration")
 	}
@@ -70,6 +73,11 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	if err != nil || len(rendered) == 0 {
 		return http.StatusBadRequest, errors.New("Unsupported or empty stored prompt template")
 	}
+	applyStoredPrompt(fields, prompt.Params, metadata, rendered, "dotprompt/")
+	return 0, nil
+}
+
+func applyStoredPrompt(fields, params, metadata map[string]any, rendered []map[string]any, prefix string) {
 	messages := make([]any, 0, len(rendered))
 	for _, message := range rendered {
 		messages = append(messages, message)
@@ -78,18 +86,17 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 		messages = append(messages, client...)
 	}
 	fields["messages"] = messages
-	if ignore, _ := prompt.Params["ignore_prompt_manager_model"].(bool); !ignore {
+	if ignore, _ := params["ignore_prompt_manager_model"].(bool); !ignore {
 		if model, _ := metadata["model"].(string); model != "" {
 			fields["model"] = model
 		} else if model, _ := fields["model"].(string); model != "" {
-			fields["model"] = strings.TrimPrefix(model, "dotprompt/")
+			fields["model"] = strings.TrimPrefix(model, prefix)
 		}
 	}
-	if ignore, _ := prompt.Params["ignore_prompt_manager_optional_params"].(bool); !ignore {
+	if ignore, _ := params["ignore_prompt_manager_optional_params"].(bool); !ignore {
 		applyDotpromptOptions(fields, metadata)
 	}
 	for _, key := range []string{"prompt_id", "prompt_variables", "prompt_version", "prompt_label"} {
 		delete(fields, key)
 	}
-	return 0, nil
 }

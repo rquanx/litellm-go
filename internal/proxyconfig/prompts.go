@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,6 +31,18 @@ type promptRecord struct {
 	Updated     time.Time      `json:"updated_at"`
 	Params      map[string]any `json:"litellm_params"`
 	Info        map[string]any `json:"prompt_info"`
+}
+
+func (record promptRecord) public() promptRecord {
+	record.Params = maps.Clone(record.Params)
+	delete(record.Params, "api_key")
+	delete(record.Params, "provider_specific_query_params")
+	if address, ok := record.Params["api_base"].(string); ok {
+		if clean, _, found := strings.Cut(address, "?"); found {
+			record.Params["api_base"] = clean
+		}
+	}
+	return record
 }
 
 func WithPromptManagement(next http.Handler, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
@@ -153,7 +166,7 @@ func (api promptAPI) list(w http.ResponseWriter, r *http.Request) {
 			modelError(w, 500, "Could not read prompt")
 			return
 		}
-		data = append(data, p)
+		data = append(data, p.public())
 	}
 	if rows.Err() != nil {
 		modelError(w, 500, "Could not list prompts")
@@ -199,7 +212,7 @@ func (api promptAPI) info(w http.ResponseWriter, r *http.Request) {
 			template = map[string]any{"litellm_prompt_id": templateID, "content": value["content"], "metadata": value["metadata"]}
 		}
 	}
-	modelJSON(w, 200, map[string]any{"prompt_spec": record, "raw_prompt_template": template, "environments": environments})
+	modelJSON(w, 200, map[string]any{"prompt_spec": record.public(), "raw_prompt_template": template, "environments": environments})
 }
 func (api promptAPI) write(w http.ResponseWriter, r *http.Request) {
 	caller, ok := api.keys.identifyResourceCaller(r)
@@ -310,5 +323,5 @@ func (api promptAPI) write(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	record.PromptID += ".v" + strconv.Itoa(record.Version)
-	modelJSON(w, http.StatusOK, record)
+	modelJSON(w, http.StatusOK, record.public())
 }

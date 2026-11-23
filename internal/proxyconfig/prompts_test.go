@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,69 @@ import (
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestGenericStoredPromptFetchesAndRendersThroughInference(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/beta/litellm_prompt_management":
+			if r.Method != http.MethodGet || r.URL.Query().Get("prompt_id") != "external" ||
+				r.URL.Query().Get("label") != "public" || r.Header.Get("Authorization") != "Bearer manager-key" {
+				t.Errorf("unexpected prompt manager request: %s %s", r.Method, r.URL)
+			}
+			io.WriteString(w, `{"prompt_template":[{"role":"system","content":"{greeting}, {{who}}"}],"prompt_template_model":"demo","prompt_template_optional_params":{"temperature":0.2}}`)
+		case "/v1/chat/completions":
+			body, _ := io.ReadAll(r.Body)
+			for _, part := range []string{"Hello, fixture", "history", `"temperature":0.2`} {
+				if !strings.Contains(string(body), part) {
+					t.Errorf("inference lacked %q: %s", part, body)
+				}
+			}
+			if strings.Contains(string(body), "prompt_id") || r.Header.Get("Authorization") == "Bearer manager-key" {
+				t.Errorf("prompt fields crossed into inference")
+			}
+			io.WriteString(w, `{"id":"fixture","object":"chat.completion","choices":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer origin.Close()
+	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, ResolvePrompt: StoredPromptResolver(db, keys),
+		Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{Provider: "openai", ModelID: "native", Endpoint: "chat-completions", APIBase: origin.URL}}}}})
+	handler, err := WithPromptManagement(server, db, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	id := "generic-" + newEntityID()
+	defer db.Exec(`DELETE FROM `+promptTable+` WHERE prompt_id=$1`, id)
+	body := fmt.Sprintf(`{"prompt_id":%q,"litellm_params":{"prompt_id":"external","prompt_integration":"generic_prompt_management","api_base":%q,"api_key":"manager-key","provider_specific_query_params":{"label":"public"}}}`, id, origin.URL)
+	if w := call(http.MethodPost, "/prompts", body); w.Code != 200 || strings.Contains(w.Body.String(), "manager-key") {
+		t.Fatalf("create returned %d %s", w.Code, w.Body)
+	}
+	body = fmt.Sprintf(`{"model":"generic_prompt/demo","prompt_id":%q,"prompt_variables":{"greeting":"Hello","who":"fixture"},"messages":[{"role":"user","content":"history"}]}`, id)
+	if w := call(http.MethodPost, "/v1/chat/completions", body); w.Code != 200 {
+		t.Fatalf("inference returned %d %s", w.Code, w.Body)
+	}
+}
 
 func TestPostgresPromptVersionsEnvironmentsAndScope(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
