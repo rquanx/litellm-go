@@ -79,6 +79,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("GET /model/info", registry.info)
 	mux.HandleFunc("GET /v1/model/info", registry.info)
 	mux.HandleFunc("POST /model/new", registry.add)
+	mux.HandleFunc("POST /health/test_connection", registry.testModelConnection)
 	mux.HandleFunc("POST /model/delete", registry.remove)
 	mux.HandleFunc("POST /model/update", registry.update)
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)

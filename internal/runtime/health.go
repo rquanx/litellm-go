@@ -10,6 +10,10 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 	path := r.URL.Path
 	isAdmin := s.authorized(r)
 	var scope []string
+	method := http.MethodGet
+	if path == "/health/test_connection" {
+		method = http.MethodPost
+	}
 	switch path {
 	case "/health/readiness", "/health/liveliness", "/health/liveness":
 		if r.Method == http.MethodOptions {
@@ -19,8 +23,9 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 			w.WriteHeader(http.StatusOK)
 			return true
 		}
-	case "/health/readiness/details", "/health/backlog", "/health", "/health/history", "/health/latest", "/health/shared-status":
-		if r.Method == http.MethodGet && !isAdmin {
+	case "/health/readiness/details", "/health/backlog", "/health", "/health/history", "/health/latest", "/health/shared-status",
+		"/test", "/active/callbacks", "/settings", "/health/license", "/health/test_connection":
+		if r.Method == method && !isAdmin {
 			valid := false
 			if s.config.AuthorizeKey != nil {
 				scope, valid = s.config.AuthorizeKey(ProxyCredential(r))
@@ -33,14 +38,23 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 	default:
 		return false
 	}
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	if r.Method != method {
+		w.Header().Set("Allow", method)
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		return true
 	}
 	switch path {
 	case "/health/liveliness", "/health/liveness":
 		writeJSON(w, http.StatusOK, "I'm alive!")
+	case "/test":
+		writeJSON(w, http.StatusOK, map[string]string{"route": path})
+	case "/active/callbacks", "/settings":
+		s.activeCallbacks(w)
+	case "/health/license":
+		writeJSON(w, http.StatusOK, map[string]any{"has_license": false, "license_type": "community",
+			"expiration_date": nil, "allowed_features": []string{}, "limits": map[string]any{"max_users": nil, "max_teams": nil}})
+	case "/health/test_connection":
+		s.testModelConnection(w, r, scope)
 	case "/health/backlog":
 		writeJSON(w, http.StatusOK, map[string]int64{"in_flight_requests": s.inFlight.Load()})
 	case "/health":

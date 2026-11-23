@@ -60,6 +60,8 @@ The protocol health fixture verifies a Realtime WebSocket handshake without send
 
 Health probes accept the LiteLLM model, voice, timeout, token limit, token support and reasoning-effort overrides in `model_info`. The override fixture checks that ordinary inference still uses its configured model and payload. Each probe has its own timeout and shares the configured worker limit. Reasoning-specific token-limit defaults and environment-based overrides remain open. [Upstream health configuration](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/proxy/health_check.py)
 
+The authenticated health routes expose `/test`, `/settings`, `/active/callbacks` and community license metadata. Model connection tests accept an existing deployment ID and respect virtual key model scopes. The standalone management API also supports temporary provider settings for master-key callers. Requests cannot expand environment references, and tests cover credential redaction and upstream failure status. Integration-specific health checks and enterprise license metadata remain open.
+
 The same proxy comparison matched both liveness aliases, public readiness without a database, and healthy and unhealthy counts for a targeted Chat Completions deployment.
 
 The full JSON responses from `/public/endpoints` and `/public/agents/fields` match LiteLLM `v1.85.0`. The blog endpoint matched against a local RSS fixture and both proxies returned their cached feed after the fixture stopped. The Go proxy caches failed feed lookups for one minute to bound repeated remote requests.

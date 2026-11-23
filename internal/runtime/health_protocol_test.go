@@ -67,3 +67,46 @@ func TestHealthProbesRealtimeBatchesAndVideo(t *testing.T) {
 		t.Fatalf("unexpected health response %d %s", response.Code, response.Body)
 	}
 }
+
+func TestConnectionTestUsesScopedDeploymentID(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/target/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer fixture-upstream" {
+			t.Errorf("connection test used an incorrect deployment: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "master", AuthorizeInference: true,
+		AuthorizeKey: func(key string) ([]string, bool) { return []string{"public"}, key == "limited" },
+		Routes: []Route{
+			{Alias: "public", Candidates: []Candidate{
+				{DeploymentID: "first", APIBase: origin.URL, APIKey: "fixture-upstream", ModelID: "fixture", Provider: "openai", Endpoint: "chat-completions"},
+				{DeploymentID: "target", APIBase: origin.URL + "/target", APIKey: "fixture-upstream", ModelID: "fixture", Provider: "openai", Endpoint: "chat-completions"},
+			}},
+			{Alias: "hidden-from-key", Candidates: []Candidate{
+				{DeploymentID: "private", APIBase: origin.URL, APIKey: "fixture-upstream", ModelID: "fixture", Provider: "openai", Endpoint: "chat-completions"},
+			}},
+		},
+	})
+	for _, fixture := range []struct {
+		path, method, token, body, contains string
+		status                              int
+	}{
+		{"/test", "GET", "limited", "", `"route":"/test"`, http.StatusOK},
+		{"/health/license", "GET", "limited", "", `"license_type":"community"`, http.StatusOK},
+		{"/settings", "GET", "limited", "", `"num_callbacks":0`, http.StatusOK},
+		{"/health/test_connection", "POST", "limited", `{"mode":"chat","model_info":{"id":"target"},"litellm_params":{"model":"public"}}`, `"status_code":429`, http.StatusOK},
+		{"/health/test_connection", "POST", "limited", `{"model_info":{"id":"private"}}`, `"code":"model_not_found"`, http.StatusNotFound},
+		{"/health/test_connection", "POST", "limited", `{"litellm_params":{"model":"public","api_base":"http://example.invalid"}}`, "", http.StatusBadRequest},
+		{"/health/test_connection", "POST", "", `{"model_info":{"id":"target"}}`, "", http.StatusUnauthorized},
+	} {
+		request := httptest.NewRequest(fixture.method, fixture.path, strings.NewReader(fixture.body))
+		request.Header.Set("Authorization", "Bearer "+fixture.token)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != fixture.status || !strings.Contains(response.Body.String(), fixture.contains) ||
+			strings.Contains(response.Body.String(), "fixture-upstream") {
+			t.Fatalf("%s returned %d: %s", fixture.path, response.Code, response.Body)
+		}
+	}
+}
