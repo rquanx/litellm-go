@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -58,11 +59,15 @@ policy_attachments:
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry, err := OpenPolicyRegistry(config.Policy, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := runtime.NewServer(runtime.Config{
 		Token: "master", Routes: config.Routes, Guardrails: config.Guardrails,
-		PolicyGuardrails: config.Policy.GuardrailsFor(nil),
+		PolicyGuardrails: registry.GuardrailsFor(nil),
 	})
-	handler := config.Policy.Handler(server, "master")
+	handler := registry.Handler(server, "master")
 	request := func(path, token, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -98,4 +103,70 @@ func TestPolicyRejectsInheritanceCycle(t *testing.T) {
 	if err == nil {
 		t.Fatal("cyclic policies were accepted")
 	}
+}
+
+func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	statements := []string{
+		`CREATE TEMP TABLE ` + policyTable + ` (
+			policy_name text, version_number integer, version_status text, inherit text,
+			guardrails_add text[], guardrails_remove text[], condition jsonb, pipeline jsonb
+		)`,
+		`CREATE TEMP TABLE ` + policyAttachmentTable + ` (
+			attachment_id text, policy_name text, scope text, teams text[], keys text[], models text[], tags text[],
+			created_at timestamp DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT INTO ` + policyTable + ` VALUES
+			('production-rule',1,'production',NULL,ARRAY['first'],'{}',NULL,NULL),
+			('production-rule',2,'draft',NULL,ARRAY['next'],'{}',NULL,NULL)`,
+		`INSERT INTO ` + policyAttachmentTable + ` (attachment_id,policy_name,scope)
+			VALUES ('attachment','production-rule','*')`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry, err := OpenPolicyRegistry(nil, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := registry.Handler(http.NotFoundHandler(), "master")
+	resolve := func(query string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/policies/resolve"+query, strings.NewReader(`{}`))
+		r.Header.Set("Authorization", "Bearer master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	check := func(query, guard string) {
+		t.Helper()
+		w := resolve(query)
+		var response policyResolution
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &response) != nil || !reflect.DeepEqual(response.Guardrails, []string{guard}) {
+			t.Fatalf("expected %q, got %d %s", guard, w.Code, w.Body)
+		}
+	}
+	check("", "first")
+	if _, err := db.Exec(`UPDATE ` + policyTable + ` SET version_status='production' WHERE version_number=2`); err != nil {
+		t.Fatal(err)
+	}
+	check("", "first")
+	check("?force_sync=true", "next")
+	if _, err := db.Exec(`UPDATE ` + policyTable + ` SET inherit='missing' WHERE version_number=2`); err != nil {
+		t.Fatal(err)
+	}
+	if w := resolve("?force_sync=true"); w.Code != 500 {
+		t.Fatalf("expected invalid inheritance to fail refresh, got %d %s", w.Code, w.Body)
+	}
+	check("", "next")
 }

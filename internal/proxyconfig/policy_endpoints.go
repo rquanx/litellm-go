@@ -1,27 +1,37 @@
 package proxyconfig
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
+	"time"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
-func (engine *PolicyEngine) Handler(next http.Handler, master string) http.Handler {
+func (registry *PolicyRegistry) Handler(next http.Handler, master string) http.Handler {
 	mux := http.NewServeMux()
-	protected := func(pattern string, handler http.HandlerFunc) {
+	protected := func(pattern string, handler func(*PolicyEngine, http.ResponseWriter, *http.Request)) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if master == "" || subtle.ConstantTimeCompare([]byte(master), []byte(runtime.ProxyCredential(r))) != 1 {
 				modelError(w, http.StatusUnauthorized, "Proxy master key required")
 				return
 			}
-			handler(w, r)
+			if r.URL.Path == "/policies/resolve" && r.URL.Query().Get("force_sync") == "true" {
+				ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+				defer cancel()
+				if err := registry.refresh(ctx); err != nil {
+					modelError(w, http.StatusInternalServerError, "Could not load database policies")
+					return
+				}
+			}
+			handler(registry.current.Load(), w, r)
 		})
 	}
-	protected("POST /policies/resolve", engine.previewPolicy)
-	protected("POST /policy/test", engine.previewPolicy)
-	protected("GET /policy/list", engine.listPolicies)
-	protected("GET /policy/info/{policy_name}", engine.listPolicies)
+	protected("POST /policies/resolve", (*PolicyEngine).previewPolicy)
+	protected("POST /policy/test", (*PolicyEngine).previewPolicy)
+	protected("GET /policy/list", (*PolicyEngine).listPolicies)
+	protected("GET /policy/info/{policy_name}", (*PolicyEngine).listPolicies)
 	mux.Handle("/", next)
 	return mux
 }

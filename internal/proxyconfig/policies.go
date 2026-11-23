@@ -31,6 +31,7 @@ type policyAttachment struct {
 }
 
 type PolicyEngine struct {
+	definitions map[string]policyRule
 	policies    map[string]compiledPolicy
 	attachments []policyAttachment
 }
@@ -51,7 +52,7 @@ func compilePolicies(definitions map[string]policyRule, attachments []policyAtta
 	if len(definitions) == 0 && len(attachments) == 0 {
 		return nil, nil
 	}
-	engine := &PolicyEngine{policies: make(map[string]compiledPolicy), attachments: attachments}
+	engine := &PolicyEngine{definitions: definitions, policies: make(map[string]compiledPolicy), attachments: attachments}
 	active := make(map[string]bool)
 	var compile func(string) (compiledPolicy, error)
 	compile = func(name string) (compiledPolicy, error) {
@@ -235,17 +236,12 @@ func (engine *PolicyEngine) resolveRule(rule compiledPolicy, input *policyContex
 	return result
 }
 
-func (engine *PolicyEngine) GuardrailsFor(keys *KeyRegistry) func(*http.Request, string) []string {
-	if engine == nil {
-		return nil
+func (engine *PolicyEngine) guardrailsFor(keys *KeyRegistry, r *http.Request, model string) []string {
+	input := policyContext{Model: model}
+	if keys != nil {
+		input = keys.policyContext(r, model)
 	}
-	return func(r *http.Request, model string) []string {
-		context := policyContext{Model: model}
-		if keys != nil {
-			context = keys.policyContext(r, model)
-		}
-		return engine.resolve(context, true).Guardrails
-	}
+	return engine.resolve(input, true).Guardrails
 }
 
 func (keys *KeyRegistry) policyContext(r *http.Request, model string) policyContext {
