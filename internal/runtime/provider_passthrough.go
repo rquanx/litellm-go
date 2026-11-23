@@ -33,6 +33,9 @@ var providerPassThroughRoutes = map[string]providerPassThrough{
 func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request) bool {
 	provider, suffix, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	prefix := "/" + provider
+	if provider == "milvus" {
+		return s.serveMilvusPassThrough(w, r, suffix)
+	}
 	if provider == "bedrock" {
 		return s.serveBedrockPassThrough(w, r, suffix)
 	}

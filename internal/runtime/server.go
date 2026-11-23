@@ -45,6 +45,7 @@ type Config struct {
 	LegacyFiles         LegacyFileLookup
 	LegacyVectorStores  LegacyFileLookup
 	VectorRegistryLookup VectorRegistryLookup
+	MilvusIndexLookup MilvusIndexLookup
 	ResponsePolling     ResponsePollingConfig
 	PollingStore        PollingStore
 	InferenceCache      InferenceCacheConfig

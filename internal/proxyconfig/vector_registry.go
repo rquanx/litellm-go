@@ -32,7 +32,12 @@ func WithVectorRegistry(next http.Handler, db *sql.DB, keys *KeyRegistry) (http.
 		team_id TEXT, user_id TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
 		updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'));
 		CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoresTable_team_id_idx" ON `+vectorRegistryTable+`(team_id);
-		CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoresTable_user_id_idx" ON `+vectorRegistryTable+`(user_id);`)
+		CREATE INDEX IF NOT EXISTS "LiteLLM_ManagedVectorStoresTable_user_id_idx" ON `+vectorRegistryTable+`(user_id);
+		CREATE TABLE IF NOT EXISTS "LiteLLM_ManagedVectorStoreIndexTable" (
+			id TEXT PRIMARY KEY, index_name TEXT NOT NULL UNIQUE, litellm_params JSONB NOT NULL,
+			index_info JSONB, created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+			created_by TEXT, updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'), updated_by TEXT
+		);`)
 	if err != nil {
 		return nil, errors.New("could not initialize managed vector stores")
 	}
