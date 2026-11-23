@@ -48,6 +48,9 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	if prompt.Params["prompt_integration"] == "generic_prompt_management" {
 		return renderGenericPrompt(r, fields, prompt)
 	}
+	if prompt.Params["prompt_integration"] == "langfuse" {
+		return renderLangfusePrompt(r, fields, prompt)
+	}
 	if prompt.Params["prompt_integration"] != "dotprompt" {
 		return http.StatusBadRequest, errors.New("Unsupported prompt integration")
 	}

@@ -36,6 +36,8 @@ type promptRecord struct {
 func (record promptRecord) public() promptRecord {
 	record.Params = maps.Clone(record.Params)
 	delete(record.Params, "api_key")
+	delete(record.Params, "langfuse_secret")
+	delete(record.Params, "langfuse_secret_key")
 	delete(record.Params, "provider_specific_query_params")
 	if address, ok := record.Params["api_base"].(string); ok {
 		if clean, _, found := strings.Cut(address, "?"); found {

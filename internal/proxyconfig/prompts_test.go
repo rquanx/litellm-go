@@ -75,6 +75,28 @@ func TestGenericStoredPromptFetchesAndRendersThroughInference(t *testing.T) {
 	}
 }
 
+func TestLangfusePromptUsesEscapedNameAndBasicAuth(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, key, ok := r.BasicAuth()
+		if !ok || user != "fixture-public" || key != "fixture-secret" || r.URL.EscapedPath() != "/api/public/v2/prompts/team%2Fexample" ||
+			r.URL.Query().Get("label") != "production" {
+			t.Errorf("unexpected Langfuse request: %s", r.URL)
+		}
+		io.WriteString(w, `{"type":"text","prompt":"Hello {{ who }}","config":{"model":"demo","temperature":0.2}}`)
+	}))
+	defer origin.Close()
+	fields := map[string]any{"model": "langfuse/ignored", "prompt_id": "demo", "prompt_label": "production",
+		"prompt_variables": map[string]any{"who": "fixture"}}
+	params := map[string]any{"api_base": origin.URL, "prompt_id": "team/example",
+		"langfuse_public_key": "fixture-public", "langfuse_secret_key": "fixture-secret"}
+	code, err := renderLangfusePrompt(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), fields, promptRecord{Params: params})
+	messages, _ := fields["messages"].([]any)
+	if code != 0 || err != nil || fields["model"] != "demo" || fields["temperature"] != 0.2 ||
+		len(messages) != 1 || messages[0].(map[string]any)["content"] != "Hello fixture" || fields["prompt_id"] != nil {
+		t.Fatalf("unexpected Langfuse rendering: %d %v %+v", code, err, fields)
+	}
+}
+
 func TestPostgresPromptVersionsEnvironmentsAndScope(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
 	if dsn == "" {

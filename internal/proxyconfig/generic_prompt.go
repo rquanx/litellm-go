@@ -16,7 +16,9 @@ import (
 
 var genericPromptVariable = regexp.MustCompile(`\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\}|\{[a-zA-Z_][a-zA-Z0-9_]*\}`)
 
-var genericPromptHTTPClient = &http.Client{
+const maxManagedPromptBytes = 2 << 20
+
+var managedPromptHTTPClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
@@ -56,48 +58,70 @@ func renderGenericPrompt(r *http.Request, fields map[string]any, record promptRe
 		}
 	}
 	target.RawQuery = query.Encode()
-	timeout := 30 * time.Second
-	if seconds, ok := record.Params["timeout"].(float64); ok && seconds >= 1 && seconds <= 30 {
-		timeout = time.Duration(seconds * float64(time.Second))
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return http.StatusBadRequest, errors.New("Invalid prompt manager request")
-	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
+	var auth string
 	if key != "" {
-		request.Header.Set("Authorization", "Bearer "+key)
+		auth = "Bearer " + key
 	}
-	response, err := genericPromptHTTPClient.Do(request)
-	if err != nil {
-		return http.StatusBadGateway, errors.New("Could not reach prompt manager")
-	}
-	defer response.Body.Close()
-	if response.StatusCode/100 != 2 {
-		return http.StatusBadGateway, errors.New("Prompt manager rejected the request")
-	}
-	const maxPromptBytes = 2 << 20
-	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPromptBytes+1))
 	var template struct {
 		Messages []map[string]any `json:"prompt_template"`
 		Model    string           `json:"prompt_template_model"`
 		Options  map[string]any   `json:"prompt_template_optional_params"`
 	}
-	if err != nil || len(raw) > maxPromptBytes || json.Unmarshal(raw, &template) != nil || len(template.Messages) == 0 {
+	size, err := fetchManagedPrompt(r.Context(), target, auth, record.Params, &template)
+	if err != nil || len(template.Messages) == 0 {
 		return http.StatusBadGateway, errors.New("Invalid prompt manager response")
 	}
+	if err := substituteManagedPrompt(template.Messages, fields, size, genericPromptVariable); err != nil {
+		return http.StatusBadRequest, err
+	}
+	metadata := map[string]any{}
+	maps.Copy(metadata, template.Options)
+	metadata["model"] = template.Model
+	applyStoredPrompt(fields, record.Params, metadata, template.Messages, "generic_prompt/")
+	return 0, nil
+}
+
+func fetchManagedPrompt(parent context.Context, target *url.URL, authorization string, params map[string]any, template any) (int, error) {
+	timeout := 30 * time.Second
+	if seconds, ok := params["timeout"].(float64); ok && seconds >= 1 && seconds <= 30 {
+		timeout = time.Duration(seconds * float64(time.Second))
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return 0, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	if authorization != "" {
+		request.Header.Set("Authorization", authorization)
+	}
+	response, err := managedPromptHTTPClient.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode/100 != 2 {
+		return 0, errors.New("prompt manager rejected the request")
+	}
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxManagedPromptBytes+1))
+	if err != nil || len(raw) > maxManagedPromptBytes {
+		return 0, errors.New("could not read prompt manager response")
+	}
+	return len(raw), json.Unmarshal(raw, template)
+}
+
+func substituteManagedPrompt(messages []map[string]any, fields map[string]any, size int, pattern *regexp.Regexp) error {
 	variables, _ := fields["prompt_variables"].(map[string]any)
-	remaining := maxPromptBytes - len(raw)
-	for _, message := range template.Messages {
+	remaining := maxManagedPromptBytes - size
+	for _, message := range messages {
 		content, ok := message["content"].(string)
 		if !ok {
 			continue
 		}
-		message["content"] = genericPromptVariable.ReplaceAllStringFunc(content, func(marker string) string {
-			value, ok := variables[strings.Trim(marker, "{}")]
+		message["content"] = pattern.ReplaceAllStringFunc(content, func(marker string) string {
+			value, ok := variables[strings.TrimSpace(strings.Trim(marker, "{}"))]
 			if !ok {
 				return marker
 			}
@@ -109,12 +133,8 @@ func renderGenericPrompt(r *http.Request, fields map[string]any, record promptRe
 			return text
 		})
 		if remaining < 0 {
-			return http.StatusBadRequest, errors.New("Rendered prompt exceeds the size limit")
+			return errors.New("Rendered prompt exceeds the size limit")
 		}
 	}
-	metadata := map[string]any{}
-	maps.Copy(metadata, template.Options)
-	metadata["model"] = template.Model
-	applyStoredPrompt(fields, record.Params, metadata, template.Messages, "generic_prompt/")
-	return 0, nil
+	return nil
 }
