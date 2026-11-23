@@ -27,6 +27,7 @@ func main() {
 	importSearch := flag.Bool("import-litellm-search-tools", false, "Import LiteLLM search tools into Go PostgreSQL state")
 	importMCP := flag.Bool("import-litellm-mcp-servers", false, "Import supported LiteLLM MCP servers into Go PostgreSQL state")
 	importSpend := flag.Bool("import-litellm-spend", false, "Import LiteLLM spend metadata into Go PostgreSQL state")
+	importHealth := flag.Bool("import-litellm-health", false, "Import LiteLLM health history into Go PostgreSQL state")
 	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
@@ -98,7 +99,7 @@ func main() {
 		config.LegacyVectorStores = proxyconfig.LegacyVectorStoreLookup(stateDB)
 	}
 	importCount := 0
-	for _, requested := range []bool{*importModels, *importAgents, *importCredentials, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend} {
+	for _, requested := range []bool{*importModels, *importAgents, *importCredentials, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend, *importHealth} {
 		if requested {
 			importCount++
 		}
@@ -109,6 +110,14 @@ func main() {
 		}
 		if importCount != 1 {
 			log.Fatal("Select one LiteLLM import command")
+		}
+		if *importHealth {
+			count, err := proxyconfig.ImportLiteLLMHealth(stateDB)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM health checks", count)
+			return
 		}
 		if *importSpend {
 			count, err := proxyconfig.ImportLiteLLMSpend(stateDB)

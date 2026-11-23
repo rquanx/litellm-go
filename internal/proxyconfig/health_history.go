@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/lib/pq"
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -81,4 +82,22 @@ func (store healthHistory) Read(ctx context.Context, query runtime.HealthHistory
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func ImportLiteLLMHealth(db *sql.DB) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := OpenHealthHistory(ctx, db); err != nil {
+		return 0, err
+	}
+	result, err := db.ExecContext(ctx, `INSERT INTO minato_proxy_health
+		(id,model_name,model_id,status,healthy_count,unhealthy_count,response_ms,checked_at)
+		SELECT health_check_id, model_name, COALESCE(NULLIF(model_id,''), model_name), status,
+			healthy_count, unhealthy_count, COALESCE(response_time_ms,0), checked_at AT TIME ZONE 'UTC'
+		FROM "LiteLLM_HealthCheckTable"
+		ON CONFLICT (id) DO NOTHING`)
+	if err != nil {
+		return 0, errors.New("could not import LiteLLM health history")
+	}
+	return result.RowsAffected()
 }
