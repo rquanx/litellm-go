@@ -130,3 +130,17 @@ func TestMCPDynamicClientRegistrationUsesConfiguredCallback(t *testing.T) {
 		t.Fatalf("wrong dynamic registration response %d %s", result.Code, result.Body)
 	}
 }
+
+func TestImportInteractiveMCPSettings(t *testing.T) {
+	t.Setenv("PROXY_BASE_URL", "https://proxy.example.test")
+	row := []byte(`{"server_name":"imported","server_id":"fixture","transport":"http","url":"https://mcp.example.test","auth_type":"oauth2","authorization_url":"https://login.example.test/authorize","token_url":"https://login.example.test/token","registration_url":"https://login.example.test/register"}`)
+	name, entry, inactive, err := decodeLiteLLMMCPServer(row, "fixture-salt")
+	if err != nil || inactive {
+		t.Fatalf("could not import interactive MCP config: %v", err)
+	}
+	servers, err := prepareMCPServers(map[string]mcpServerConfig{name: entry})
+	if err != nil || len(servers) != 1 || servers[0].InteractiveOAuth == nil ||
+		servers[0].InteractiveOAuth.CallbackURL != "https://proxy.example.test/callback" || servers[0].OAuth != nil {
+		t.Fatalf("wrong imported MCP config: %v", err)
+	}
+}
