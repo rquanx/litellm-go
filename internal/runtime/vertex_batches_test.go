@@ -154,3 +154,65 @@ func TestVertexBatchCreateListRetrieveAndCancel(t *testing.T) {
 		t.Fatal("Vertex cancellation was not forwarded")
 	}
 }
+
+func TestVertexFineTuningUsesRegionalDeploymentAndOwnedID(t *testing.T) {
+	const base = "/v1/projects/fixture/locations/us-central1/tuningJobs"
+	const job = `{"name":"projects/fixture/locations/us-central1/tuningJobs/123","baseModel":"gemini-2.5-flash","state":"JOB_STATE_RUNNING","tunedModelDisplayName":"demo","supervisedTuningSpec":{"trainingDatasetUri":"gs://fixture/train.jsonl","hyperParameters":{"epochCount":3}}}`
+	var cancellations atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer fixture" {
+			t.Error("missing Vertex credential")
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "POST " + base:
+			data, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(data), `"training_dataset_uri":"gs://fixture/train.jsonl"`) ||
+				!strings.Contains(string(data), `"hyperParameters":{"epoch_count":3}`) ||
+				!strings.Contains(string(data), `"baseModel":"gemini-2.5-flash"`) {
+				t.Errorf("unexpected tuning request %s", data)
+			}
+			io.WriteString(w, job)
+		case "GET " + base + "/123":
+			io.WriteString(w, job)
+		case "POST " + base + "/123:cancel":
+			cancellations.Add(1)
+			io.WriteString(w, "{}")
+		default:
+			t.Errorf("unexpected tuning request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	candidate := Candidate{Provider: "vertex_ai", APIBase: upstream.URL, APIKey: "fixture", DeploymentID: "fixture",
+		ModelID: "gemini-2.5-flash", Endpoint: "gemini-generate", Vertex: &VertexConfig{Project: "fixture", Location: "us-central1"}}
+	server := NewServer(Config{AuthorizeInference: true, Token: "master",
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"fixture"}, token == "owner" || token == "other" },
+		Routes:       []Route{{Alias: "fixture", Candidates: []Candidate{candidate}}},
+	})
+	call := func(method, path, token, body string, status int) string {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s %s status %d: %s", method, path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	result := call("POST", "/v1/fine_tuning/jobs", "owner", `{"model":"fixture","training_file":"gs://fixture/train.jsonl","hyperparameters":{"n_epochs":3}}`, 200)
+	var decoded struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(result), &decoded) != nil || !strings.HasPrefix(decoded.ID, "minato_") ||
+		!strings.Contains(result, `"status":"running"`) || !strings.Contains(result, `"n_epochs":3`) {
+		t.Fatalf("invalid tuning response %s", result)
+	}
+	route := "/v1/fine_tuning/jobs/" + decoded.ID
+	call("GET", route, "other", "", 404)
+	call("GET", route, "owner", "", 200)
+	call("POST", route+"/cancel", "owner", "", 200)
+	if cancellations.Load() != 1 {
+		t.Fatalf("unexpected Vertex cancellations: %d", cancellations.Load())
+	}
+}

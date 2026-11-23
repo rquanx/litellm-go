@@ -21,6 +21,11 @@ func (s *Server) fineTuningResource(w http.ResponseWriter, r *http.Request, scop
 	if alias == "" {
 		alias = r.Header.Get("X-LiteLLM-Model")
 	}
+	if path != fineTuningPath || r.Method != http.MethodPost {
+		if s.vertexFineTuningResource(w, r, provider, alias, scope) {
+			return
+		}
+	}
 	var deployment string
 	create := path == fineTuningPath && r.Method == http.MethodPost
 	if path == fineTuningPath {
@@ -81,6 +86,10 @@ func (s *Server) fineTuningResource(w http.ResponseWriter, r *http.Request, scop
 		}
 		if alias == "" {
 			alias = model
+		}
+		if provider == "vertex_ai" || (provider == "" && strings.HasPrefix(training, "gs://")) {
+			s.createVertexFineTuning(w, r, alias, scope, fields)
+			return
 		}
 		for _, name := range []string{"training_file", "validation_file"} {
 			if id, _ := fields[name].(string); id != "" {
