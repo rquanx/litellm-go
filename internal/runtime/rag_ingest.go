@@ -95,7 +95,7 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 	if provider == "" {
 		provider = "openai"
 	}
-	if provider != "openai" && provider != "azure" && provider != "gemini" {
+	if provider != "openai" && provider != "azure" && provider != "gemini" && provider != "bedrock" {
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "No RAG ingestion adapter for this provider")
 		return
 	}
@@ -131,6 +131,10 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 	}
 	if provider == "gemini" && (len(input.file) == 0 || input.FileID != "") {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Gemini ingestion requires a document upload or URL")
+		return
+	}
+	if provider == "bedrock" {
+		s.ingestBedrockDocument(w, r, scope, alias, vectors, store, input)
 		return
 	}
 	if vectors == "" {

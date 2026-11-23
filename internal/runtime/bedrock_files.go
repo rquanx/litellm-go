@@ -48,6 +48,10 @@ func bedrockS3Target(config *BedrockConfig, uri *url.URL) (string, error) {
 	if !validUpload && !validOutput {
 		return "", errors.New("S3 object is outside the managed file prefixes")
 	}
+	return bedrockS3URL(config, uri), nil
+}
+
+func bedrockS3URL(config *BedrockConfig, uri *url.URL) string {
 	base := config.S3Endpoint
 	if base == "" {
 		region := config.S3Region
@@ -60,7 +64,7 @@ func bedrockS3Target(config *BedrockConfig, uri *url.URL) (string, error) {
 		}
 		base = "https://s3." + region + "." + domain
 	}
-	return strings.TrimRight(base, "/") + "/" + url.PathEscape(uri.Host) + uri.EscapedPath(), nil
+	return strings.TrimRight(base, "/") + "/" + url.PathEscape(uri.Host) + uri.EscapedPath()
 }
 
 func (s *Server) uploadBedrockFile(w http.ResponseWriter, r *http.Request, alias string, scope []string, form requestPayload) {
@@ -208,6 +212,10 @@ func (s *Server) forwardBedrockS3(w http.ResponseWriter, r *http.Request, candid
 		writeError(w, http.StatusBadRequest, "invalid_file_id", err.Error())
 		return false
 	}
+	return s.sendBedrockS3(w, r, candidate, target, method, media, data)
+}
+
+func (s *Server) sendBedrockS3(w http.ResponseWriter, r *http.Request, candidate Candidate, target, method, media string, data []byte) bool {
 	upstream, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(data))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid S3 request URL")

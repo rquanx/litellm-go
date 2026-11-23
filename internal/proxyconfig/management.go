@@ -284,6 +284,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSBedrockControlEndpoint == "" {
 			model.Params.AWSBedrockControlEndpoint = existing.Params.AWSBedrockControlEndpoint
 		}
+		if model.Params.AWSBedrockAgentEndpoint == "" {
+			model.Params.AWSBedrockAgentEndpoint = existing.Params.AWSBedrockAgentEndpoint
+		}
 		if model.Params.AWSBedrockAgentRuntimeEndpoint == "" {
 			model.Params.AWSBedrockAgentRuntimeEndpoint = existing.Params.AWSBedrockAgentRuntimeEndpoint
 		}
