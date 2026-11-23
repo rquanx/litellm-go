@@ -9,6 +9,10 @@ import (
 )
 
 func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, candidate Candidate, input requestPayload) (int, []byte, http.Header, bool, error) {
+	model := strings.TrimPrefix(candidate.ModelID, "models/")
+	if candidate.Vertex != nil && (model == "multimodalembedding" || model == "multimodalembedding@001") {
+		return s.vertexMultimodalEmbeddings(ctx, request, candidate, input.fields)
+	}
 	var texts []string
 	switch value := input.fields["input"].(type) {
 	case string:
@@ -28,6 +32,8 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 		return http.StatusBadRequest, []byte(`{"error":{"code":"invalid_request","message":"Supply a string or a list of strings"}}`), headers, false, nil
 	}
 	dimensions := input.fields["dimensions"]
+	bge := candidate.Vertex != nil && strings.Contains(strings.ToLower(model), "bge")
+	fineTuned := candidate.Vertex != nil && vertexNumericEndpoint(model)
 	taskType := input.fields["task_type"]
 	if taskType == nil {
 		taskType = input.fields["input_type"]
@@ -48,8 +54,19 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 		}
 		fields["requests"] = items
 	} else {
+		field := "content"
+		switch {
+		case bge:
+			field = "prompt"
+		case fineTuned:
+			field = "inputs"
+		}
 		for _, text := range texts {
-			item := map[string]any{"content": text}
+			item := map[string]any{field: text}
+			if fineTuned {
+				items = append(items, item)
+				continue
+			}
 			if taskType != nil {
 				item["task_type"] = taskType
 			}
@@ -59,8 +76,29 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 			items = append(items, item)
 		}
 		fields["instances"] = items
+		parameters := make(map[string]any)
 		if dimensions != nil {
-			fields["parameters"] = map[string]any{"outputDimensionality": dimensions}
+			parameters["outputDimensionality"] = dimensions
+		}
+		if truncate := input.fields["auto_truncate"]; truncate != nil {
+			parameters["auto_truncate"] = truncate
+		}
+		if bge || fineTuned {
+			for name, value := range map[string]any{"task_type": taskType, "title": title} {
+				if value != nil {
+					parameters[name] = value
+				}
+			}
+		}
+		if fineTuned {
+			for _, name := range []string{"max_new_tokens", "temperature", "top_p", "top_k"} {
+				if value := input.fields[name]; value != nil {
+					parameters[name] = value
+				}
+			}
+		}
+		if len(parameters) != 0 || bge || fineTuned {
+			fields["parameters"] = parameters
 		}
 	}
 	status, response, upstreamHeaders, retryable, err := s.callProviderJSON(ctx, request, "embeddings", candidate, requestPayload{fields: fields})
@@ -75,9 +113,7 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 	}
 	var result struct {
 		Embeddings []vector `json:"embeddings"`
-		Predictions []struct {
-			Embedding vector `json:"embeddings"`
-		} `json:"predictions"`
+		Predictions []json.RawMessage `json:"predictions"`
 		Usage struct {
 			Tokens int `json:"promptTokenCount"`
 		} `json:"usageMetadata"`
@@ -89,9 +125,29 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 	vectors := result.Embeddings
 	if candidate.Vertex != nil {
 		total = 0
-		for _, prediction := range result.Predictions {
-			vectors = append(vectors, prediction.Embedding)
-			total += prediction.Embedding.Stats.Tokens
+		vectors = nil
+		for _, raw := range result.Predictions {
+			var embedding vector
+			switch {
+			case bge:
+				embedding.Values = raw
+			case fineTuned:
+				var values []json.RawMessage
+				if json.Unmarshal(raw, &values) != nil || len(values) == 0 {
+					return 0, nil, nil, true, errors.New("invalid fine-tuned Vertex embedding prediction")
+				}
+				embedding.Values = values[0]
+			default:
+				var prediction struct {
+					Embedding vector `json:"embeddings"`
+				}
+				if json.Unmarshal(raw, &prediction) != nil {
+					return 0, nil, nil, true, errors.New("invalid Vertex embedding prediction")
+				}
+				embedding = prediction.Embedding
+			}
+			vectors = append(vectors, embedding)
+			total += embedding.Stats.Tokens
 		}
 	}
 	if len(vectors) != len(texts) {
@@ -110,4 +166,8 @@ func (s *Server) googleEmbeddings(ctx context.Context, request *http.Request, ca
 		return 0, nil, nil, false, errors.New("Google embedding response exceeds the body limit")
 	}
 	return http.StatusOK, body, headers, false, err
+}
+
+func vertexNumericEndpoint(model string) bool {
+	return model != "" && strings.Trim(model, "0123456789") == ""
 }

@@ -835,7 +835,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if entry.Info.Mode == "image_edit" {
 			endpoint = "image-edit"
 		}
-		if strings.Contains(model, "embedding") {
+		if strings.Contains(model, "embedding") || entry.Info.Mode == "embedding" ||
+			(provider == "vertex_ai" && strings.Contains(strings.ToLower(model), "bge")) {
 			endpoint = "google-embeddings"
 		}
 		if provider == "vertex_ai" && (entry.Info.Mode == "rerank" || strings.HasPrefix(model, "semantic-ranker-")) {
@@ -881,8 +882,11 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if endpoint == "bedrock-converse" && (configured == "chat-completions" || configured == "responses") {
 			configured = endpoint
 		}
-		if configured == "embeddings" && (endpoint == "bedrock-embeddings" || endpoint == "google-embeddings") {
+		if configured == "embeddings" && endpoint == "bedrock-embeddings" {
 			configured = endpoint
+		}
+		if configured == "embeddings" && (provider == "gemini" || provider == "vertex_ai") {
+			configured = "google-embeddings"
 		}
 		if configured == "embeddings" && (provider == "cohere" || provider == "cohere_chat") {
 			configured = "cohere-embeddings"

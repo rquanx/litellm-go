@@ -86,9 +86,12 @@ func geminiTarget(candidate Candidate, endpoint string) string {
 	base := strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/v1")
 	vertex := candidate.Vertex
 	model := strings.TrimPrefix(candidate.ModelID, "models/")
-	target := base + "/v1/projects/" + url.PathEscape(vertex.Project) + "/locations/" + url.PathEscape(vertex.Location) +
-		"/publishers/google/models/" + url.PathEscape(model)
+	project := base + "/v1/projects/" + url.PathEscape(vertex.Project) + "/locations/" + url.PathEscape(vertex.Location)
+	target := project + "/publishers/google/models/" + url.PathEscape(model)
 	if endpoint == "google-embeddings" {
+		if id := strings.TrimPrefix(model, "bge/"); vertexNumericEndpoint(id) {
+			return project + "/endpoints/" + id + ":predict"
+		}
 		return target + ":predict"
 	}
 	if endpoint == "gemini-count-tokens" {
