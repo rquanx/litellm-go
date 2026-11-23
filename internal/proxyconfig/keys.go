@@ -60,6 +60,7 @@ type KeyRegistry struct {
 	state  accessState
 	ssoDefaults *SSOUserDefaults
 	ssoTeamClaim string
+	browserSSO *postgresBrowserSSO
 	teamMemberSpend func(context.Context, string, string) (float64, error)
 }
 
@@ -68,7 +69,17 @@ func LoadKeys(master, path string) (*KeyRegistry, error) {
 }
 
 func LoadPostgresKeys(master string, db *sql.DB) (*KeyRegistry, error) {
-	return loadKeys(master, chooseStateStore("", db, "keys"))
+	registry, err := loadKeys(master, chooseStateStore("", db, "keys"))
+	if err != nil {
+		return nil, err
+	}
+	if loadUISSOConfig().ready() {
+		registry.browserSSO, err = openPostgresBrowserSSO(db, master)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return registry, nil
 }
 
 func loadKeys(master string, store stateStore) (*KeyRegistry, error) {

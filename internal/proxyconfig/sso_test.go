@@ -1,12 +1,14 @@
 package proxyconfig
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,6 +16,45 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+func TestPostgresBrowserSSOStateIsSingleUseAcrossReplicas(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	primary, err := openPostgresBrowserSSO(db, "master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica, err := openPostgresBrowserSSO(db, "master")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := "sso-fixture-" + newEntityID()
+	ctx := context.Background()
+	if err := primary.save(ctx, "fixture-provider", state, uiSSOFlow{verifier: "fixture-verifier", expires: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	var encrypted string
+	if err := db.QueryRow(`SELECT verifier FROM `+browserSSOTable+` WHERE state_digest=$1`, keyDigest(state)).Scan(&encrypted); err != nil ||
+		strings.Contains(encrypted, "fixture-verifier") {
+		t.Fatal("SSO verifier was not durably encrypted")
+	}
+	if _, err := replica.consume(ctx, "different-provider", state); err == nil {
+		t.Fatal("wrong SSO provider was allowed to consume state")
+	}
+	if flow, err := replica.consume(ctx, "fixture-provider", state); err != nil || flow.verifier != "fixture-verifier" {
+		t.Fatalf("replica could not consume the authorization state: %v", err)
+	}
+	if _, err := primary.consume(ctx, "fixture-provider", state); err == nil {
+		t.Fatal("browser SSO state was consumed twice")
+	}
+}
 
 func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 	var challenge string

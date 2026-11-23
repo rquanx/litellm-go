@@ -114,10 +114,7 @@ func (store *postgresState) save(value any) error {
 		return err
 	}
 	if store.key != nil {
-		var nonce [24]byte
-		rand.Read(nonce[:])
-		encrypted := secretbox.Seal(nonce[:], payload, &nonce, store.key)
-		payload, err = json.Marshal(base64.RawURLEncoding.EncodeToString(encrypted))
+		payload, err = json.Marshal(sealState(payload, store.key))
 		if err != nil {
 			return err
 		}
@@ -144,6 +141,13 @@ func (store *postgresState) save(value any) error {
 	}
 	store.revision++
 	return nil
+}
+
+func sealState(payload []byte, key *[32]byte) string {
+	var nonce [24]byte
+	rand.Read(nonce[:])
+	encrypted := secretbox.Seal(nonce[:], payload, &nonce, key)
+	return base64.RawURLEncoding.EncodeToString(encrypted)
 }
 
 func openState(value string, key *[32]byte) ([]byte, error) {
