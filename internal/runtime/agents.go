@@ -15,6 +15,7 @@ import (
 )
 
 type Agent struct {
+	Pydantic bool
 	Completion        *Candidate
 	CompletionOptions map[string]any
 	ID, Name, URL     string
@@ -180,6 +181,10 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 				s.config.Callback(recorder.event)
 			}
 		}()
+	}
+	if agent.Pydantic {
+		s.relayPydanticAgent(w, r, agent, message)
+		return
 	}
 	if agent.Completion != nil {
 		s.relayAgentCompletion(w, r, agent, message)

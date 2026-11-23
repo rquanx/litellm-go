@@ -232,3 +232,50 @@ agent_list:
 		}
 	}
 }
+
+func TestPydanticAgentPollsAndReturnsArtifacts(t *testing.T) {
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var fields struct {
+			Method string
+			Params json.RawMessage
+		}
+		if json.NewDecoder(r.Body).Decode(&fields) != nil {
+			t.Error("invalid request")
+		}
+		switch fields.Method {
+		case "message/send":
+			if !strings.Contains(string(fields.Params), `"kind":"message"`) || strings.Contains(string(fields.Params), "null") {
+				t.Error("message was not normalized")
+			}
+			fmt.Fprint(w, `{"result":{"id":"fixture","status":{"state":"submitted"}}}`)
+		case "tasks/get":
+			if string(fields.Params) != `{"id":"fixture"}` {
+				t.Error("wrong task ID")
+			}
+			fmt.Fprint(w, `{"result":{"id":"fixture","status":{"state":"completed"},"artifacts":[{"parts":[{"kind":"text","text":"fixture artifact"}]}]}}`)
+		default:
+			t.Errorf("unexpected A2A method %q", fields.Method)
+		}
+	}))
+	defer cloud.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+agent_list:
+  - agent_name: pydantic
+    agent_card_params: {name: fixture, url: %q}
+    litellm_params: {custom_llm_provider: pydantic_ai_agents}
+`, cloud.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", Agents: config.Agents})
+	for _, method := range []string{"message/send", "message/stream"} {
+		body := fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":%q,"params":{"message":{"role":"user","parts":[],"metadata":null}}}`, method)
+		r := httptest.NewRequest(http.MethodPost, "/a2a/pydantic", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer master")
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, r)
+		if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "fixture artifact") {
+			t.Fatalf("unexpected Pydantic response %d %s", result.Code, result.Body)
+		}
+	}
+}

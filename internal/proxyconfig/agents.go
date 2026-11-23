@@ -37,7 +37,8 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 		}
 		address, err := url.Parse(resolved)
 		provider, _ := entry.Parameters["custom_llm_provider"].(string)
-		bridge := provider != "" && provider != "a2a_agent"
+		pydantic := provider == "pydantic_ai_agents"
+		bridge := provider != "" && provider != "a2a_agent" && !pydantic
 		if (resolved != "" || !bridge) && (err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
 			(address.Scheme != "http" && address.Scheme != "https")) {
 			return nil, fmt.Errorf("invalid A2A URL for agent %q", entry.Name)
@@ -73,7 +74,7 @@ func prepareAgents(config []agentConfig, public []string) ([]runtime.Agent, erro
 				}
 			}
 		}
-		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: resolved, Completion: completion, CompletionOptions: options, Card: entry.Card, Headers: headers,
+		agents = append(agents, runtime.Agent{ID: id, Name: entry.Name, URL: resolved, Pydantic: pydantic, Completion: completion, CompletionOptions: options, Card: entry.Card, Headers: headers,
 			ExtraHeaders: entry.ExtraHeaders, AccessGroups: slices.Clone(entry.AccessGroups), RequireTraceID: requireTraceID, Public: slices.Contains(public, id) || slices.Contains(public, entry.Name)})
 	}
 	return agents, nil
