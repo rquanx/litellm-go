@@ -179,3 +179,58 @@ func TestBedrockMarengoImageEmbeddings(t *testing.T) {
 		t.Fatalf("unexpected Marengo result %d %s", response.Code, response.Body)
 	}
 }
+
+func TestBedrockAsyncBatchStatusUsesSubmissionDeploymentAndOwner(t *testing.T) {
+	const id = "arn:aws:bedrock:us-east-1:123456789012:async-invoke/fixture"
+	const model = "async_invoke/amazon.nova-2-multimodal-embeddings-v1:0"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=fixture/") {
+			t.Error("request was not signed for Bedrock")
+		}
+		switch r.Method {
+		case http.MethodPost:
+			fmt.Fprintf(w, `{"invocationArn":%q}`, id)
+		case http.MethodGet:
+			if r.URL.Path != "/async-invoke/"+id || !strings.HasSuffix(r.URL.EscapedPath(), "async-invoke%2Ffixture") {
+				t.Errorf("unexpected status path %s", r.URL.EscapedPath())
+			}
+			fmt.Fprintf(w, `{"invocationArn":%q,"modelArn":"fixture","status":"Completed","submitTime":"2026-01-01T01:02:03Z","endTime":"2026-01-01T01:02:05Z","outputDataConfig":{"s3OutputDataConfig":{"s3Uri":"s3://fixture/output/"}}}`, id)
+		default:
+			t.Error("unexpected provider operation")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer upstream.Close()
+	candidate := Candidate{APIBase: upstream.URL, ModelID: model, Endpoint: "bedrock-embeddings", DeploymentID: "fixture",
+		Provider: "bedrock", Bedrock: &BedrockConfig{Region: "us-east-1", AccessKey: "fixture", SecretKey: "fixture-secret"}}
+	server := NewServer(Config{
+		Token: "master", AuthorizeInference: true,
+		AuthorizeKey: func(key string) ([]string, bool) { return []string{"async"}, key == "owner" || key == "other" },
+		Routes: []Route{{Alias: "async", Candidates: []Candidate{candidate}}},
+	})
+	send := func(method, path, token, body string, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != expected {
+			t.Fatalf("%s %s status = %d, expected %d: %s", method, path, response.Code, expected, response.Body)
+		}
+		return response
+	}
+	batch := "/v1/batches/" + id
+	send("GET", batch, "owner", "", 404)
+	start := send("POST", "/v1/embeddings", "owner", `{"model":"async","input":"example","output_s3_uri":"s3://fixture/output/"}`, 200)
+	if start.Header().Get("X-LiteLLM-Invocation-ARN") != id {
+		t.Fatal("submission did not return its invocation ARN")
+	}
+	send("GET", batch, "other", "", 404)
+	send("GET", batch+"?model=another", "owner", "", 404)
+	response := send("GET", strings.Replace(batch, "async-invoke/fixture", "async-invoke%2Ffixture", 1), "owner", "", 200)
+	for _, expected := range []string{`"status":"completed"`, `"request_counts":{"completed":1,"failed":0,"total":1}`, `"output_file_id":"s3://fixture/output/"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("expected %s in %s", expected, response.Body)
+		}
+	}
+}

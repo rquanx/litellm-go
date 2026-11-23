@@ -122,6 +122,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if alias == "" {
 		alias = strings.TrimSpace(request.Header.Get("X-LiteLLM-Model"))
 	}
+	if family == "batches" && s.bedrockAsyncBatchResource(writer, request, alias, provider, scope) {
+		return
+	}
 	var deployment string
 	for _, field := range []string{"after", "before"} {
 		cursor := request.URL.Query().Get(field)

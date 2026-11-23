@@ -130,6 +130,12 @@ func (s *Server) startBedrockEmbedding(ctx context.Context, request *http.Reques
 	if json.Unmarshal(raw, &result) != nil || result.ARN == "" {
 		return 0, nil, nil, false, errors.New("missing Bedrock invocation ID")
 	}
+	if !s.authorized(request) && s.config.ContainerOwners != nil {
+		owner := s.containerOwnerScopes(request, false)[0]
+		if err := s.config.ContainerOwners.Record(context.WithoutCancel(ctx), candidate.DeploymentID, result.ARN, owner); err != nil {
+			return 0, nil, nil, false, errors.New("could not record Bedrock invocation ownership")
+		}
+	}
 	headers.Set("X-LiteLLM-Invocation-ARN", result.ARN)
 	body, err := json.Marshal(map[string]any{"object": "list", "model": candidate.ModelID,
 		"data": []map[string]any{{"object": "embedding", "index": 0, "embedding": []float64{}}},
