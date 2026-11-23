@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -92,6 +93,8 @@ type inferenceCacheRequest struct {
 	maxAge      *time.Duration
 	read, write bool
 	stream      bool
+	responses   bool
+	stateless   bool
 }
 
 func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, stream bool, payload *requestPayload) inferenceCacheRequest {
@@ -117,10 +120,21 @@ func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, 
 	}
 	delete(payload.fields, "cache")
 	delete(payload.fields, "caching")
-	if (stream && endpoint != "chat-completions" && endpoint != "completions") || ((config.OptIn || explicit) && !optIn) || r.Header.Get("X-OpenCode-Session") != "" {
+	if (stream && endpoint != "chat-completions" && endpoint != "completions" && endpoint != "responses") || ((config.OptIn || explicit) && !optIn) || r.Header.Get("X-OpenCode-Session") != "" {
 		return inferenceCacheRequest{}
 	}
-	policy := inferenceCacheRequest{ttl: config.TTL, stream: stream, read: directives["no-cache"] != true, write: directives["no-store"] != true}
+	if endpoint == "responses" {
+		if payload.fields["previous_response_id"] != nil || payload.fields["conversation"] != nil || inputBool(payload.fields, "background") {
+			return inferenceCacheRequest{}
+		}
+		if tools, _ := payload.fields["tools"].([]any); slices.ContainsFunc(tools, func(value any) bool {
+			tool, _ := value.(map[string]any)
+			return tool["type"] != "function"
+		}) {
+			return inferenceCacheRequest{}
+		}
+	}
+	policy := inferenceCacheRequest{ttl: config.TTL, stream: stream, responses: endpoint == "responses", stateless: payload.fields["store"] == false, read: directives["no-cache"] != true, write: directives["no-store"] != true}
 	if ttl, ok := cacheSeconds(directives["ttl"]); ok {
 		policy.ttl = ttl
 	}
@@ -162,7 +176,7 @@ func cacheValue(value any) string {
 
 func (policy inferenceCacheRequest) key(candidate Candidate) string {
 	if len(policy.keyParts) == 0 || (!policy.read && !policy.write) || candidate.Bedrock != nil ||
-		candidate.Vertex != nil || candidate.WatsonX != nil {
+		candidate.Vertex != nil || candidate.WatsonX != nil || (candidate.Endpoint == "responses" && (!policy.responses || !policy.stateless)) {
 		return ""
 	}
 	key := candidate.APIKey
@@ -233,6 +247,14 @@ func (s *Server) serveCachedInference(w http.ResponseWriter, r *http.Request, po
 func (s *Server) storeInference(r *http.Request, policy inferenceCacheRequest, key string, status int, contentType string, body []byte) {
 	if !policy.write || policy.ttl <= 0 || len(body) > maxCacheResponse || len(body) == 0 {
 		return
+	}
+	if policy.responses && !policy.stream {
+		var response struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(body, &response) != nil || response.Status != "completed" {
+			return
+		}
 	}
 	entry := cachedInference{Created: time.Now(), Status: status, ContentType: contentType}
 	if policy.stream || !json.Valid(body) {

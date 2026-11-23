@@ -66,7 +66,7 @@ func (params inferenceCacheParams) apply(config *Config) error {
 	cache.Endpoints = make(map[string]bool)
 	callTypes := params.CallTypes
 	if callTypes == nil {
-		callTypes = []string{"acompletion", "aembedding", "atext_completion", "arerank", "atranscription"}
+		callTypes = []string{"acompletion", "aembedding", "atext_completion", "arerank", "atranscription", "aresponses"}
 	}
 	for _, call := range callTypes {
 		switch call {
@@ -80,7 +80,9 @@ func (params inferenceCacheParams) apply(config *Config) error {
 			cache.Endpoints["rerank"] = true
 		case "atranscription":
 			cache.Endpoints["transcription"] = true
-		case "completion", "embedding", "text_completion", "rerank", "transcription":
+		case "aresponses":
+			cache.Endpoints["responses"] = true
+		case "completion", "embedding", "text_completion", "rerank", "transcription", "responses":
 			// The HTTP proxy dispatches asynchronous call types.
 		default:
 			return errors.New("unsupported inference cache call type")

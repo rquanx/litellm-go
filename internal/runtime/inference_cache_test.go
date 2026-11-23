@@ -154,3 +154,39 @@ func TestInferenceCacheUsesTranscriptionFileContent(t *testing.T) {
 	call("audio one", "transcription 1", true)
 	call("audio two", "transcription 2", false)
 }
+
+func TestResponsesCacheSkipsPersistedResponses(t *testing.T) {
+	var requests atomic.Int32
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := readBody(r, 4096)
+		w.Header().Set("Content-Type", "application/json")
+		count := requests.Add(1)
+		if strings.Contains(string(body), `"stream":true`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprintf(w, "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_%d\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_%d\",\"status\":\"completed\"}}\n\n", count, count)
+			return
+		}
+		fmt.Fprintf(w, `{"id":"resp_%d","status":"completed","object":"response"}`, count)
+	}))
+	defer fixture.Close()
+	server := NewServer(Config{Routes: []Route{{Alias: "demo", Candidates: []Candidate{{Endpoint: "responses", APIBase: fixture.URL, ModelID: "native"}}}},
+		InferenceCache: InferenceCacheConfig{Enabled: true, TTL: time.Minute, Endpoints: map[string]bool{"responses": true}}})
+	call := func(extra string, hit bool) {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"demo","input":"example"`+extra+"}"))
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, r)
+		if w.Code != 200 || (w.Header().Get("X-LiteLLM-Cache-Key") != "") != hit {
+			t.Fatalf("unexpected cache result: %d %v %s", w.Code, w.Header(), w.Body)
+		}
+	}
+	call("", false)
+	call("", false)
+	call(`,"store":false`, false)
+	call(`,"store":false`, true)
+	call(`,"store":false,"stream":true`, false)
+	call(`,"store":false,"stream":true`, true)
+	if requests.Load() != 4 {
+		t.Fatalf("unexpected upstream calls %d", requests.Load())
+	}
+}

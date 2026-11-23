@@ -786,7 +786,7 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 					return baseConvert(frame)
 				}
 			}
-			capture := streamCacheCapture{disabled: cacheKey == "" || !cache.write || cache.ttl <= 0}
+			capture := streamCacheCapture{responses: cache.responses, disabled: cacheKey == "" || !cache.write || cache.ttl <= 0}
 			emit := func(frame []byte) bool {
 				output := convert(frame)
 				capture.add(output)

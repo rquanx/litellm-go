@@ -7,6 +7,7 @@ import (
 
 type streamCacheCapture struct {
 	frames                  []byte
+	responses               bool
 	disabled, done, sawData bool
 }
 
@@ -24,8 +25,10 @@ func (capture *streamCacheCapture) add(output []byte) {
 			continue
 		}
 		value = bytes.TrimSpace(value)
-		if bytes.Equal(value, []byte("[DONE]")) && !capture.done {
-			capture.done = true
+		if bytes.Equal(value, []byte("[DONE]")) {
+			if !capture.responses {
+				capture.done = true
+			}
 			continue
 		}
 		var event map[string]json.RawMessage
@@ -34,6 +37,9 @@ func (capture *streamCacheCapture) add(output []byte) {
 			return
 		}
 		capture.sawData = true
+		if capture.responses && string(event["type"]) == `"response.completed"` {
+			capture.done = true
+		}
 	}
 	capture.frames = append(capture.frames, bytes.ReplaceAll(output, []byte("\r\n"), []byte("\n"))...)
 }
