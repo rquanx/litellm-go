@@ -288,12 +288,19 @@ func (s *Server) sendAWSJSONResource(w http.ResponseWriter, r *http.Request, can
 	if body != nil {
 		data, _ = json.Marshal(body)
 	}
+	return s.sendAWSResource(w, r, candidate, method, target, service, "application/json", "", data)
+}
+
+func (s *Server) sendAWSResource(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target, service, media, action string, data []byte) ([]byte, bool) {
 	upstream, err := http.NewRequestWithContext(r.Context(), method, target, bytes.NewReader(data))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid AWS resource URL")
 		return nil, false
 	}
-	upstream.Header.Set("Content-Type", "application/json")
+	upstream.Header.Set("Content-Type", media)
+	if action != "" {
+		upstream.Header.Set("X-Amz-Target", action)
+	}
 	if err := signAWSRequest(r.Context(), upstream, candidate.Bedrock, data, service); err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authorize the AWS resource request")
 		return nil, false

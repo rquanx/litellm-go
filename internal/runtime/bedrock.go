@@ -23,6 +23,9 @@ type BedrockConfig struct {
 	Credentials aws.CredentialsProvider `json:"-"`
 	ControlBase string `json:"controlBase,omitempty"`
 	VectorBase string `json:"vectorBase,omitempty"`
+	IAMBase string `json:"iamBase,omitempty"`
+	STSBase string `json:"stsBase,omitempty"`
+	OpenSearchBase string `json:"openSearchBase,omitempty"`
 	AgentControlBase string `json:"agentControlBase,omitempty"`
 	AgentBase string `json:"agentBase,omitempty"`
 	BatchRole string `json:"batchRole,omitempty"`
@@ -69,6 +72,9 @@ func signAWSRequest(ctx context.Context, request *http.Request, config *BedrockC
 	hash := sha256.Sum256(body)
 	encoded := hex.EncodeToString(hash[:])
 	region := config.Region
+	if service == "aoss" {
+		request.Header.Set("X-Amz-Content-Sha256", encoded)
+	}
 	if service == "s3" {
 		request.Header.Set("X-Amz-Content-Sha256", encoded)
 		if config.S3Region != "" {

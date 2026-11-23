@@ -27,18 +27,6 @@ func (s *Server) createBedrockKnowledge(w http.ResponseWriter, r *http.Request, 
 	if prefix == "" {
 		prefix = "data/"
 	}
-	roleARN, roleErr := arn.Parse(role)
-	collectionARN, collectionErr := arn.Parse(collection)
-	region := candidate.Bedrock.Region
-	if !bedrockKnowledgeName.MatchString(name) || !bedrockRAGBucket.MatchString(bucket) ||
-		!validBedrockRAGKey(strings.TrimRight(prefix, "/")+"/document", nil) ||
-		roleErr != nil || roleARN.Service != "iam" || !strings.HasPrefix(roleARN.Resource, "role/") ||
-		collectionErr != nil || collectionARN.Service != "aoss" || collectionARN.Region != region ||
-		!strings.HasPrefix(collectionARN.Resource, "collection/") || collectionARN.Partition != roleARN.Partition ||
-		collectionARN.AccountID == "" || collectionARN.AccountID != roleARN.AccountID {
-		writeError(w, http.StatusBadRequest, "invalid_request", "Provisioning requires an existing IAM role, regional OpenSearch collection, index and S3 bucket")
-		return "", "", false
-	}
 	model, _ := options["embedding_model"].(string)
 	if model == "" {
 		model = "amazon.titan-embed-text-v2:0"
@@ -50,6 +38,34 @@ func (s *Server) createBedrockKnowledge(w http.ResponseWriter, r *http.Request, 
 	index, _ := options["opensearch_index_name"].(string)
 	if index == "" {
 		index = "bedrock-kb-index"
+	}
+	if !bedrockKnowledgeName.MatchString(name) || (bucket != "" && !bedrockRAGBucket.MatchString(bucket)) ||
+		!validBedrockRAGKey(strings.TrimRight(prefix, "/")+"/document", nil) ||
+		!bedrockRAGBucket.MatchString(index) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid Bedrock knowledge base name, bucket, index or data source prefix")
+		return "", "", false
+	}
+	if role == "" && collection == "" {
+		dimension, valid := ragChunkOption(options, "dimension", 1024, 4096)
+		if !valid || dimension == 0 {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Invalid Bedrock vector dimensions")
+			return "", "", false
+		}
+		var ok bool
+		role, collection, bucket, ok = s.provisionBedrockRAGInfrastructure(w, r, candidate, options, prefix, model, index)
+		if !ok {
+			return "", "", false
+		}
+	}
+	roleARN, roleErr := arn.Parse(role)
+	collectionARN, collectionErr := arn.Parse(collection)
+	region := candidate.Bedrock.Region
+	if bucket == "" || roleErr != nil || roleARN.Service != "iam" || !strings.HasPrefix(roleARN.Resource, "role/") ||
+		collectionErr != nil || collectionARN.Service != "aoss" || collectionARN.Region != region ||
+		!strings.HasPrefix(collectionARN.Resource, "collection/") || collectionARN.Partition != roleARN.Partition ||
+		collectionARN.AccountID == "" || collectionARN.AccountID != roleARN.AccountID {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Provisioning requires an existing IAM role, regional OpenSearch collection, index and S3 bucket")
+		return "", "", false
 	}
 	base = strings.TrimRight(base, "/") + "/knowledgebases/"
 	body := map[string]any{
