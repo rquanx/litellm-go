@@ -4,18 +4,23 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
+	"go.yaml.in/yaml/v3"
 	"golang.org/x/oauth2"
 )
 
 type uiSSOConfig struct {
 	oauth2.Config
-	provider string
-	userInfo string
-	base     *url.URL
-	missing  []string
+	provider    string
+	userInfo    string
+	base        *url.URL
+	missing     []string
+	roleGroups  map[string][]string
+	roleClaim   string
+	defaultRole string
 }
 
 func loadUISSOConfig() uiSSOConfig {
@@ -55,6 +60,19 @@ func loadUISSOConfig() uiSSOConfig {
 		if scope := strings.Fields(os.Getenv("GENERIC_SCOPE")); len(scope) != 0 {
 			cfg.Scopes = scope
 		}
+		if roles := os.Getenv("GENERIC_ROLE_MAPPINGS_ROLES"); roles != "" {
+			cfg.roleClaim = fields("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM")
+			cfg.defaultRole = os.Getenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE")
+			if yaml.Unmarshal([]byte(roles), &cfg.roleGroups) != nil || (cfg.defaultRole != "" && !internalSSORole(cfg.defaultRole)) {
+				cfg.missing = append(cfg.missing, "GENERIC_ROLE_MAPPINGS_ROLES")
+			}
+			for role := range cfg.roleGroups {
+				if !internalSSORole(role) {
+					cfg.missing = append(cfg.missing, "GENERIC_ROLE_MAPPINGS_ROLES")
+					break
+				}
+			}
+		}
 	default:
 		return cfg
 	}
@@ -63,6 +81,23 @@ func loadUISSOConfig() uiSSOConfig {
 		cfg.RedirectURL = cfg.base.JoinPath("sso/callback").String()
 	}
 	return cfg
+}
+
+func internalSSORole(role string) bool {
+	return role == "internal_user" || role == "internal_user_viewer"
+}
+
+func (cfg uiSSOConfig) userRole(claims map[string]any) string {
+	if cfg.roleClaim == "" {
+		return ""
+	}
+	groups := policyStringList(ssoClaim(claims, cfg.roleClaim))
+	for _, role := range []string{"internal_user", "internal_user_viewer"} {
+		if slices.ContainsFunc(cfg.roleGroups[role], func(group string) bool { return slices.Contains(groups, group) }) {
+			return role
+		}
+	}
+	return cfg.defaultRole
 }
 
 func ssoURL(raw string) *url.URL {

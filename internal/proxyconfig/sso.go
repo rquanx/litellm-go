@@ -158,6 +158,7 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 	identity.Email, _ = ssoClaim(claims, emailClaim).(string)
 	identity.Verified, _ = claims["email_verified"].(bool)
 	identity.TeamIDs = policyStringList(ssoClaim(claims, s.keys.ssoTeamClaim))
+	identity.Role = cfg.userRole(claims)
 	if identity.Subject == "" {
 		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
 		return
@@ -180,7 +181,8 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveUserLocked matches a provider identity to a preprovisioned user.
-func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email string, verified bool) (internalUser, bool, string) {
+func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, identity ssoIdentity) (internalUser, bool, string) {
+	subject, email, verified := identity.Subject, identity.Email, identity.Verified
 	var user internalUser
 	var bound bool
 	binding := s.config.provider + "|" + s.config.ClientID + "|" + s.config.userInfo
@@ -206,12 +208,15 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email st
 				return internalUser{}, false, ""
 			}
 		}
-		user = internalUser{ID: "sso-" + keyDigest(binding+"\x00"+subject), Role: "internal_user",
+		user = internalUser{ID: "sso-" + keyDigest(binding+"\x00"+subject), Role: s.keys.ssoDefaults.Role,
 			Email: strings.ToLower(email), Models: s.keys.ssoDefaults.Models}
 	}
-	if user.ID == "" || user.Role != "internal_user" {
+	if user.ID == "" || !internalSSORole(user.Role) {
 		modelError(w, http.StatusForbidden, "SSO identity has no active internal user")
 		return internalUser{}, false, ""
+	}
+	if internalSSORole(identity.Role) {
+		user.Role = identity.Role
 	}
 	return user, bound, binding
 }
@@ -219,7 +224,7 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, subject, email st
 func (s *uiSSOServer) issueSession(w http.ResponseWriter, identity ssoIdentity) (string, time.Time, bool) {
 	s.keys.mu.Lock()
 	defer s.keys.mu.Unlock()
-	user, bound, binding := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
+	user, bound, binding := s.resolveUserLocked(w, identity)
 	if user.ID == "" {
 		return "", time.Time{}, false
 	}
@@ -247,7 +252,11 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, identity ssoIdentity) 
 			delete(next.Keys, digest)
 		}
 	}
-	next.Keys[keyDigest(token)] = virtualKey{Alias: "ui-sso:" + user.ID, UserID: user.ID, Models: []string{}, CreatedAt: &now, Expires: &expires}
+	key := virtualKey{Alias: "ui-sso:" + user.ID, UserID: user.ID, Models: []string{}, CreatedAt: &now, Expires: &expires}
+	if user.Role == "internal_user_viewer" {
+		key.Metadata = map[string]any{"_minato_sso_view_only": true}
+	}
+	next.Keys[keyDigest(token)] = key
 	if !s.keys.apply(w, next) {
 		return "", time.Time{}, false
 	}
@@ -262,8 +271,29 @@ func (s *uiSSOServer) authorized(w http.ResponseWriter, r *http.Request) bool {
 	if _, ok := s.keys.Authorize(token); ok {
 		return true
 	}
+	if _, ok := s.keys.identifyResourceCaller(r); ok {
+		return true
+	}
 	modelError(w, http.StatusUnauthorized, "Proxy token required")
 	return false
+}
+
+func (keys *KeyRegistry) ssoViewerLocked(r *http.Request, token string) (string, bool) {
+	if r.Method != http.MethodGet {
+		return "", false
+	}
+	switch r.URL.Path {
+	case "/user/info", "/team/list", "/team/info", "/sso/readiness", "/sso/get/ui_settings":
+	default:
+		return "", false
+	}
+	key, ok := keys.state.Keys[keyDigest(token)]
+	if !ok || key.Blocked || key.RotationTarget != "" || key.Expires == nil || !time.Now().Before(*key.Expires) {
+		return "", false
+	}
+	readOnly, _ := key.Metadata["_minato_sso_view_only"].(bool)
+	user := keys.state.Users[key.UserID]
+	return user.ID, readOnly && user.Role == "internal_user_viewer" && key.Alias == "ui-sso:"+user.ID
 }
 
 func (s *uiSSOServer) readiness(w http.ResponseWriter, r *http.Request) {

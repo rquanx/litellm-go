@@ -113,6 +113,48 @@ func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 	t.Fatal("missing UI session cookie")
 }
 
+func TestSSOMappedViewerCanReadOwnProfileWithoutInference(t *testing.T) {
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.SetSSOUserDefaults(&SSOUserDefaults{Role: "internal_user"}, "")
+	issuer := &uiSSOServer{keys: keys, config: uiSSOConfig{provider: "generic", roleClaim: "groups", roleGroups: map[string][]string{
+		"internal_user_viewer": {"readers"},
+	}}}
+	identity := ssoIdentity{Subject: "mapped", Email: "viewer@example.invalid", Verified: true, Role: issuer.config.userRole(map[string]any{"groups": []any{"readers"}})}
+	signed, _, ok := issuer.issueSession(httptest.NewRecorder(), identity)
+	if !ok {
+		t.Fatal("viewer SSO session was rejected")
+	}
+	claims := jwt.MapClaims{}
+	if _, err := jwt.ParseWithClaims(signed, claims, func(*jwt.Token) (any, error) { return []byte("master"), nil }); err != nil {
+		t.Fatal(err)
+	}
+	token, _ := claims["key"].(string)
+	if token == "" || claims["user_role"] != "internal_user_viewer" {
+		t.Fatal("viewer session did not identify its role")
+	}
+	if _, authorized := keys.Authorize(token); authorized {
+		t.Fatal("viewer token was authorized for inference")
+	}
+	handler := keys.Handler(http.NotFoundHandler())
+	r := httptest.NewRequest(http.MethodGet, "/user/info", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "viewer@example.invalid") {
+		t.Fatalf("viewer could not read own profile: %d %s", w.Code, w.Body)
+	}
+	identity.Role = "internal_user"
+	if _, _, ok := issuer.issueSession(httptest.NewRecorder(), identity); !ok {
+		t.Fatal("mapped role transition failed")
+	}
+	if _, authorized := keys.Authorize(token); authorized {
+		t.Fatal("existing viewer token acquired inference access")
+	}
+}
+
 func TestCLISSORequiresConfirmationAndConsumesTeamKeyOnce(t *testing.T) {
 	registry, err := LoadKeys("fixture-master", "")
 	if err != nil {

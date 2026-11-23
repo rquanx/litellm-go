@@ -243,6 +243,9 @@ func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectP
 		}
 	}
 	permissions.key = key.ObjectPermission
+	if readOnly,_:=key.Metadata["_minato_sso_view_only"].(bool);readOnly {
+		return nil,permissions,false
+	}
 	var projectModels []string
 	if key.ProjectID != "" {
 		project, exists := registry.state.Projects[key.ProjectID]

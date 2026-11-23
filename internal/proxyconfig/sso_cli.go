@@ -19,6 +19,7 @@ type ssoIdentity struct {
 	Email    string `json:"email"`
 	Verified bool   `json:"email_verified"`
 	TeamIDs  []string
+	Role     string
 }
 
 type cliSSOFlow struct {
@@ -76,9 +77,13 @@ func (s *uiSSOServer) renderCLIConfirmation(w http.ResponseWriter, id string, id
 		return
 	}
 	s.keys.mu.RLock()
-	user, _, _ := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
+	user, _, _ := s.resolveUserLocked(w, identity)
 	s.keys.mu.RUnlock()
 	if user.ID == "" {
+		return
+	}
+	if user.Role != "internal_user" {
+		modelError(w, http.StatusForbidden, "CLI access requires an internal user role")
 		return
 	}
 	token := oauth2.GenerateVerifier()
@@ -146,8 +151,12 @@ func (s *uiSSOServer) pollCLI(w http.ResponseWriter, r *http.Request) {
 	s.keys.mu.Lock()
 	defer s.keys.mu.Unlock()
 	identity := flow.identity
-	user, bound, binding := s.resolveUserLocked(w, identity.Subject, identity.Email, identity.Verified)
+	user, bound, binding := s.resolveUserLocked(w, identity)
 	if user.ID == "" {
+		return
+	}
+	if user.Role != "internal_user" {
+		modelError(w, http.StatusForbidden, "CLI access requires an internal user role")
 		return
 	}
 	if user.ID != flow.userID {

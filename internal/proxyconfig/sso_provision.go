@@ -30,7 +30,7 @@ func (team *ssoDefaultTeam) UnmarshalYAML(node *yaml.Node) error {
 }
 
 func (defaults *SSOUserDefaults) enabled() bool {
-	return defaults != nil && defaults.Role == "internal_user"
+	return defaults != nil && internalSSORole(defaults.Role)
 }
 
 func (defaults *SSOUserDefaults) validate() error {
@@ -76,6 +76,9 @@ func (s *uiSSOServer) bindSSOUser(w http.ResponseWriter, user internalUser, boun
 		if next.Users == nil {
 			next.Users = make(map[string]internalUser)
 		}
+		next.Users[user.ID] = user
+	} else if original := next.Users[user.ID]; original.Role != user.Role {
+		next.Users = maps.Clone(next.Users)
 		next.Users[user.ID] = user
 	}
 	var grants []ssoDefaultTeam

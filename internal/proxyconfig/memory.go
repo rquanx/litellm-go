@@ -82,6 +82,9 @@ func (keys *KeyRegistry) identifyResourceCaller(r *http.Request) (memoryCaller, 
 	keys.mu.RLock()
 	defer keys.mu.RUnlock()
 	if _, _, ok := keys.authorizeLocked(token); !ok {
+		if user,ok:=keys.ssoViewerLocked(r,token);ok {
+			return memoryCaller{user:user},true
+		}
 		return memoryCaller{}, false
 	}
 	key, exists := keys.state.Keys[keyDigest(token)]
