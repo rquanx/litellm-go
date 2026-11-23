@@ -288,7 +288,6 @@ func main() {
 	if stateDB != nil && keys != nil {
 		config.VectorRegistryLookup = proxyconfig.VectorRegistryLookup(stateDB, keys)
 		config.MilvusIndexLookup = proxyconfig.MilvusIndexLookup(stateDB, keys)
-		config.ResolvePrompt = proxyconfig.StoredPromptResolver(stateDB, keys)
 		credentials, err := proxyconfig.OpenMCPUserCredentialStore(stateDB, config.Token)
 		if err != nil {
 			log.Fatal(err)
@@ -301,6 +300,7 @@ func main() {
 		log.Fatal(err)
 	}
 	config.ResolvePolicy = policies.Resolver(keys, config.Token)
+	config.ResolvePrompt = proxy.PromptResolver(stateDB, keys)
 	var guardrailUsage *proxyconfig.GuardrailUsage
 	if keys != nil && stateDB != nil {
 		config.GuardrailTeam = keys.GuardrailTeam
@@ -338,14 +338,14 @@ func main() {
 		}
 		handler, err = proxyconfig.WithMemoryManagement(handler, stateDB, keys)
 		if err != nil { log.Fatal(err) }
-		handler, err = proxyconfig.WithPromptManagement(handler, stateDB, keys)
-		if err != nil { log.Fatal(err) }
 		guardrailRegistry, err := proxyconfig.WithGuardrailRegistry(handler, server, keys, stateDB, proxy.Guardrails)
 		if err != nil { log.Fatal(err) }
 		handler = guardrailRegistry
 		go guardrailRegistry.RunRefresh(context.Background())
 	}
 	if keys != nil {
+		handler,err=proxy.WithPromptManagement(handler,stateDB,keys)
+		if err!=nil {log.Fatal(err)}
 		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
 		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)

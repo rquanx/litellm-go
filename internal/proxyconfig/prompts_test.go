@@ -51,9 +51,9 @@ func TestGenericStoredPromptFetchesAndRendersThroughInference(t *testing.T) {
 		}
 	}))
 	defer origin.Close()
-	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, ResolvePrompt: StoredPromptResolver(db, keys),
+	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, ResolvePrompt: (Config{}).PromptResolver(db, keys),
 		Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{Provider: "openai", ModelID: "native", Endpoint: "chat-completions", APIBase: origin.URL}}}}})
-	handler, err := WithPromptManagement(server, db, keys)
+	handler, err := (Config{}).WithPromptManagement(server, db, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,6 +140,72 @@ func TestRepositoryPromptAdaptersResolveDotprompt(t *testing.T) {
 	}
 }
 
+func TestPhoenixPromptRendersVersionedMessageParts(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/prompt_versions/version-fixture" || r.Header.Get("Authorization") != "Bearer fixture-key" {
+			t.Errorf("unexpected Phoenix request %s", r.URL)
+		}
+		io.WriteString(w, `{"data":{"model_name":"demo","invocation_parameters":{"openai":{"max_tokens":12}},"template":{"messages":[{"role":"system","content":[{"type":"text","text":"Hello {{ name }}"},{"type":"text","text":"today"}]}]}}}`)
+	}))
+	defer origin.Close()
+	params := map[string]any{"api_base": origin.URL, "api_key": "fixture-key", "prompt_id": "version-fixture"}
+	fields := map[string]any{"model": "arize/ignored", "prompt_variables": map[string]any{"name": "Ada"}}
+	status, err := renderPhoenixPrompt(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), fields, promptRecord{Params: params})
+	messages, _ := fields["messages"].([]any)
+	if status != 0 || err != nil || fields["model"] != "demo" || fields["max_tokens"] != 12.0 || len(messages) != 1 ||
+		messages[0].(map[string]any)["content"] != "Hello Ada today" {
+		t.Fatalf("unexpected Phoenix rendering %d %v %+v", status, err, fields)
+	}
+}
+
+func TestConfiguredPromptWorksWithoutPostgresAndRespectsScope(t *testing.T) {
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/demo, api_base: "http://localhost:1"}
+prompts:
+  - prompt_id: greeting
+    litellm_params:
+      prompt_integration: dotprompt
+      dotprompt_content: "System: Greeting {{name}}"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Keys[keyDigest("allowed")] = virtualKey{Metadata: map[string]any{"prompts": []any{"greeting.v1"}}}
+	keys.state.Keys[keyDigest("denied")] = virtualKey{}
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	fields := map[string]any{"model": "demo", "prompt_id": "greeting", "prompt_variables": map[string]any{"name": "Ada"}}
+	resolve := config.PromptResolver(nil, keys)
+	r.Header.Set("Authorization", "Bearer denied")
+	if status, _ := resolve(r, fields); status != http.StatusNotFound {
+		t.Fatalf("unscoped key could resolve configured prompt: %d", status)
+	}
+	r.Header.Set("Authorization", "Bearer allowed")
+	if status, err := resolve(r, fields); status != 0 || err != nil {
+		t.Fatalf("scoped key could not resolve configured prompt: %d %v", status, err)
+	}
+	messages := fields["messages"].([]any)
+	if messages[0].(map[string]any)["content"] != "Greeting Ada" {
+		t.Fatalf("unexpected configured prompt: %v", messages)
+	}
+	handler, err := config.WithPromptManagement(http.NotFoundHandler(), nil, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/prompts/greeting/info", nil)
+	req.Header.Set("Authorization", "Bearer allowed")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"prompt_type":"config"`) {
+		t.Fatalf("configured prompt info returned %d %s", w.Code, w.Body)
+	}
+}
+
 func TestPostgresPromptVersionsEnvironmentsAndScope(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
 	if dsn == "" {
@@ -156,7 +222,7 @@ func TestPostgresPromptVersionsEnvironmentsAndScope(t *testing.T) {
 	}
 	id := "fixture-" + newEntityID()
 	keys.state.Keys[keyDigest("scoped")] = virtualKey{Metadata: map[string]any{"prompts": []any{id + ".v1"}}}
-	handler, err := WithPromptManagement(http.NotFoundHandler(), db, keys)
+	handler, err := (Config{}).WithPromptManagement(http.NotFoundHandler(), db, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +254,7 @@ func TestPostgresPromptVersionsEnvironmentsAndScope(t *testing.T) {
 	}))
 	defer upstream.Close()
 	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, AuthorizeKey: keys.Authorize,
-		ResolvePrompt: StoredPromptResolver(db, keys), Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{
+		ResolvePrompt: (Config{}).PromptResolver(db, keys), Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{
 			Provider: "openai", ModelID: "native", Endpoint: "chat-completions", APIBase: upstream.URL,
 		}}}},
 	})

@@ -20,6 +20,7 @@ import (
 )
 
 type configFile struct {
+	Prompts []configuredPrompt `yaml:"prompts"`
 	Policies map[string]policyRule `yaml:"policies"`
 	PolicyAttachments []policyAttachment `yaml:"policy_attachments"`
 	Agents []agentConfig `yaml:"agent_list"`
@@ -192,6 +193,7 @@ type Config struct {
 	Callback GenericCallbacks
 	Guardrails []runtime.GenericGuardrail
 	Policy *PolicyEngine
+	prompts map[string]promptRecord
 	SSOUserDefaults *SSOUserDefaults
 	LogMessages bool
 	publicModelGroups []string
@@ -271,6 +273,10 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, err
 	}
 	config.Guardrails = guardrails
+	config.prompts,err=compileConfiguredPrompts(file.Prompts)
+	if err!=nil {
+		return Config{},err
+	}
 	config.Policy, err = compilePolicies(file.Policies, file.PolicyAttachments)
 	if err != nil {
 		return Config{}, err

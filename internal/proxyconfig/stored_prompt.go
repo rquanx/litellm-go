@@ -11,8 +11,14 @@ import (
 	"github.com/lib/pq"
 )
 
-func StoredPromptResolver(db *sql.DB, keys *KeyRegistry) func(*http.Request, map[string]any) (int, error) {
-	api := promptAPI{db, keys}
+func (config Config) PromptResolver(db *sql.DB, keys *KeyRegistry) func(*http.Request, map[string]any) (int, error) {
+	if keys == nil {
+		db = nil
+	}
+	if len(config.prompts) == 0 && (db == nil || keys == nil) {
+		return nil
+	}
+	api := promptAPI{db: db, keys: keys, static: config.prompts}
 	return api.renderStoredPrompt
 }
 
@@ -35,12 +41,20 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	env, _ := fields["prompt_label"].(string)
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	prompt, err := scanPrompt(api.db.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM `+promptTable+`
+	var prompt promptRecord
+	err := sql.ErrNoRows
+	if api.db != nil {
+		prompt, err = scanPrompt(api.db.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM `+promptTable+`
 		WHERE prompt_id=$1 AND ($2='' OR environment=$2) AND ($3=0 OR version=$3)
 		AND ($4 OR prompt_id=ANY($5::text[]) OR (prompt_id || '.v' || version)=ANY($5::text[]))
 		ORDER BY version DESC, (environment='development') DESC, environment LIMIT 1`, id, env, version, admin, pq.Array(scope)))
+	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return http.StatusNotFound, errors.New("Stored prompt not found")
+		static, ok := api.staticPrompt(id, env, version, admin, scope)
+		if !ok {
+			return http.StatusNotFound, errors.New("Stored prompt not found")
+		}
+		prompt, err = static, nil
 	}
 	if err != nil {
 		return http.StatusServiceUnavailable, errors.New("Could not load stored prompt")
@@ -53,6 +67,9 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	}
 	if prompt.Params["prompt_integration"] == "gitlab" || prompt.Params["prompt_integration"] == "bitbucket" {
 		return renderRepositoryPrompt(r, fields, prompt)
+	}
+	if prompt.Params["prompt_integration"] == "arize_phoenix" {
+		return renderPhoenixPrompt(r, fields, prompt)
 	}
 	if prompt.Params["prompt_integration"] != "dotprompt" {
 		return http.StatusBadRequest, errors.New("Unsupported prompt integration")

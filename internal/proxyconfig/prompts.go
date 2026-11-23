@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -18,8 +19,9 @@ import (
 const promptTable = `"LiteLLM_PromptTable"`
 
 type promptAPI struct {
-	db   *sql.DB
-	keys *KeyRegistry
+	db     *sql.DB
+	keys   *KeyRegistry
+	static map[string]promptRecord
 }
 
 type promptRecord struct {
@@ -54,18 +56,23 @@ func (record promptRecord) public() promptRecord {
 	return record
 }
 
-func WithPromptManagement(next http.Handler, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
+func (config Config) WithPromptManagement(next http.Handler, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
+	if db == nil && len(config.prompts) == 0 {
+		return next, nil
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+promptTable+` (
+	if db != nil {
+		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+promptTable+` (
 		id TEXT PRIMARY KEY, prompt_id TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
 		environment TEXT NOT NULL DEFAULT 'development', created_by TEXT, litellm_params JSONB NOT NULL,
 		prompt_info JSONB, created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
 		updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
 		UNIQUE(prompt_id,version,environment))`); err != nil {
-		return nil, errors.New("could not initialize prompt registry")
+			return nil, errors.New("could not initialize prompt registry")
+		}
 	}
-	api := promptAPI{db, keys}
+	api := promptAPI{db: db, keys: keys, static: config.prompts}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /prompts/list", api.list)
 	mux.HandleFunc("GET /prompts/{prompt_id}/versions", api.list)
@@ -123,6 +130,9 @@ func scanPrompt(row interface{ Scan(...any) error }) (promptRecord, error) {
 }
 
 func (api promptAPI) scope(r *http.Request) (bool, []string, bool) {
+	if api.keys == nil {
+		return true, nil, true
+	}
 	caller, ok := api.keys.identifyResourceCaller(r)
 	if !ok || caller.admin {
 		return caller.admin, nil, ok
@@ -155,33 +165,52 @@ func (api promptAPI) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := promptIDVersion(r.PathValue("prompt_id"))
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	environment := r.URL.Query().Get("environment")
+	data := make([]promptRecord, 0)
+	if api.db != nil {
+		var err error
+		data, err = api.listDatabasePrompts(r.Context(), admin, scope, id, environment)
+		if err != nil {
+			modelError(w, 500, "Could not list prompts")
+			return
+		}
+	}
+	seen := make(map[string]bool, len(data))
+	for _, record := range data {
+		seen[record.PromptID] = true
+	}
+	for _, name := range slices.Sorted(maps.Keys(api.static)) {
+		if (id == "" || id == name) && !seen[name] {
+			if record, ok := api.staticPrompt(name, environment, 0, admin, scope); ok {
+				data = append(data, record.public())
+			}
+		}
+	}
+	modelJSON(w, 200, map[string]any{"prompts": data})
+}
+
+func (api promptAPI) listDatabasePrompts(parent context.Context, admin bool, scope []string, id, environment string) ([]promptRecord, error) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	clause := ` WHERE ($1 OR prompt_id=ANY($2::text[]) OR (prompt_id || '.v' || version)=ANY($2::text[])) AND ($3='' OR environment=$3) AND ($4='' OR prompt_id=$4)`
 	query := `SELECT ` + promptColumns + ` FROM ` + promptTable + clause + ` ORDER BY version DESC,environment,id`
 	if id == "" {
 		query = `SELECT DISTINCT ON (prompt_id) ` + promptColumns + ` FROM ` + promptTable + clause + ` ORDER BY prompt_id, version DESC, environment, id`
 	}
-	rows, err := api.db.QueryContext(ctx, query, admin, pq.Array(scope), r.URL.Query().Get("environment"), id)
+	rows, err := api.db.QueryContext(ctx, query, admin, pq.Array(scope), environment, id)
 	if err != nil {
-		modelError(w, 500, "Could not list prompts")
-		return
+		return nil, err
 	}
 	defer rows.Close()
 	data := make([]promptRecord, 0)
 	for rows.Next() {
 		p, err := scanPrompt(rows)
 		if err != nil {
-			modelError(w, 500, "Could not read prompt")
-			return
+			return nil, err
 		}
 		data = append(data, p.public())
 	}
-	if rows.Err() != nil {
-		modelError(w, 500, "Could not list prompts")
-		return
-	}
-	modelJSON(w, 200, map[string]any{"prompts": data})
+	return data, rows.Err()
 }
 
 func (api promptAPI) info(w http.ResponseWriter, r *http.Request) {
@@ -194,22 +223,32 @@ func (api promptAPI) info(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
-	record, err := scanPrompt(api.db.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM `+promptTable+`
+	var record promptRecord
+	err := sql.ErrNoRows
+	if api.db != nil {
+		record, err = scanPrompt(api.db.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM `+promptTable+`
 		WHERE prompt_id=$1 AND ($2='' OR environment=$2) AND ($3=0 OR version=$3) AND ($4 OR prompt_id=ANY($5::text[]) OR (prompt_id || '.v' || version)=ANY($5::text[]))
 		ORDER BY version DESC, (environment='development') DESC, environment LIMIT 1`, id, r.URL.Query().Get("environment"), version, admin, pq.Array(scope)))
+	}
+	var environments []string
 	if errors.Is(err, sql.ErrNoRows) {
-		modelError(w, 400, "Prompt not found")
-		return
+		static, ok := api.staticPrompt(id, r.URL.Query().Get("environment"), version, admin, scope)
+		if !ok {
+			modelError(w, 400, "Prompt not found")
+			return
+		}
+		record, err, environments = static, nil, []string{static.Environment}
 	}
 	if err != nil {
 		modelError(w, 500, "Could not read prompt")
 		return
 	}
-	var environments []string
-	err = api.db.QueryRowContext(ctx, `SELECT ARRAY(SELECT DISTINCT environment FROM `+promptTable+` WHERE prompt_id=$1 ORDER BY environment)`, id).Scan(pq.Array(&environments))
-	if err != nil {
-		modelError(w, 500, "Could not read prompt environments")
-		return
+	if environments == nil {
+		err = api.db.QueryRowContext(ctx, `SELECT ARRAY(SELECT DISTINCT environment FROM `+promptTable+` WHERE prompt_id=$1 ORDER BY environment)`, id).Scan(pq.Array(&environments))
+		if err != nil {
+			modelError(w, 500, "Could not read prompt environments")
+			return
+		}
 	}
 	var template any
 	if items, ok := record.Params["prompt_data"].(map[string]any); ok {
@@ -231,6 +270,10 @@ func (api promptAPI) write(w http.ResponseWriter, r *http.Request) {
 	}
 	if !caller.admin {
 		modelError(w, http.StatusForbidden, "Only proxy administrators can manage prompts")
+		return
+	}
+	if api.db == nil {
+		modelError(w, http.StatusServiceUnavailable, "Database not connected")
 		return
 	}
 
