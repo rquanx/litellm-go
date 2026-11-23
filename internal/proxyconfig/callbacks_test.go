@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,4 +62,16 @@ litellm_settings:
 	case <-time.After(4 * time.Second):
 		t.Fatal("local callback was not delivered")
 	}
+}
+
+func TestGenericAPIRetriesTransientDelivery(t *testing.T) {
+	var calls atomic.Int32
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+		if calls.Add(1)==1 { w.WriteHeader(http.StatusServiceUnavailable);return }
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer sink.Close()
+	callback:=GenericCallback{endpoint:sink.URL,retries:2}
+	callback.send(context.Background(),sink.Client(),[]runtime.InferenceEvent{{ID:"fixture"}})
+	if calls.Load()!=2 {t.Fatalf("expected transient failure and one successful retry, got %d calls",calls.Load())}
 }

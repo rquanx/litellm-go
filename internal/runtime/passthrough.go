@@ -39,6 +39,7 @@ func IsBuiltInProxyPath(path string) bool {
 	}
 	for _, root := range []string{"/health", "/healthz", "/internal", "/v1/models", "/v1/responses", "/v1/files", "/v1/batches", "/v1/messages",
 		"/v1/search", "/search", "/v1/realtime", "/realtime", "/v1/vector_stores", "/v1/videos", "/openai", "/anthropic",
+		"/cache", "/public", "/a2a", "/v1/a2a", "/v1/agents", "/v1/memory", "/claude-code", "/v1/skills", "/v1/evals", "/interactions", "/v1beta/interactions",
 		"/model", "/v1/model", "/key", "/team", "/user", "/organization", "/project", "/credential", "/router", "/config",
 		"/spend", "/search_tools", "/model_group", "/utils", "/mcp", "/v1/mcp", "/mcp-rest", "/sse"} {
 		if path == root || strings.HasPrefix(path, root+"/") {

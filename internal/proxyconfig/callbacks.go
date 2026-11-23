@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,6 +23,8 @@ type callbackSettings struct {
 	Callbacks        []string          `yaml:"callbacks"`
 	Success          []string          `yaml:"success_callback"`
 	Failure          []string          `yaml:"failure_callback"`
+	MaxRetries       int `yaml:"generic_logger_max_retries"`
+	RetryDelay       *float64 `yaml:"generic_logger_retry_delay"`
 	Endpoint         string            `yaml:"generic_logger_endpoint"`
 	Headers          map[string]string `yaml:"generic_logger_headers"`
 	DisableMessages  *bool             `yaml:"turn_off_message_logging"`
@@ -43,6 +46,8 @@ type GenericCallback struct {
 	headers  map[string]string
 	success  bool
 	failure  bool
+	retries int
+	delay time.Duration
 }
 
 func prepareCallback(settings callbackSettings) (*GenericCallback, bool, error) {
@@ -79,8 +84,18 @@ func prepareCallback(settings callbackSettings) (*GenericCallback, bool, error) 
 		}
 		headers[name] = resolved
 	}
+	if settings.MaxRetries < 0 || settings.MaxRetries > 8 {
+		return nil, false, errors.New("invalid generic_api max retries")
+	}
+	delay := time.Second
+	if value := settings.RetryDelay; value != nil {
+		if *value < 0 || *value > 60 || math.IsNaN(*value) {
+			return nil, false, errors.New("invalid generic_api retry delay")
+		}
+		delay = time.Duration(*value * float64(time.Second))
+	}
 	all := slices.Contains(settings.Callbacks, "generic_api")
-	return &GenericCallback{endpoint: endpoint, headers: headers, success: all || slices.Contains(settings.Success, "generic_api"),
+	return &GenericCallback{endpoint: endpoint, headers: headers, retries: settings.MaxRetries, delay: delay, success: all || slices.Contains(settings.Success, "generic_api"),
 		failure: all || slices.Contains(settings.Failure, "generic_api")}, settings.DisableMessages != nil && !*settings.DisableMessages, nil
 }
 
@@ -98,7 +113,7 @@ func (callback *GenericCallback) Start(ctx context.Context) func(runtime.Inferen
 			if len(batch) == 0 {
 				return
 			}
-			callback.send(client, batch)
+			callback.send(ctx, client, batch)
 			clear(batch)
 			batch = batch[:0]
 		}
@@ -127,22 +142,30 @@ func (callback *GenericCallback) Start(ctx context.Context) func(runtime.Inferen
 	}
 }
 
-func (callback *GenericCallback) send(client *http.Client, batch []runtime.InferenceEvent) {
+func (callback *GenericCallback) send(ctx context.Context, client *http.Client, batch []runtime.InferenceEvent) {
 	body, err := json.Marshal(batch)
 	if err != nil {
 		return
 	}
-	request, err := http.NewRequest(http.MethodPost, callback.endpoint, bytes.NewReader(body))
-	if err != nil {
-		return
-	}
-	request.Header.Set("Content-Type", "application/json")
-	for key, value := range callback.headers {
-		request.Header.Set(key, value)
-	}
-	response, err := client.Do(request)
-	if err == nil {
-		defer response.Body.Close()
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+	for attempt := 0; attempt <= callback.retries && ctx.Err() == nil; attempt++ {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, callback.endpoint, bytes.NewReader(body))
+		if err != nil { return }
+		request.Header.Set("Content-Type", "application/json")
+		for key, value := range callback.headers { request.Header.Set(key, value) }
+		response, err := client.Do(request)
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+			response.Body.Close()
+			status := response.StatusCode
+			if status != http.StatusTooManyRequests && status < 500 { return }
+		}
+		if attempt == callback.retries { return }
+		timer := time.NewTimer(min(30*time.Second, callback.delay << attempt))
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		}
 	}
 }
