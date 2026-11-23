@@ -13,10 +13,15 @@ import (
 )
 
 func TestGoogleVeoCreatePollAndDownload(t *testing.T) {
-	for _, provider := range []string{"gemini", "vertex_ai"} {
-		t.Run(provider, func(t *testing.T) {
+	for _, fixtureName := range []string{"gemini", "vertex_ai", "vertex_ai_gcs"} {
+		t.Run(fixtureName, func(t *testing.T) {
 			const model = "veo-test"
-			vertex := provider == "vertex_ai"
+			vertex := fixtureName != "gemini"
+			stored := fixtureName == "vertex_ai_gcs"
+			provider := "gemini"
+			if vertex {
+				provider = "vertex_ai"
+			}
 			modelPath := "/v1beta/models/" + model
 			operation := "models/" + model + "/operations/demo"
 			if vertex {
@@ -42,7 +47,17 @@ func TestGoogleVeoCreatePollAndDownload(t *testing.T) {
 					if !strings.Contains(string(body), operation) {
 						t.Errorf("operation name missing %s", body)
 					}
-					fmt.Fprintf(w, `{"name":%q,"done":true,"response":{"videos":[{"mimeType":"video/mp4","bytesBase64Encoded":"Zml4dHVyZQ=="}]}}`, operation)
+					if stored {
+						fmt.Fprintf(w, `{"name":%q,"done":true,"response":{"videos":[{"mimeType":"video/mp4","gcsUri":"gs://fixture/videos/demo.mp4"}]}}`, operation)
+					} else {
+						fmt.Fprintf(w, `{"name":%q,"done":true,"response":{"videos":[{"mimeType":"video/mp4","bytesBase64Encoded":"Zml4dHVyZQ=="}]}}`, operation)
+					}
+				case "GET /storage/v1/b/fixture/o/videos/demo.mp4":
+					if !stored || r.URL.Query().Get("alt") != "media" || !strings.Contains(r.URL.EscapedPath(), "videos%2Fdemo.mp4") {
+						t.Errorf("unexpected GCS media request: %s", r.URL)
+					}
+					w.Header().Set("Content-Type", "video/mp4")
+					fmt.Fprint(w, "fixture")
 				case "GET /v1beta/files/demo:download":
 					w.Header().Set("Content-Type", "video/mp4")
 					fmt.Fprint(w, "fixture")
@@ -56,6 +71,10 @@ func TestGoogleVeoCreatePollAndDownload(t *testing.T) {
 				APIBase: fixture.URL, APIKey: "fixture"}
 			if vertex {
 				candidate.Vertex = &VertexConfig{Project: "fixture", Location: "us-central1"}
+				if stored {
+					candidate.Vertex.Bucket = "fixture/videos"
+					candidate.Vertex.StorageBase = fixture.URL
+				}
 			}
 			server := NewServer(Config{AuthorizeInference: true, Token: "master", Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}})
 			call := func(method, path, body string) *httptest.ResponseRecorder {
