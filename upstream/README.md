@@ -64,6 +64,8 @@ The authenticated health routes expose `/test`, `/settings`, `/active/callbacks`
 
 With `general_settings.use_shared_health_check` and router Redis configured, Go replicas share a deployment probe using a Redis lease and a cached result. The isolated Redis fixture verifies that two replicas issue one upstream request and both report the result. The lease expires on worker loss, only its owner can publish, and Redis errors fall back to local probes. Redis diagnostics report connectivity. Go uses a separate namespace from the LiteLLM pod-level lock.
 
+The authenticated service probe sends a synthetic completion to a configured success callback. The fixture uses a local HTTP sink and verifies that the master key is required. The response confirms that the probe ran. Integration-specific delivery health remains open.
+
 The same proxy comparison matched both liveness aliases, public readiness without a database, and healthy and unhealthy counts for a targeted Chat Completions deployment.
 
 The full JSON responses from `/public/endpoints` and `/public/agents/fields` match LiteLLM `v1.85.0`. The blog endpoint matched against a local RSS fixture and both proxies returned their cached feed after the fixture stopped. The Go proxy caches failed feed lookups for one minute to bound repeated remote requests.

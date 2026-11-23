@@ -76,6 +76,7 @@ type Config struct {
 	MCPServers []MCPServer
 	Agents []Agent
 	CallbackNames      []string
+	CallbackHealth func(context.Context, string, InferenceEvent) bool
 	PublicReadinessDetails bool
 }
 

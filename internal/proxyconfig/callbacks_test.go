@@ -161,3 +161,29 @@ func TestLegacyGenericCallbackFormatsUsageAndNulls(t *testing.T) {
 		t.Fatalf("unexpected v1 callback %v", payload)
 	}
 }
+
+func TestCallbackHealthUsesSyntheticEventAndRequiresMaster(t *testing.T) {
+	received := make(chan string, 1)
+	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		received <- string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer fixture.Close()
+	callbacks := GenericCallbacks{&GenericCallback{name:"generic_api", endpoint:fixture.URL, format:"json_array", success:true}}
+	server := runtime.NewServer(runtime.Config{Token:"master", AuthorizeInference:true, CallbackHealth:callbacks.Probe,
+		AuthorizeKey:func(token string)([]string,bool){return nil, token=="virtual"}})
+	for _, test := range []struct{token string; status int}{{"virtual",403},{"master",200}} {
+		r := httptest.NewRequest(http.MethodGet,"/health/services?service=generic_api",nil)
+		r.Header.Set("Authorization","Bearer "+test.token)
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w,r)
+		if w.Code != test.status { t.Fatalf("unexpected probe response: %d %s",w.Code,w.Body) }
+	}
+	select {
+	case body := <-received:
+		if !strings.Contains(body,"litellm-mock-response-model") { t.Fatalf("unexpected callback payload %s",body) }
+	default:
+		t.Fatal("fixture callback did not receive the probe")
+	}
+}

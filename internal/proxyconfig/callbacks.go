@@ -341,3 +341,16 @@ func standardCallbackPayload(event runtime.InferenceEvent) map[string]any {
 		"error_str": message, "error_information": details, "guardrail_information": nil, "standard_built_in_tools_params": nil,
 	}
 }
+
+func (callbacks GenericCallbacks) Probe(ctx context.Context, service string, event runtime.InferenceEvent) bool {
+	client := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for _, callback := range callbacks {
+		if callback.name == service && callback.success {
+			probeCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
+			defer cancel()
+			callback.send(probeCtx, client, []runtime.InferenceEvent{event})
+			return true
+		}
+	}
+	return false
+}
