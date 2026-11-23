@@ -40,3 +40,20 @@ func TestDotpromptTestRendersSystemAndStreamsThroughProxy(t *testing.T) {
 		t.Fatalf("unexpected prompt test result %d %s", w.Code, w.Body)
 	}
 }
+
+func TestDotpromptJinjaConditionsLoopsAndTemplateLimits(t *testing.T) {
+	template := "System: Inventory\n{% if active %}User: {% for name in names %}{{name|upper}}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}"
+	messages, err := dotpromptMessages(template, map[string]any{"active": true, "names": []any{"Ada", "Lin"}})
+	if err != nil || len(messages) != 2 || messages[1]["content"] != "ADA, LIN" {
+		t.Fatalf("unexpected rendered template %+v, %v", messages, err)
+	}
+	for _, invalid := range []string{
+		`{% include "unavailable" %}`,
+		`{{ "long" * 1000000000 }}`,
+		`{% for x in names %}{% for y in names %}{{ x }}{{ y }}{% endfor %}{% endfor %}`,
+	} {
+		if _, err := dotpromptMessages(invalid, nil); err == nil {
+			t.Fatalf("unsupported template rendered: %s", invalid)
+		}
+	}
+}

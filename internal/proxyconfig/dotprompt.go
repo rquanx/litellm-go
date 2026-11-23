@@ -37,7 +37,11 @@ func splitDotprompt(source string) (map[string]any, string, error) {
 func dotpromptMessages(content string, variables map[string]any) ([]map[string]any, error) {
 	residue := dotpromptVariable.ReplaceAllString(content, "")
 	if strings.Contains(residue, "{{") || strings.Contains(residue, "{%") || strings.Contains(residue, "{#") {
-		return nil, errors.New("Unsupported expression in dotprompt template")
+		rendered, err := renderDotpromptJinja(content, variables)
+		if err != nil {
+			return nil, err
+		}
+		return splitDotpromptMessages(rendered), nil
 	}
 	remaining := 2<<20 - len(residue)
 	content = dotpromptVariable.ReplaceAllStringFunc(content, func(marker string) string {
@@ -67,6 +71,10 @@ func dotpromptMessages(content string, variables map[string]any) ([]map[string]a
 	if remaining < 0 {
 		return nil, errors.New("Rendered prompt exceeds the size limit")
 	}
+	return splitDotpromptMessages(content), nil
+}
+
+func splitDotpromptMessages(content string) []map[string]any {
 	messages := make([]map[string]any, 0, 4)
 	role := "user"
 	var lines []string
@@ -87,7 +95,7 @@ func dotpromptMessages(content string, variables map[string]any) ([]map[string]a
 		}
 	}
 	flush()
-	return messages, nil
+	return messages
 }
 
 func (api promptAPI) testPrompt(w http.ResponseWriter, r *http.Request, next http.Handler) {
