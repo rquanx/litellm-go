@@ -21,6 +21,7 @@ type MCPServer struct {
 	Transport                        string
 	Headers                          http.Header
 	OAuth                            *MCPOAuth
+	InteractiveOAuth                *MCPInteractiveOAuth
 	AllowAllKeys                     bool
 	AllowedTools                     []string
 	DisallowedTools                  []string

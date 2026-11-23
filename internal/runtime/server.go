@@ -99,6 +99,7 @@ type Server struct {
 	deploymentCapacity map[string]capacityUsage
 	deploymentCooldown map[string]cooldownWindow
 	polling *responsePolling
+	mcpOAuthFlows mcpOAuthFlows
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
@@ -164,6 +165,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
+		return
+	}
+	if s.config.AuthorizeInference && s.serveMCPOAuth(writer, request) {
 		return
 	}
 	if s.config.AuthorizeInference && s.serveMCPREST(writer, request) {

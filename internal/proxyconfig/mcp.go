@@ -40,6 +40,9 @@ type mcpServerConfig struct {
 	PublicInfo map[string]any `yaml:"mcp_info" json:"mcp_info,omitempty"`
 	ImportedAuthType string `yaml:"-" json:"imported_auth_type,omitempty"`
 	AuthType string `yaml:"auth_type" json:"auth_type,omitempty"`
+	OAuthFlow string `yaml:"oauth2_flow" json:"oauth2_flow,omitempty"`
+	AuthorizationURL string `yaml:"authorization_url" json:"authorization_url,omitempty"`
+	OAuthCallbackURL string `yaml:"oauth_callback_url" json:"oauth_callback_url,omitempty"`
 	TokenURL string `yaml:"token_url" json:"token_url,omitempty"`
 	ClientID string `yaml:"client_id" json:"client_id,omitempty"`
 	ClientSecret string `yaml:"client_secret" json:"client_secret,omitempty"`
@@ -117,7 +120,11 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 		}
 		oauth, err := entry.clientOAuth()
 		if err != nil { return nil, fmt.Errorf("MCP server %q: %w", name, err) }
-		result = append(result, runtime.MCPServer{ID: id, PublicID: publicID, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport, OAuth: oauth,
+			interactive, err := entry.interactiveOAuth()
+		if err != nil {
+			return nil, fmt.Errorf("MCP server %q: %w", name, err)
+		}
+		result = append(result, runtime.MCPServer{ID: id, PublicID: publicID, Name: name, Alias: entry.Alias, URL: base, Transport: entry.Transport, OAuth: oauth, InteractiveOAuth: interactive,
 			Command: entry.Command, Args: entry.Args, Env: env,
 			Description: entry.Description, AllowAllKeys: entry.AllowAllKeys, AllowedTools: entry.AllowedTools,
 			AccessGroups: append(slices.Clone(entry.AccessGroups), entry.YAMLAccessGroups...), Headers: headers,
@@ -127,6 +134,12 @@ func prepareMCPServers(entries map[string]mcpServerConfig) ([]runtime.MCPServer,
 }
 
 func (entry mcpServerConfig) clientOAuth() (*runtime.MCPOAuth, error) {
+	if entry.OAuthFlow == "authorization_code" || (entry.OAuthFlow == "" && entry.AuthorizationURL != "") {
+		return nil, nil
+	}
+	if entry.OAuthFlow != "" && entry.OAuthFlow != "client_credentials" {
+		return nil, fmt.Errorf("unsupported MCP OAuth flow")
+	}
 	if entry.TokenURL == "" && entry.ClientID == "" && entry.ClientSecret == "" {
 		if entry.AuthType == "oauth2" {
 			return nil, fmt.Errorf("OAuth client credentials require token_url, client_id and client_secret")
@@ -145,4 +158,31 @@ func (entry mcpServerConfig) clientOAuth() (*runtime.MCPOAuth, error) {
 		return nil, fmt.Errorf("invalid OAuth client credentials")
 	}
 	return &runtime.MCPOAuth{TokenURL: tokenURL, ClientID: clientID, ClientSecret: secret, Scopes: slices.Clone(entry.Scopes)}, nil
+}
+
+func (entry mcpServerConfig) interactiveOAuth() (*runtime.MCPInteractiveOAuth, error) {
+	if entry.OAuthFlow != "authorization_code" && (entry.OAuthFlow != "" || entry.AuthorizationURL == "") {
+		return nil, nil
+	}
+	if entry.Transport == "stdio" || (entry.AuthType != "" && entry.AuthType != "oauth2") {
+		return nil, fmt.Errorf("unsupported interactive MCP authentication")
+	}
+	config := &runtime.MCPInteractiveOAuth{Scopes: slices.Clone(entry.Scopes)}
+	for _, field := range []struct{value string; target *string}{
+		{entry.AuthorizationURL, &config.AuthorizationURL},
+		{entry.TokenURL, &config.TokenURL},
+		{entry.OAuthCallbackURL, &config.CallbackURL},
+		{entry.ClientID, &config.ClientID},
+		{entry.ClientSecret, &config.ClientSecret},
+	} {
+		value, err := resolveEnv(field.value)
+		if err != nil {
+			return nil, err
+		}
+		*field.target = value
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	return config, nil
 }
