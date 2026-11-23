@@ -1427,7 +1427,7 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		}
 	} else if azureDocument {
 		upstream.Header.Set("Ocp-Apim-Subscription-Key", apiKey)
-	} else if candidate.WatsonX != nil && candidate.Endpoint == "rerank" {
+	} else if candidate.WatsonX != nil && (candidate.Endpoint == "rerank" || candidate.Endpoint == "transcription") {
 		if err := candidate.WatsonX.authorize(upstream, s.config.HTTPClient, apiKey); err != nil {
 			release()
 			return nil, err

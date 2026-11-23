@@ -642,7 +642,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	mistralOCR := provider == "mistral" && configuredOCR
 	audioConfigured := entry.Info.Mode == "audio_transcription" || slices.Contains(entry.Info.Endpoints, "/v1/audio/transcriptions")
 	mistralAudio := provider == "mistral" && !configuredOCR && (audioConfigured || strings.HasPrefix(model, "voxtral-"))
-	otherMultipartAudio := slices.Contains([]string{"ovhcloud", "scaleway", "fireworks_ai"}, provider) && (audioConfigured || strings.Contains(model, "whisper"))
+	watsonxAudio := provider == "watsonx" && (audioConfigured || strings.Contains(model, "whisper"))
+	otherMultipartAudio := watsonxAudio || slices.Contains([]string{"ovhcloud", "scaleway", "fireworks_ai"}, provider) && (audioConfigured || strings.Contains(model, "whisper"))
 	partnerOCR := configuredOCR && (provider == "vertex_ai" ||
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
@@ -724,6 +725,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1"
 		case "fireworks_ai":
 			base = "https://audio-prod.api.fireworks.ai/v1"
+		case "watsonx":
+			base = firstWatsonXEnv("WATSONX_API_BASE", "WATSONX_URL", "WX_URL", "WML_URL")
 		}
 	}
 	if base == "" && (mistralOCR || mistralAudio) {
@@ -842,6 +845,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		switch provider {
 		case "scaleway":
 			key = os.Getenv("SCW_SECRET_KEY")
+		case "watsonx":
+			key = firstWatsonXEnv("WATSONX_APIKEY", "WATSONX_API_KEY", "WX_API_KEY")
 		case "ovhcloud":
 			key = os.Getenv("OVHCLOUD_API_KEY")
 		case "fireworks_ai":
@@ -907,7 +912,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		return runtime.Candidate{}, fmt.Errorf("api_version: %w", err)
 	}
 	var watsonx *runtime.WatsonXRerankConfig
-	if provider == "watsonx" && nativeRerank {
+	if provider == "watsonx" && (nativeRerank || watsonxAudio) {
 		watsonx, err = entry.watsonXRerankConfig()
 		if err != nil {
 			return runtime.Candidate{}, err

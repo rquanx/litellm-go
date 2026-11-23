@@ -3,12 +3,13 @@ package runtime
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
 	"slices"
 	"strings"
 )
 
 func multipartAudioDeployment(candidate Candidate) bool {
-	return candidate.Endpoint == "transcription" && slices.Contains([]string{"mistral", "ovhcloud", "scaleway", "fireworks_ai"}, candidate.Provider)
+	return candidate.Endpoint == "transcription" && slices.Contains([]string{"mistral", "ovhcloud", "scaleway", "fireworks_ai", "watsonx"}, candidate.Provider)
 }
 
 func multipartAudioRequest(input requestPayload, candidate Candidate) (string, []byte, string, error) {
@@ -47,9 +48,25 @@ func multipartAudioRequest(input requestPayload, candidate Candidate) (string, [
 	if !hasModel {
 		form = append(form, formPart{name: "model", header: map[string][]string{"Content-Disposition": {`form-data; name="model"`}}})
 	}
+	if candidate.WatsonX != nil && candidate.Provider == "watsonx" {
+		key, value := "project_id", candidate.WatsonX.Project
+		if value == "" {
+			key, value = "space_id", candidate.WatsonX.Space
+		}
+		if value != "" {
+			form = append(form, formPart{name: key, header: map[string][]string{"Content-Disposition": {`form-data; name="` + key + `"`}}, body: []byte(value)})
+		}
+	}
 	input.form = form
 	data, media, err := input.encodeMultipart(candidate.ModelID, false)
 	base := strings.TrimRight(candidate.APIBase, "/")
+	if candidate.Provider == "watsonx" {
+		version := candidate.APIVersion
+		if version == "" {
+			version = "2024-03-13"
+		}
+		return base + "/ml/v1/audio/transcriptions?version=" + url.QueryEscape(version), data, media, err
+	}
 	if candidate.Provider == "fireworks_ai" && !strings.HasSuffix(base, "/v1") {
 		base += "/v1"
 	}
@@ -64,12 +81,15 @@ func multipartAudioResponse(raw []byte, media, provider string) ([]byte, error) 
 	if err := json.Unmarshal(raw, &original); err != nil {
 		return nil, err
 	}
-	if provider == "fireworks_ai" {
-		if len(original["text"]) == 0 {
+	if provider == "fireworks_ai" || provider == "watsonx" {
+		if len(original["text"]) == 0 && (provider != "watsonx" || len(original["usage"]) == 0) {
 			return nil, errors.New("Missing transcription text")
 		}
 		if original["usage"] == nil {
 			original["usage"] = json.RawMessage("null")
+		}
+		if provider == "watsonx" {
+			delete(original, "model")
 		}
 		return json.Marshal(original)
 	}
