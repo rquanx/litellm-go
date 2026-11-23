@@ -73,6 +73,15 @@ func LoadPostgresKeys(master string, db *sql.DB) (*KeyRegistry, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx,cancel:=context.WithTimeout(context.Background(),5*time.Second)
+	defer cancel()
+	if _,err:=db.ExecContext(ctx,`CREATE TABLE IF NOT EXISTS `+ssoConfigTable+` (
+		id TEXT PRIMARY KEY, sso_settings JSONB NOT NULL,
+		created_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+		updated_at TIMESTAMP(3) NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+	)`);err!=nil {
+		return nil,err
+	}
 	if loadUISSOConfig().ready() {
 		registry.browserSSO, err = openPostgresBrowserSSO(db, master)
 		if err != nil {

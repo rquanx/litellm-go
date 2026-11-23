@@ -56,6 +56,52 @@ func TestPostgresBrowserSSOStateIsSingleUseAcrossReplicas(t *testing.T) {
 	}
 }
 
+func TestPostgresSSOMappingsUpdatePreservesProviderSettings(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TEMP TABLE ` + ssoConfigTable + ` (
+		id text PRIMARY KEY,sso_settings jsonb,updated_at timestamp DEFAULT CURRENT_TIMESTAMP
+	);
+	INSERT INTO ` + ssoConfigTable + ` VALUES ('sso_config', '{"generic_client_secret":"stored-secret"}')`); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := LoadPostgresKeys("master", db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := keys.Handler(http.NotFoundHandler())
+	call := func(method, path, token, body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		return response
+	}
+	patch := `{"role_mappings":{"provider":"generic","group_claim":"groups","roles":{"internal_user_viewer":["readers"]}},
+		"team_mappings":{"team_ids_jwt_field":"identity.teams"}}`
+	if response := call(http.MethodPatch, "/update/sso_settings", "master", patch); response.Code != http.StatusOK ||
+		strings.Contains(response.Body.String(), "stored-secret") {
+		t.Fatalf("unexpected mapping update %d %s", response.Code, response.Body)
+	}
+	var secret string
+	if err := db.QueryRow(`SELECT sso_settings->>'generic_client_secret' FROM ` + ssoConfigTable).Scan(&secret); err != nil || secret != "stored-secret" {
+		t.Fatal("mapping update changed existing provider settings")
+	}
+	server := uiSSOServer{keys: keys}
+	cfg, teamClaim, err := server.effectiveClaimMappings(context.Background(), uiSSOConfig{provider: "generic"})
+	if err != nil || teamClaim != "identity.teams" || cfg.userRole(map[string]any{"groups": []any{"readers"}}) != "internal_user_viewer" {
+		t.Fatalf("stored mappings were not applied: %v %s %+v", err, teamClaim, cfg.roleGroups)
+	}
+}
+
 func TestGenericUISSOIssuesScopedKeyAfterPKCE(t *testing.T) {
 	var challenge string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,8 @@ func (registry *KeyRegistry) registerUISSO(mux *http.ServeMux) {
 	mux.HandleFunc("POST /sso/cli/complete/{login_id}", server.completeCLI)
 	mux.HandleFunc("GET /sso/cli/poll/{login_id}", server.pollCLI)
 	mux.HandleFunc("GET /sso/get/ui_settings", server.settings)
+	mux.HandleFunc("GET /get/sso_settings", server.ssoSettingsEndpoint)
+	mux.HandleFunc("PATCH /update/sso_settings", server.ssoSettingsEndpoint)
 	if server.config.ready() {
 		for _, path := range []string{"/.well-known/litellm-ui-config", "/litellm/.well-known/litellm-ui-config"} {
 			mux.HandleFunc("GET "+path, func(w http.ResponseWriter, _ *http.Request) {
@@ -181,7 +183,12 @@ func (s *uiSSOServer) callback(w http.ResponseWriter, r *http.Request) {
 	identity.Subject, _ = ssoClaim(claims, subjectClaim).(string)
 	identity.Email, _ = ssoClaim(claims, emailClaim).(string)
 	identity.Verified, _ = claims["email_verified"].(bool)
-	identity.TeamIDs = policyStringList(ssoClaim(claims, s.keys.ssoTeamClaim))
+	cfg, teamClaim, err := s.effectiveClaimMappings(ctx, cfg)
+	if err != nil {
+		modelError(w, http.StatusServiceUnavailable, "Could not read SSO claim mappings")
+		return
+	}
+	identity.TeamIDs = policyStringList(ssoClaim(claims, teamClaim))
 	identity.Role = cfg.userRole(claims)
 	if identity.Subject == "" {
 		modelError(w, http.StatusUnauthorized, "SSO identity verification failed")
