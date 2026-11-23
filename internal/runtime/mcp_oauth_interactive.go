@@ -262,12 +262,24 @@ func (s *Server) exchangeMCPOAuth(w http.ResponseWriter, r *http.Request, server
 	if secret != "" {
 		form.Set("client_secret", secret)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, oauth.TokenURL, strings.NewReader(form.Encode()))
+	record, data, err := s.fetchMCPOAuthToken(r.Context(), oauth.TokenURL, form)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid MCP OAuth provider configuration")
+		writeError(w, http.StatusBadGateway, "upstream_error", "MCP OAuth token exchange failed")
 		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if user := s.mcpOAuthUser(r); user != "" {
+		_ = s.config.MCPUserOAuthStore.Save(r.Context(), user, server.ID, record)
+	}
+	writeRawResponse(w, http.StatusOK, http.Header{"Content-Type": {"application/json"}}, data)
+}
+
+func (s *Server) fetchMCPOAuthToken(ctx context.Context, endpoint string, form url.Values) (MCPUserOAuthToken, []byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return MCPUserOAuthToken{}, nil, err
 	}
 	upstream.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	upstream.Header.Set("Accept", "application/json")
@@ -276,8 +288,7 @@ func (s *Server) exchangeMCPOAuth(w http.ResponseWriter, r *http.Request, server
 	select {
 	case s.sem <- struct{}{}:
 	case <-ctx.Done():
-		writeError(w, http.StatusServiceUnavailable, "resource_error", "MCP OAuth token exchange timed out")
-		return
+		return MCPUserOAuthToken{}, nil, ctx.Err()
 	}
 	defer func() { <-s.sem }()
 	status, data, _, err := s.sendGeminiFileRequest(&client, upstream)
@@ -288,20 +299,15 @@ func (s *Server) exchangeMCPOAuth(w http.ResponseWriter, r *http.Request, server
 		Scope        string `json:"scope"`
 	}
 	if err != nil || status/100 != 2 || json.Unmarshal(data, &token) != nil || token.AccessToken == "" {
-		writeError(w, http.StatusBadGateway, "upstream_error", "MCP OAuth token exchange failed")
-		return
+		return MCPUserOAuthToken{}, nil, errors.New("MCP OAuth token exchange failed")
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	if user := s.mcpOAuthUser(r); user != "" {
-		record := MCPUserOAuthToken{Type: "oauth2", AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
-			Scopes: strings.Fields(token.Scope), ConnectedAt: time.Now().UTC()}
-		if record.RefreshToken == "" && grant == "refresh_token" {
-			record.RefreshToken = form.Get("refresh_token")
-		}
-		if token.ExpiresIn > 0 && token.ExpiresIn < int64((1<<63-1)/time.Second) {
-			record.ExpiresAt = record.ConnectedAt.Add(time.Duration(token.ExpiresIn) * time.Second)
-		}
-		_ = s.config.MCPUserOAuthStore.Save(ctx, user, server.ID, record)
+	record := MCPUserOAuthToken{Type: "oauth2", AccessToken: token.AccessToken, RefreshToken: token.RefreshToken,
+		Scopes: strings.Fields(token.Scope), ConnectedAt: time.Now().UTC()}
+	if record.RefreshToken == "" && form.Get("grant_type") == "refresh_token" {
+		record.RefreshToken = form.Get("refresh_token")
 	}
-	writeRawResponse(w, http.StatusOK, http.Header{"Content-Type": {"application/json"}}, data)
+	if token.ExpiresIn > 0 && token.ExpiresIn < int64((1<<63-1)/time.Second) {
+		record.ExpiresAt = record.ConnectedAt.Add(time.Duration(token.ExpiresIn) * time.Second)
+	}
+	return record, data, nil
 }

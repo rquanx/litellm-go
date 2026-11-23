@@ -102,6 +102,7 @@ type Server struct {
 	deploymentCooldown map[string]cooldownWindow
 	polling *responsePolling
 	mcpOAuthFlows mcpOAuthFlows
+	mcpOAuthRefresh sync.Map
 }
 
 var credentialRefPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
