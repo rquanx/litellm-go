@@ -1022,6 +1022,9 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 		return s.googleEmbeddings(ctx, request, candidate, payload)
 	}
 	status, data, headers, retryable, err := s.callProviderJSON(ctx, request, endpoint, candidate, payload)
+	if err == nil && status/100 == 2 && candidate.Provider == "mistral" && candidate.Endpoint == "transcription" {
+		data, err = mistralTranscriptionResponse(data)
+	}
 	if err == nil && status/100 == 2 && nativeAudioDeployment(candidate) && candidate.Endpoint == "transcription" {
 		data, err = providerTranscription(data, candidate.Provider)
 		if err != nil {
@@ -1275,6 +1278,11 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 			if err != nil { err = invalidMediaRequest{err} }
 		}
 		contentType = "application/ssml+xml"
+	} else if candidate.Provider == "mistral" && candidate.Endpoint == "transcription" {
+		audioTarget, encoded, contentType, err = mistralTranscriptionRequest(payload, candidate)
+		if err != nil {
+			err = invalidMediaRequest{err}
+		}
 	} else if nativeAudioDeployment(candidate) {
 		audioTarget, encoded, contentType, err = audioProviderRequest(payload, candidate)
 		if err != nil { err = invalidMediaRequest{err} }

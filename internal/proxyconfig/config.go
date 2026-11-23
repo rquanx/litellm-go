@@ -638,11 +638,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		strings.Contains(model, "deepseek-ocr") ||
 		slices.Contains(entry.Info.Endpoints, "/v1/ocr")
 	mistralOCR := provider == "mistral" && configuredOCR
+	mistralAudio := provider == "mistral" && !configuredOCR && (entry.Info.Mode == "audio_transcription" || strings.HasPrefix(model, "voxtral-") || slices.Contains(entry.Info.Endpoints, "/v1/audio/transcriptions"))
 	partnerOCR := configuredOCR && (provider == "vertex_ai" ||
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !runway && !pgVector) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !runway && !pgVector) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -705,7 +706,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if base == "" && provider == "gemini" {
 		base = "https://generativelanguage.googleapis.com"
 	}
-	if base == "" && mistralOCR {
+	if base == "" && (mistralOCR || mistralAudio) {
 		base = "https://api.mistral.ai/v1"
 	}
 	if base == "" && partnerOCR && provider == "azure_ai" {
@@ -811,7 +812,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	} else if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
-	if key == "" && mistralOCR {
+	if key == "" && (mistralOCR || mistralAudio) {
 		key = os.Getenv("MISTRAL_API_KEY")
 	}
 	if key == "" && partnerOCR && provider == "azure_ai" {
@@ -916,6 +917,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if mistralOCR {
 		endpoint = "ocr"
+	}
+	if mistralAudio {
+		endpoint = "transcription"
 	}
 	if provider == "anthropic" {
 		endpoint = "anthropic-messages"
