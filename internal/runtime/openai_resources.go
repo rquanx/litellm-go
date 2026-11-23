@@ -425,6 +425,11 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 		}
 	}
 	wrap(response)
+	if family == anthropicSkillFamily {
+		if page, _ := response["next_page"].(string); validResourceSegment(page) {
+			response["next_page"] = encodeResourceID(family+"_page", deployment, page)
+		}
+	}
 	for _, field := range []string{"first_id", "last_id"} {
 		if id, ok := response[field].(string); ok && id != "" {
 			response[field] = encodeResourceID(resourceResultKind(family), deployment, id)

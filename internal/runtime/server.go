@@ -268,6 +268,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.videoResource(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && isAnthropicSkillPath(request.URL.Path) {
+		s.anthropicSkill(writer, request, modelScope)
+		return
+	}
 	if s.config.AuthorizeInference && isAnthropicBatchPath(request.URL.Path) {
 		s.anthropicBatch(writer, request, modelScope)
 		return
