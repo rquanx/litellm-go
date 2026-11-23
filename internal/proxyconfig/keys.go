@@ -74,9 +74,7 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 	if master == "" {
 		return nil, errors.New("virtual keys require a proxy master key")
 	}
-	registry := &KeyRegistry{master: master, store: store, state: accessState{
-		Keys: make(map[string]virtualKey), Teams: make(map[string]team), Organizations: make(map[string]organization),
-	}}
+	registry := &KeyRegistry{master: master, store: store, state: emptyAccessState()}
 	if store == nil {
 		return registry, nil
 	}
@@ -84,6 +82,35 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 		return nil, errors.New("invalid virtual key state")
 	}
 	return registry, nil
+}
+
+func emptyAccessState() accessState {
+	return accessState{Keys: make(map[string]virtualKey), Teams: make(map[string]team), Organizations: make(map[string]organization)}
+}
+
+func (registry *KeyRegistry) RunRefresh(ctx context.Context) {
+	if _, ok := registry.store.(*postgresState); !ok {
+		return
+	}
+	refreshPostgresRegistry(ctx, "virtual keys and access scopes", registry.refresh)
+}
+
+func (registry *KeyRegistry) refresh(ctx context.Context) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	store := registry.store.(*postgresState)
+	next := *store
+	state := emptyAccessState()
+	changed, err := next.loadAfter(ctx, &state, store.revision)
+	if err != nil || !changed {
+		return err
+	}
+	if state.Keys == nil || state.Teams == nil {
+		return errors.New("invalid virtual key state")
+	}
+	registry.state = state
+	store.revision = next.revision
+	return nil
 }
 
 func (registry *KeyRegistry) Authorize(token string) ([]string, bool) {

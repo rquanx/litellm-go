@@ -349,6 +349,7 @@ func main() {
 		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)
 		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)
+		go keys.RunRefresh(context.Background())
 	}
 	handler = policies.Handler(handler, config.Token, keys)
 	if guardrailUsage!=nil {

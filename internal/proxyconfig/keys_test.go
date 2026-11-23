@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,61 @@ import (
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestPostgresVirtualKeyRevocationRefreshesOnReplica(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY,revision BIGINT NOT NULL,value JSONB NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	const master = "fixture-master"
+	open := func() *KeyRegistry {
+		t.Helper()
+		registry, err := LoadPostgresKeys(master, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registry
+	}
+	primary, replica := open(), open()
+	handler := primary.Handler(http.NotFoundHandler())
+	call := func(path, payload string) []byte {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer "+master)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s returned %d %s", path, w.Code, w.Body)
+		}
+		return w.Body.Bytes()
+	}
+	var generated struct{ Key string }
+	if json.Unmarshal(call("/key/generate", `{"models":["fixture"]}`), &generated) != nil || generated.Key == "" {
+		t.Fatal("missing virtual key")
+	}
+	if err := replica.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if scope, ok := replica.Authorize(generated.Key); !ok || len(scope) != 1 || scope[0] != "fixture" {
+		t.Fatalf("replica did not restore key scope: %v", scope)
+	}
+	call("/key/delete", `{"keys":["`+generated.Key+`"]}`)
+	if err := replica.refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := replica.Authorize(generated.Key); ok {
+		t.Fatal("replica accepted a revoked virtual key")
+	}
+}
 
 func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "keys.json")
@@ -119,8 +175,8 @@ func TestKeyExpiryCalendarUnits(t *testing.T) {
 	now := time.Date(2024, time.January, 31, 12, 0, 0, 0, time.UTC)
 	for input, expected := range map[string]time.Time{
 		"1mo": time.Date(2024, time.February, 29, 12, 0, 0, 0, time.UTC),
-		"1w": now.Add(7 * 24 * time.Hour),
-		"1d": now.Add(24 * time.Hour),
+		"1w":  now.Add(7 * 24 * time.Hour),
+		"1d":  now.Add(24 * time.Hour),
 	} {
 		expiry, err := keyExpiry(now, input)
 		if err != nil || expiry == nil || !expiry.Equal(expected) {
