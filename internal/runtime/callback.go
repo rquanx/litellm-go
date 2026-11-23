@@ -53,6 +53,7 @@ type callbackResponse struct {
 	event               InferenceEvent
 	status              int
 	capture             bool
+	rpcFailure          bool
 	price               [2]*float64
 	cachePrice          *float64
 	cacheCreationPrice  *float64
@@ -136,6 +137,26 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	if json.Unmarshal(data, &payload) != nil {
 		return
 	}
+	if recorder.event.Provider == "a2a_agent" {
+		var rpc struct {
+			Error  json.RawMessage `json:"error"`
+			Result struct {
+				Usage    usage `json:"usage"`
+				Metadata struct {
+					Usage usage `json:"usage"`
+				} `json:"metadata"`
+			} `json:"result"`
+		}
+		if json.Unmarshal(data, &rpc) == nil {
+			recorder.rpcFailure = recorder.rpcFailure || (len(rpc.Error) != 0 && string(rpc.Error) != "null")
+			if payload.Usage == (usage{}) {
+				payload.Usage = rpc.Result.Usage
+				if payload.Usage == (usage{}) {
+					payload.Usage = rpc.Result.Metadata.Usage
+				}
+			}
+		}
+	}
 	if payload.ID != "" {
 		recorder.event.ResponseID = payload.ID
 	}
@@ -187,13 +208,15 @@ func (recorder *callbackResponse) finish() {
 	recorder.event.CacheReadInputTokens = recorder.cachedTokens
 	recorder.event.CacheCreationInputTokens = recorder.cacheCreationTokens
 	recorder.event.EndTime = float64(time.Now().UnixNano()) / float64(time.Second)
-	recorder.event.Model = recorder.Header().Get("X-Minato-Runtime-Model")
+	if routeModel := recorder.Header().Get("X-Minato-Runtime-Model"); routeModel != "" {
+		recorder.event.Model = routeModel
+	}
 	recorder.event.HTTPStatus = recorder.status
 	if recorder.event.Provider == "" {
 		recorder.event.Provider = recorder.Header().Get("X-Minato-Runtime-Source")
 	}
 	recorder.event.Status = "success"
-	if recorder.status >= 400 {
+	if recorder.status >= 400 || recorder.rpcFailure {
 		recorder.event.Status = "failure"
 	}
 	if recorder.event.CacheHit {

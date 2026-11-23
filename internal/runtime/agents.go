@@ -3,7 +3,9 @@ package runtime
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -148,6 +150,34 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 	if message.Method != "message/send" && message.Method != "message/stream" {
 		writeMCPError(w, http.StatusOK, message.ID, -32601, "Method not found")
 		return
+	}
+	if s.config.Callback != nil {
+		call := "asend_message"
+		if message.Method == "message/stream" {
+			call = "asend_message_streaming"
+		}
+		event := newInferenceEvent(call, agent.Name, message.Method == "message/stream")
+		event.Model, event.ModelID, event.Provider = "a2a_agent/"+agent.Name, agent.ID, "a2a_agent"
+		if trace := strings.TrimSpace(r.Header.Get("X-LiteLLM-Trace-Id")); trace != "" {
+			event.TraceID = trace
+		}
+		if key := ProxyCredential(r); key != "" && !s.authorized(r) {
+			event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+		}
+		if target, err := url.Parse(agent.URL); err == nil {
+			event.APISource = target.Scheme + "://" + target.Host
+		}
+		recorder := &callbackResponse{ResponseWriter: w, event: event, capture: s.config.LogMessages}
+		if recorder.capture {
+			recorder.event.Messages = boundedCallbackJSON(message.Params)
+		}
+		w = recorder
+		defer func() {
+			if recorder.status != 0 {
+				recorder.finish()
+				s.config.Callback(recorder.event)
+			}
+		}()
 	}
 	body, _ := json.Marshal(message)
 	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, agent.URL, bytes.NewReader(body))

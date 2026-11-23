@@ -42,7 +42,9 @@ litellm_settings:
 	if err != nil {
 		t.Fatal(err)
 	}
+	var events []runtime.InferenceEvent
 	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Token: "master", Agents: config.Agents,
+		Callback:     func(event runtime.InferenceEvent) { events = append(events, event) },
 		AuthorizeKey: func(token string) ([]string, bool) { return nil, token == "scoped" }})
 	call := func(method, path, token, body string, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -79,6 +81,10 @@ litellm_settings:
 	stream := call("POST", "/v1/a2a/fixture/message/send", "scoped", `{"jsonrpc":"2.0","id":1,"method":"message/stream","params":{}}`, 200)
 	if !stream.Flushed || !strings.Contains(stream.Body.String(), `"result"`) {
 		t.Fatal(stream.Body)
+	}
+	if len(events) != 1 || events[0].Provider != "a2a_agent" || events[0].Model != "a2a_agent/fixture" ||
+		events[0].TraceID != "fixture-trace" || events[0].Status != "success" || events[0].KeyDigest == "" {
+		t.Fatalf("unexpected A2A accounting event %+v", events)
 	}
 }
 
