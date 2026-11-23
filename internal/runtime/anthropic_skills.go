@@ -126,7 +126,7 @@ func (s *Server) anthropicSkill(w http.ResponseWriter, r *http.Request, scope []
 	writeRawResponse(w, response.StatusCode, response.Header, data)
 }
 
-func pinAnthropicSkillReferences(route *Route, fields map[string]any) error {
+func pinAnthropicResources(route *Route, fields map[string]any) error {
 	container, _ := fields["container"].(map[string]any)
 	skills, _ := container["skills"].([]any)
 	var deployment string
@@ -142,6 +142,22 @@ func pinAnthropicSkillReferences(route *Route, fields map[string]any) error {
 		}
 		skill["skill_id"] = native
 	}
+	messages, _ := fields["messages"].([]any)
+	for _, raw := range messages {
+		message, _ := raw.(map[string]any)
+		blocks, _ := message["content"].([]any)
+		for _, content := range blocks {
+			block, _ := content.(map[string]any)
+			source, _ := block["source"].(map[string]any)
+			id, _ := source["file_id"].(string)
+			if source["type"] != "file" || !strings.HasPrefix(id, "minato_") {
+				continue
+			}
+			native, err := nativeResourceID(id, "files", &deployment)
+			if err != nil { return err }
+			source["file_id"] = native
+		}
+	}
 	if deployment == "" {
 		return nil
 	}
@@ -153,5 +169,5 @@ func pinAnthropicSkillReferences(route *Route, fields map[string]any) error {
 			return nil
 		}
 	}
-	return errors.New("Anthropic skills belong to another deployment")
+	return errors.New("Anthropic resources belong to another deployment")
 }

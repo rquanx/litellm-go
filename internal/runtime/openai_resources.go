@@ -263,6 +263,14 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 			targetPath += "/" + action
 		}
 	}
+	if family == "files" && provider == "anthropic" {
+		if candidate, ok := s.anthropicBatchDeployment(alias, deployment, scope); ok {
+			s.forwardOpenAIResource(writer, request, candidate, family, targetPath, contentType, body)
+			return
+		}
+		writeError(writer, http.StatusBadRequest, "model_required", "Select a configured Anthropic file deployment")
+		return
+	}
 	if family == "files" && provider == "gemini" {
 		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
 			s.geminiFile(writer, request, candidate, targetPath, formParts)
@@ -273,6 +281,10 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	}
 	candidate, ok := s.resourceCandidate(alias, deployment, scope)
 	if !ok && family == "files" && provider == "" && (alias != "" || deployment != "") {
+		if anthropic, found := s.anthropicBatchDeployment(alias, deployment, scope); found {
+			s.forwardOpenAIResource(writer, request, anthropic, family, targetPath, contentType, body)
+			return
+		}
 		if gemini, found := s.geminiResourceCandidate(alias, deployment, scope); found {
 			s.geminiFile(writer, request, gemini, targetPath, formParts)
 			return
@@ -365,7 +377,16 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	providerKeyHeaders(upstream.Header, candidate, key)
+	if candidate.Provider == "anthropic" && family == "files" {
+		upstream.Header.Set("x-api-key", key)
+		upstream.Header.Set("anthropic-version", "2023-06-01")
+		upstream.Header.Set("anthropic-beta", "files-api-2025-04-14")
+		for _, name := range []string{"anthropic-version", "anthropic-beta"} {
+			if value := request.Header.Get(name); value != "" { upstream.Header.Set(name, value) }
+		}
+	} else {
+		providerKeyHeaders(upstream.Header, candidate, key)
+	}
 	select {
 	case s.sem <- struct{}{}:
 	case <-request.Context().Done():
@@ -398,6 +419,9 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 				return
 			}
 		} else if family != "" {
+			if candidate.Provider == "anthropic" && family == "files" {
+				body = normalizeAnthropicFiles(body, request.Method)
+			}
 			body = wrapOpenAIResource(body, family, candidate.DeploymentID)
 		}
 	}

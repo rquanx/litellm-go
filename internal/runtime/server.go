@@ -533,8 +533,8 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	if s.config.AuthorizeInference && endpoint == "anthropic-messages" {
-		if err := pinAnthropicSkillReferences(&route, input); err != nil {
-			writeError(writer, http.StatusBadRequest, "invalid_skill_reference", err.Error())
+		if err := pinAnthropicResources(&route, input); err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_resource_reference", err.Error())
 			return
 		}
 	}
