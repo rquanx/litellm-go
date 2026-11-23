@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -141,11 +142,12 @@ type mcpInferenceCall struct {
 }
 
 func (s *Server) inferWithMCPTools(w http.ResponseWriter, r *http.Request, endpoint, alias string, scope []string, fields map[string]any, allowed map[string]mcpInferenceTool, stream bool) {
-	if stream || inputBool(fields, "background") {
-		writeError(w, http.StatusBadRequest, "mcp_tool_error", "Automatic MCP tools currently require a foreground non-streaming request")
+	if inputBool(fields, "background") {
+		writeError(w, http.StatusBadRequest, "mcp_tool_error", "Automatic MCP tools currently require foreground inference or proxy polling")
 		return
 	}
 	fields = clone(fields)
+	delete(fields, "stream")
 	fields["cache"] = map[string]any{"no-cache": true, "no-store": true}
 	target := endpoints[endpoint].path
 	invoke := func() (*ragResult, bool) {
@@ -160,12 +162,12 @@ func (s *Server) inferWithMCPTools(w http.ResponseWriter, r *http.Request, endpo
 	}
 	var response map[string]any
 	if json.Unmarshal(initial.body.Bytes(), &response) != nil || response == nil {
-		writeRawResponse(w, initial.status, initial.header, initial.body.Bytes())
+		writeMCPInitialResult(w, initial, response, endpoint, stream)
 		return
 	}
 	calls, transcript := mcpInferenceCalls(endpoint, response)
 	if len(calls) == 0 || len(calls) > 32 {
-		writeRawResponse(w, initial.status, initial.header, initial.body.Bytes())
+		writeMCPInitialResult(w, initial, response, endpoint, stream)
 		return
 	}
 	arguments := make([]map[string]json.RawMessage, len(calls))
@@ -174,7 +176,7 @@ func (s *Server) inferWithMCPTools(w http.ResponseWriter, r *http.Request, endpo
 		tool, found := allowed[call.name]
 		if !found || call.id == "" || seen[call.id] || json.Unmarshal([]byte(call.arguments), &arguments[index]) != nil ||
 			!tool.server.allowsTool(tool.name) || !tool.server.allowsArguments(tool.name, arguments[index]) {
-			writeRawResponse(w, initial.status, initial.header, initial.body.Bytes())
+			writeMCPInitialResult(w, initial, response, endpoint, stream)
 			return
 		}
 		seen[call.id] = true
@@ -205,6 +207,12 @@ func (s *Server) inferWithMCPTools(w http.ResponseWriter, r *http.Request, endpo
 		fields["input"] = append(append(input, transcript...), outputs...)
 	}
 	fields["tool_choice"] = "none"
+	if stream {
+		fields["stream"] = true
+		data, _ := json.Marshal(fields)
+		s.infer(w, ragSubrequest(r, http.MethodPost, target, data, true), endpoint, alias, scope)
+		return
+	}
 	if final, ok := invoke(); ok {
 		body := final.body.Bytes()
 		if endpoint == "responses" {
@@ -295,4 +303,48 @@ func appendMCPInferenceOutput(body []byte, tools any, execution []map[string]any
 		return body
 	}
 	return encoded
+}
+
+func writeMCPInitialResult(w http.ResponseWriter, initial *ragResult, response map[string]any, endpoint string, stream bool) {
+	if !stream || response == nil {
+		writeRawResponse(w, initial.status, initial.header, initial.body.Bytes())
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	if endpoint == "responses" {
+		begun := clone(response)
+		begun["status"], begun["output"] = "in_progress", []any{}
+		for index, event := range []struct {
+			kind string
+			body map[string]any
+		}{
+			{"response.created", begun}, {"response.completed", response},
+		} {
+			data, _ := json.Marshal(map[string]any{"type": event.kind, "sequence_number": index, "response": event.body})
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.kind, data)
+		}
+	} else {
+		var chunks []map[string]any
+		choices, _ := response["choices"].([]any)
+		for _, item := range choices {
+			choice, _ := item.(map[string]any)
+			delta, _ := choice["message"].(map[string]any)
+			if list, ok := delta["tool_calls"].([]any); ok {
+				for index, value := range list {
+					if call, ok := value.(map[string]any); ok {
+						call["index"] = index
+					}
+				}
+			}
+			chunks = append(chunks, map[string]any{"index": choice["index"], "delta": delta, "finish_reason": choice["finish_reason"]})
+		}
+		data, _ := json.Marshal(map[string]any{"id": response["id"], "model": response["model"], "created": response["created"],
+			"object": "chat.completion.chunk", "choices": chunks})
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", data)
+	}
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }

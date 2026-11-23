@@ -44,6 +44,11 @@ func TestInferenceExpandsOnlyPermittedMCPTools(t *testing.T) {
 			if !strings.Contains(string(raw), "tool-result") {
 				t.Errorf("missing MCP result %s", raw)
 			}
+			if strings.Contains(string(raw), `"stream":true`) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"follow-up-stream\",\"status\":\"completed\",\"output\":[]}}\n\n")
+				return
+			}
 			io.WriteString(w, `{"id":"follow-up","object":"response","output":[]}`)
 			return
 		}
@@ -67,5 +72,13 @@ func TestInferenceExpandsOnlyPermittedMCPTools(t *testing.T) {
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "follow-up") {
 		t.Fatalf("unexpected automatic MCP result %d %s", result.Code, result.Body)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture","stream":true,"tools":[{"type":"mcp","server_url":"litellm_proxy/mcp/fixture","require_approval":"never"}]}`))
+	request.Header.Set("Authorization", "Bearer master")
+	result = httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), "follow-up-stream") ||
+		!strings.Contains(result.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("unexpected streaming MCP result %d %s", result.Code, result.Body)
 	}
 }

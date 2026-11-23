@@ -590,6 +590,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 		if len(automatic) > 0 {
+			if endpoint == "responses" && s.shouldPollResponse(route, input) {
+				s.startResponsePolling(writer, request, route.Alias, body)
+				return
+			}
 			if recorder, ok := writer.(*callbackResponse); ok {
 				writer = recorder.ResponseWriter
 			}
