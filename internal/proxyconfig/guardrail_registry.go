@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -76,6 +77,7 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 	mux.HandleFunc("GET /guardrails/{guardrail_id}/info", registry.read)
 	mux.HandleFunc("POST /guardrails", registry.write)
 	mux.HandleFunc("PUT /guardrails/{guardrail_id}", registry.write)
+	mux.HandleFunc("PATCH /guardrails/{guardrail_id}", registry.write)
 	mux.HandleFunc("DELETE /guardrails/{guardrail_id}", registry.write)
 	mux.Handle("/", next)
 	return mux, nil
@@ -153,13 +155,19 @@ func (registry *guardrailRegistry) write(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	id := r.PathValue("guardrail_id")
-	var request struct {
-		Guardrail struct {
-			genericGuardrailSpec
-			Info map[string]any `json:"guardrail_info"`
-		} `json:"guardrail"`
+	type definition struct {
+		genericGuardrailSpec
+		Info map[string]any `json:"guardrail_info"`
 	}
-	if r.Method != http.MethodDelete && decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &request) != nil {
+	var request struct {
+		Guardrail definition `json:"guardrail"`
+	}
+	var patch json.RawMessage
+	var target any = &request
+	if r.Method == http.MethodPatch {
+		target = &patch
+	}
+	if r.Method != http.MethodDelete && decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), target) != nil {
 		modelError(w, 400, "Invalid guardrail configuration")
 		return
 	}
@@ -174,6 +182,18 @@ func (registry *guardrailRegistry) write(w http.ResponseWriter, r *http.Request)
 	} else if _, ok := next[id]; !ok {
 		modelError(w, 404, "Guardrail not found")
 		return
+	}
+	if r.Method == http.MethodPatch {
+		row := next[id]
+		update := definition{genericGuardrailSpec: row.Spec, Info: nil}
+		if decodeModelJSON(strings.NewReader(string(patch)), &update) != nil {
+			modelError(w, 400, "Invalid guardrail patch")
+			return
+		}
+		if update.Info == nil {
+			update.Info = row.Info
+		}
+		request.Guardrail = update
 	}
 	if r.Method == http.MethodDelete {
 		delete(next, id)
