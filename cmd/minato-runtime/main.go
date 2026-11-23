@@ -53,6 +53,8 @@ func main() {
 		config.PassThrough = proxy.PassThrough
 		config.NumRetries = proxy.NumRetries
 		config.RoutingStrategy = proxy.RoutingStrategy
+		config.EnableTagFiltering = proxy.EnableTagFiltering
+		config.TagsMatchAll = proxy.TagsMatchAll
 		config.LatencyBuffer = proxy.LatencyBuffer
 		config.LatencySamples = proxy.LatencySamples
 		config.AllowedFails = proxy.AllowedFails

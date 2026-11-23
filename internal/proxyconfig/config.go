@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -42,6 +43,8 @@ type configFile struct {
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 	} `yaml:"general_settings"`
 	Router struct {
+		EnableTagFiltering bool `yaml:"enable_tag_filtering"`
+		TagFilteringMatchAny *bool `yaml:"tag_filtering_match_any"`
 		RedisURL string `yaml:"redis_url"`
 		RedisHost string `yaml:"redis_host"`
 		RedisPort string `yaml:"redis_port"`
@@ -77,6 +80,8 @@ type deployment struct {
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
 		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
+		Tags []string `yaml:"tags" json:"tags,omitempty"`
+		TagRegex []string `yaml:"tag_regex" json:"tag_regex,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
 		OutputPrice *float64 `yaml:"output_cost_per_token" json:"output_cost_per_token,omitempty"`
@@ -116,6 +121,8 @@ type Config struct {
 	Timeout   time.Duration
 	NumRetries int
 	RoutingStrategy string
+	EnableTagFiltering bool
+	TagsMatchAll bool
 	LatencyBuffer float64
 	LatencySamples int
 	AllowedFails int
@@ -210,6 +217,8 @@ func Load(reader io.Reader) (Config, error) {
 		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	config.EnableTagFiltering = file.Router.EnableTagFiltering
+	config.TagsMatchAll = file.Router.TagFilteringMatchAny != nil && !*file.Router.TagFilteringMatchAny
 	if file.Router.RedisURL != "" || file.Router.RedisHost != "" {
 		params := inferenceCacheParams{RedisURL: file.Router.RedisURL, Host: file.Router.RedisHost,
 			Port: file.Router.RedisPort, Password: file.Router.RedisPassword}
@@ -860,10 +869,18 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if err != nil {
 		return runtime.Candidate{}, err
 	}
+	patterns := make([]*regexp.Regexp, 0, len(entry.Params.TagRegex))
+	for _, pattern := range entry.Params.TagRegex {
+		compiled, err := regexp.Compile(pattern)
+		if err != nil {
+			return runtime.Candidate{}, errors.New("invalid deployment tag_regex")
+		}
+		patterns = append(patterns, compiled)
+	}
 	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
-		RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
+		Tags: slices.Clone(entry.Params.Tags), TagRegex: patterns, RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
 		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],

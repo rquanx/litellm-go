@@ -1,5 +1,7 @@
 package runtime
 
+import "regexp"
+
 type Route struct {
 	Alias      string      `json:"alias"`
 	Version    string      `json:"version"`
@@ -23,6 +25,8 @@ type Candidate struct {
 	ParamMappings    map[string]string `json:"paramMappings,omitempty"`
 	RelativeAPIBase  bool              `json:"relativeApiBase,omitempty"`
 	TextOnly         bool              `json:"textOnly,omitempty"`
+	Tags             []string          `json:"-"`
+	TagRegex         []*regexp.Regexp  `json:"-"`
 	RoutingGroup     string            `json:"routingGroup,omitempty"`
 	TokenPrice       float64           `json:"-"`
 	UsagePrice       [2]*float64       `json:"-"`

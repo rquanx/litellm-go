@@ -45,6 +45,8 @@ type Config struct {
 	SearchFallbacks    map[string][]string
 	RoutingStrategy    string
 	RoutingState       RoutingState
+	EnableTagFiltering bool
+	TagsMatchAll       bool
 	LatencyBuffer      float64
 	LatencySamples     int
 	Callback           func(InferenceEvent)
@@ -497,6 +499,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	eligible := s.eligibleCandidates(request.Context(), route.Candidates, modelScope, endpoint, stream)
+	if s.config.EnableTagFiltering {
+		before := len(eligible)
+		eligible = filterTaggedDeployments(eligible, input, request.UserAgent(), s.config.TagsMatchAll)
+		if before > 0 && len(eligible) == 0 {
+			writeError(writer, http.StatusBadRequest, "no_deployments_with_tag_routing", "No deployments match the request tags")
+			return
+		}
+	}
 	if len(eligible) == 0 {
 		writeError(writer, http.StatusBadRequest, "unsupported_endpoint", "Model does not support this endpoint")
 		return
@@ -504,6 +514,14 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route.Candidates = eligible
 	route.ContextFallback = s.eligibleCandidates(request.Context(), route.ContextFallback, modelScope, endpoint, stream)
 	route.PolicyFallback = s.eligibleCandidates(request.Context(), route.PolicyFallback, modelScope, endpoint, stream)
+	if s.config.EnableTagFiltering {
+		if route.ContextFallback != nil {
+			route.ContextFallback = filterTaggedDeployments(route.ContextFallback, input, request.UserAgent(), s.config.TagsMatchAll)
+		}
+		if route.PolicyFallback != nil {
+			route.PolicyFallback = filterTaggedDeployments(route.PolicyFallback, input, request.UserAgent(), s.config.TagsMatchAll)
+		}
+	}
 	if s.config.AuthorizeInference && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
