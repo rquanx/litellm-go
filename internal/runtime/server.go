@@ -153,17 +153,29 @@ func NewServer(config Config) *Server {
 
 // ReplaceConfiguredRouting publishes the model routes and search fallback rules together.
 func (s *Server) ReplaceConfiguredRouting(routes []Route, searchTools []SearchTool, searchFallbacks map[string][]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replaceConfiguredRouting(routes, searchTools, searchFallbacks)
+}
+
+func (s *Server) ReplaceManagedConfiguration(routes []Route, searchTools []SearchTool, searchFallbacks map[string][]string,
+	passThrough []PassThroughRoute, mcpServers []MCPServer, toolsets []MCPToolset) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replaceConfiguredRouting(routes, searchTools, searchFallbacks)
+	s.passThrough, s.mcpServers, s.mcpToolsets = passThrough, mcpServers, toolsets
+}
+
+func (s *Server) replaceConfiguredRouting(routes []Route, searchTools []SearchTool, searchFallbacks map[string][]string) {
 	next := make(map[string]Route, len(routes))
 	for _, route := range routes {
 		next[route.Alias] = route
 	}
-	s.mu.Lock()
 	s.configuredRoutes = next
 	s.searchTools = searchTools
 	s.searchFallbacks = searchFallbacks
 	s.healthResults = nil
 	s.configGeneration++
-	s.mu.Unlock()
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {

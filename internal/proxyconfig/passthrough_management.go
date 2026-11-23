@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 const passThroughManagementPath = "/config/pass_through_endpoint"
@@ -14,14 +16,18 @@ func (registry *modelRegistry) loadPassThrough() error {
 	if len(registry.passThrough) == 0 && len(registry.base.staticPassThrough) == 0 {
 		return nil
 	}
-	if err := validatePassThroughIDs(registry.passThrough); err != nil {
-		return err
-	}
-	routes, err := preparePassThrough(append(slices.Clone(registry.base.staticPassThrough), registry.passThrough...))
+	routes, err := registry.compilePassThrough(registry.passThrough)
 	if err == nil {
 		registry.server.ReplacePassThrough(routes)
 	}
 	return err
+}
+
+func (registry *modelRegistry) compilePassThrough(entries []passThroughConfig) ([]runtime.PassThroughRoute,error) {
+	if err:=validatePassThroughIDs(entries);err!=nil {
+		return nil,err
+	}
+	return preparePassThrough(append(slices.Clone(registry.base.staticPassThrough),entries...))
 }
 
 func (registry *modelRegistry) registerPassThroughRoutes(mux *http.ServeMux) {

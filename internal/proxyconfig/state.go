@@ -72,32 +72,40 @@ func OpenPostgresState(databaseURL string) (*sql.DB, error) {
 func (store *postgresState) load(target any) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	_, err := store.loadAfter(ctx, target, -1)
+	return err
+}
+
+func (store *postgresState) loadAfter(ctx context.Context, target any, lastRevision int64) (bool, error) {
 	var payload []byte
 	var revision int64
-	err := store.db.QueryRowContext(ctx, `SELECT value, revision FROM minato_proxy_state WHERE name = $1`, store.name).
+	err := store.db.QueryRowContext(ctx, `SELECT CASE WHEN revision <> $2 THEN value END, revision FROM minato_proxy_state WHERE name = $1`, store.name, lastRevision).
 		Scan(&payload, &revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		store.revision = 0
-		return nil
+		return lastRevision > 0, nil
 	}
 	if err != nil {
-		return err
+		return false, err
+	}
+	if revision == lastRevision {
+		return false, nil
 	}
 	if store.key != nil {
 		var encrypted string
 		if json.Unmarshal(payload, &encrypted) != nil {
-			return errors.New("model state is not encrypted")
+			return false,errors.New("model state is not encrypted")
 		}
 		payload, err = openState(encrypted, store.key)
 		if err != nil {
-			return err
+			return false,err
 		}
 	}
 	if err := decodeModelJSON(bytes.NewReader(payload), target); err != nil {
-		return err
+		return false,err
 	}
 	store.revision = revision
-	return nil
+	return true,nil
 }
 
 func (store *postgresState) save(value any) error {

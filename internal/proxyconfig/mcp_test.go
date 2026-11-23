@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,69 @@ import (
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
 )
+
+func TestPostgresManagedMCPApprovalRefreshesOnReplica(t *testing.T) {
+	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("MINATO_TEST_POSTGRES_URL is unset")
+	}
+	db, err := OpenPostgresState(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY,revision BIGINT NOT NULL,value JSONB NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	const master = "fixture-master"
+	keys, err := LoadKeys(master, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Teams["team"] = team{ID: "team"}
+	keys.state.Keys[keyDigest("member")] = virtualKey{TeamID: "team"}
+	open := func() *modelRegistry {
+		server := runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true})
+		registry, err := withModelManagement(server, Config{}, master, postgresModels(db, master), keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registry
+	}
+	primary, replica := open(), open()
+	call := func(handler http.Handler, method, path, token, body string, status int) string {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != status {
+			t.Fatalf("%s %s returned %d %s", method, path, w.Code, w.Body)
+		}
+		return w.Body.String()
+	}
+	raw := call(primary, http.MethodPost, mcpServerPath+"/register", "member",
+		`{"server_name":"fixture","transport":"http","url":"http://127.0.0.1:1/mcp","available_on_public_internet":true}`, 201)
+	var candidate mcpServerInput
+	if json.Unmarshal([]byte(raw), &candidate) != nil || candidate.ServerID == "" {
+		t.Fatalf("missing submission ID: %s", raw)
+	}
+	if err := replica.refreshManagedState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	call(replica, http.MethodPut, mcpServerPath+"/"+candidate.ServerID+"/approve", master, "", 200)
+	if before := call(primary, http.MethodGet, "/public/mcp_hub", "", "", 200); strings.TrimSpace(before) != "[]" {
+		t.Fatalf("pending server published before refresh: %s", before)
+	}
+	if err := primary.refreshManagedState(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if after := call(primary, http.MethodGet, "/public/mcp_hub", "", "", 200); !strings.Contains(after, candidate.ServerID) {
+		t.Fatalf("server not published after refresh: %s", after)
+	}
+	call(primary, http.MethodDelete, mcpServerPath+"/"+candidate.ServerID, master, "", 200)
+}
 
 func TestPostgresImportsLiteLLMMCPServers(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")

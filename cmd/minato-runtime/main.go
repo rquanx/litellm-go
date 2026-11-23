@@ -313,7 +313,7 @@ func main() {
 	if *configPath != "" {
 		var err error
 		if stateDB != nil {
-			handler, err = proxyconfig.WithPostgresModelManagement(server, proxy, config.Token, stateDB, keys)
+			handler, err = proxyconfig.WithPostgresModelManagement(context.Background(), server, proxy, config.Token, stateDB, keys)
 		} else {
 			handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
 		}

@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
@@ -18,6 +19,7 @@ import (
 )
 
 type modelRegistry struct {
+	handler http.Handler
 	keys *KeyRegistry
 	server *runtime.Server
 	base   Config
@@ -38,11 +40,16 @@ func WithModelManagement(server *runtime.Server, config Config, token, statePath
 	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"),nil)
 }
 
-func WithPostgresModelManagement(server *runtime.Server, config Config, token string, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
-	return withModelManagement(server, config, token, postgresModels(db, token),keys)
+func WithPostgresModelManagement(ctx context.Context, server *runtime.Server, config Config, token string, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
+	registry, err := withModelManagement(server, config, token, postgresModels(db, token), keys)
+	if err != nil {
+		return nil, err
+	}
+	go refreshPostgresRegistry(ctx, "managed configuration", registry.refreshManagedState)
+	return registry, nil
 }
 
-func withModelManagement(server *runtime.Server, config Config, token string, store stateStore,keys *KeyRegistry) (http.Handler, error) {
+func withModelManagement(server *runtime.Server, config Config, token string, store stateStore,keys *KeyRegistry) (*modelRegistry, error) {
 	registry := &modelRegistry{server: server, base: config, token: token, store: store,keys:keys}
 	registry.base.models = slices.Clone(config.models)
 	if store != nil {
@@ -53,12 +60,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		if err := store.load(&state); err != nil {
 			return nil, errors.New("could not load dynamic model state")
 		}
-		registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
-		registry.searchTools = state.SearchTools
-		registry.passThrough = state.PassThrough
-		registry.mcpServers = state.MCPServers
-		registry.mcpToolsets = state.MCPToolsets
-		registry.publicHub = state.PublicHub
+		registry.setManagedState(state)
 	}
 	config, err := registry.compileConfiguration(registry.models, registry.credentials, registry.router, registry.searchTools)
 	if err != nil {
@@ -98,9 +100,47 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.HandleFunc("POST /config/update", registry.updateRouter)
 	mux.Handle("/", server)
-	return mux, nil
+	registry.handler = mux
+	return registry, nil
 }
 
+func (registry *modelRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	registry.handler.ServeHTTP(w, r)
+}
+
+func (registry *modelRegistry) setManagedState(state modelState) {
+	registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
+	registry.searchTools, registry.passThrough = state.SearchTools, state.PassThrough
+	registry.mcpServers, registry.mcpToolsets, registry.publicHub = state.MCPServers, state.MCPToolsets, state.PublicHub
+}
+
+func (registry *modelRegistry) refreshManagedState(ctx context.Context) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	store := registry.store.(*postgresState)
+	next := *store
+	var state modelState
+	changed, err := next.loadAfter(ctx, &state, store.revision)
+	if err != nil || !changed {
+		return err
+	}
+	cfg, err := registry.compileConfiguration(state.Models, state.Credentials, state.Router, state.SearchTools)
+	if err != nil {
+		return err
+	}
+	passThrough, err := registry.compilePassThrough(state.PassThrough)
+	if err != nil {
+		return err
+	}
+	servers, err := registry.compileMCP(state.MCPServers)
+	if err != nil {
+		return err
+	}
+	registry.server.ReplaceManagedConfiguration(cfg.Routes, cfg.SearchTools, cfg.searchFallbacks(), passThrough, servers, state.MCPToolsets)
+	registry.setManagedState(state)
+	store.revision = next.revision
+	return nil
+}
 func (registry *modelRegistry) compile(models []deployment) ([]runtime.Route, error) {
 	return registry.compileState(models, registry.credentials)
 }
