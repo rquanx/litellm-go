@@ -251,6 +251,9 @@ func main() {
 		}
 		config.CustomerPolicy = customers.Policy
 	}
+	if stateDB != nil && keys != nil {
+		config.VectorRegistryLookup = proxyconfig.VectorRegistryLookup(stateDB, keys)
+	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {

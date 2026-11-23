@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 const vectorRegistryTable = `"LiteLLM_ManagedVectorStoresTable"`
@@ -220,4 +221,27 @@ func (api *vectorRegistry) list(w http.ResponseWriter, r *http.Request, caller m
 		return
 	}
 	modelJSON(w, http.StatusOK, map[string]any{"object": "list", "data": records, "total_count": count, "current_page": page, "total_pages": (count + size - 1) / size})
+}
+
+func VectorRegistryLookup(db *sql.DB, keys *KeyRegistry) runtime.VectorRegistryLookup {
+	return func(r *http.Request, id string) (provider string, params map[string]any, found, allowed bool, err error) {
+		caller, ok := keys.identifyResourceCaller(r)
+		if !ok {
+			return "", nil, false, false, nil
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+		defer cancel()
+		var raw []byte
+		err = db.QueryRowContext(ctx, `SELECT COALESCE(`+vectorRegistryScope+`,false),custom_llm_provider,litellm_params
+			FROM `+vectorRegistryTable+` WHERE vector_store_id=$4`, caller.admin, caller.user, caller.team, id).Scan(&allowed, &provider, &raw)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil, false, false, nil
+		}
+		if err != nil || !allowed {
+			return "", nil, err == nil, false, err
+		}
+		var value any
+		_ = json.Unmarshal(raw, &value)
+		return provider, safeVectorParams(value), true, true, nil
+	}
 }

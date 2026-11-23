@@ -41,6 +41,7 @@ type Config struct {
 	ContainerOwners     ContainerOwners
 	LegacyFiles         LegacyFileLookup
 	LegacyVectorStores  LegacyFileLookup
+	VectorRegistryLookup VectorRegistryLookup
 	ResponsePolling     ResponsePollingConfig
 	PollingStore        PollingStore
 	InferenceCache      InferenceCacheConfig

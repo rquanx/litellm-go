@@ -61,7 +61,10 @@ func TestS3VectorsIngestAndSearch(t *testing.T) {
 		{Alias: "ocr", Candidates: []Candidate{{Provider: "mistral", Endpoint: "ocr", ModelID: "mistral-ocr-latest", DeploymentID: "ocr", APIBase: cloud.URL}}},
 		{Alias: "embed", Candidates: []Candidate{{Provider: "openai", Endpoint: "embeddings", ModelID: "embed", DeploymentID: "embed", APIBase: cloud.URL}}},
 	}
-	server := NewServer(Config{AuthorizeInference: true, Routes: routes, Token: "master", AuthorizeKey: func(key string) ([]string, bool) {
+	server := NewServer(Config{AuthorizeInference: true, Routes: routes, Token: "master", VectorRegistryLookup: func(r *http.Request, id string) (string, map[string]any, bool, bool, error) {
+		registered := id == "fixture-bucket:fixture-index"
+		return "s3_vectors", map[string]any{"model": "aws", "litellm_embedding_model": "embed"}, registered, ProxyCredential(r) == "master", nil
+	}, AuthorizeKey: func(key string) ([]string, bool) {
 		return []string{"aws"}, key == "scoped"
 	}})
 	send := func(path, key, body string) *httptest.ResponseRecorder {
@@ -82,9 +85,9 @@ func TestS3VectorsIngestAndSearch(t *testing.T) {
 		t.Fatalf("unexpected OCR ingestion result %d %s", ocr.Code, ocr.Body)
 	}
 	for _, key := range []string{"master", "scoped"} {
-		result := send("/v1/vector_stores/fixture-bucket:fixture-index/search", key, `{"custom_llm_provider":"s3_vectors","model":"aws","embedding_model":"embed","query":"fixture"}`)
+		result := send("/v1/vector_stores/fixture-bucket:fixture-index/search", key, `{"query":"fixture"}`)
 		if key == "scoped" {
-			if result.Code != http.StatusForbidden {
+			if result.Code != http.StatusNotFound {
 				t.Fatalf("wrong embedding access result %d %s", result.Code, result.Body)
 			}
 		} else if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"score":0.75`) {

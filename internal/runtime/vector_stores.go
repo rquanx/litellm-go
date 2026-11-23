@@ -169,6 +169,14 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		s.forwardOpenAIResource(w, request, candidate, family, path, contentType, body)
 		return
 	}
+	if family == "vector_stores_search" {
+		var ok bool
+		alias, provider, ok = s.applyVectorRegistry(w, request, id, alias, provider, fields)
+		if !ok {
+			return
+		}
+		body, _ = json.Marshal(fields)
+	}
 	if provider == "gemini" {
 		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
 			s.geminiVectorStore(w, request, candidate, family, path, fields)
@@ -315,4 +323,44 @@ func (s *Server) rewriteResponseVectorStores(r *http.Request, fields map[string]
 		ref.stores[ref.index] = original
 	}
 	return nil
+}
+
+type VectorRegistryLookup func(r *http.Request, id string) (provider string, params map[string]any, found, allowed bool, err error)
+
+func (s *Server) applyVectorRegistry(w http.ResponseWriter, r *http.Request, id, alias, provider string, fields map[string]any) (string, string, bool) {
+	if s.config.VectorRegistryLookup == nil {
+		return alias, provider, true
+	}
+	registered, params, found, allowed, err := s.config.VectorRegistryLookup(r, id)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not read vector store registration")
+		return "", "", false
+	}
+	if !found {
+		return alias, provider, true
+	}
+	if !allowed {
+		writeError(w, http.StatusNotFound, "resource_not_found", "Unknown vector store")
+		return "", "", false
+	}
+	if provider != "" && provider != registered {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Provider does not match the registered vector store")
+		return "", "", false
+	}
+	if model, _ := params["model"].(string); model != "" {
+		if alias != "" && alias != model {
+			writeError(w, http.StatusBadRequest, "invalid_request", "Model does not match the registered vector store")
+			return "", "", false
+		}
+		alias = model
+	}
+	for _, field := range []string{"embedding_model", "vector_bucket_name", "aws_region_name"} {
+		if params[field] != nil {
+			fields[field] = params[field]
+		}
+	}
+	if selector, _ := params["litellm_embedding_model"].(string); selector != "" {
+		fields["embedding_model"] = selector
+	}
+	return alias, registered, true
 }

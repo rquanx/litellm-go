@@ -44,6 +44,13 @@ func TestVectorRegistryPostgres(t *testing.T) {
 	call("POST", "/vector_store/new", "master", create, 409, "already exists")
 	call("POST", "/vector_store/info", "master", selectBody, 200, `"origin":"fixture"`)
 	call("POST", "/vector_store/update", "master", `{"vector_store_id":"`+id+`","vector_store_name":"updated"}`, 200, `"vector_store_name":"updated"`)
+	lookup := VectorRegistryLookup(db, keys)
+	req := httptest.NewRequest(http.MethodPost, "/v1/vector_stores/"+id+"/search", nil)
+	req.Header.Set("Authorization", "Bearer master")
+	provider, params, found, allowed, err := lookup(req, id)
+	if err != nil || !found || !allowed || provider != "s3_vectors" || params["embedding_model"] != "embed" || params["api_key"] != nil {
+		t.Fatalf("unexpected registry routing result %s %v %t %t %v", provider, params, found, allowed, err)
+	}
 	call("GET", "/v1/vector_store/list?page_size=1", "master", "", 200, `"current_page":1`)
 	call("POST", "/vector_store/delete", "master", selectBody, 200, "deleted successfully")
 	call("POST", "/vector_store/info", "master", selectBody, 404, "not found")
