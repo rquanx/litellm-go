@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/textproto"
 	"slices"
@@ -199,6 +200,9 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 			return s.probeBatchList(ctx, r, candidate)
 		}
 	}
+	if candidate.HealthMode == "video_generation" || candidate.Endpoint == "videos" {
+		return s.probeVideo(ctx, r, candidate)
+	}
 	const prompt = "ping"
 	endpoint := candidate.Endpoint
 	var fields map[string]any
@@ -288,6 +292,25 @@ func (s *Server) probeBatchList(ctx context.Context, parent *http.Request, candi
 		}
 	} else {
 		s.forwardOpenAIResource(result, request, candidate, "", "/v1/batches", "", nil)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return http.StatusRequestTimeout
+	}
+	return result.status
+}
+
+func (s *Server) probeVideo(ctx context.Context, parent *http.Request, candidate Candidate) int {
+	fields := map[string]any{"prompt": "test video generation", "model": candidate.ModelID}
+	result := &ragResult{header: make(http.Header), limit: s.config.MaxBodyBytes}
+	request := ragSubrequest(parent.WithContext(ctx), http.MethodPost, videoPath, nil, false)
+	switch candidate.Provider {
+	case "openai", "azure":
+		body, _ := json.Marshal(fields)
+		s.forwardOpenAIResource(result, request, candidate, "", videoPath, "application/json", body)
+	case "gemini", "vertex_ai":
+		s.googleVideoResource(result, request, candidate, videoPath, requestPayload{fields: fields})
+	default:
+		return http.StatusNotImplemented
 	}
 	if ctx.Err() == context.DeadlineExceeded {
 		return http.StatusRequestTimeout
