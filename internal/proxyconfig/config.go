@@ -20,6 +20,8 @@ import (
 )
 
 type configFile struct {
+	Policies map[string]policyRule `yaml:"policies"`
+	PolicyAttachments []policyAttachment `yaml:"policy_attachments"`
 	Agents []agentConfig `yaml:"agent_list"`
 	Models  []deployment `yaml:"model_list"`
 	SearchTools []searchToolConfig `yaml:"search_tools"`
@@ -189,6 +191,7 @@ type Config struct {
 	credentials map[string]providerCredential
 	Callback GenericCallbacks
 	Guardrails []runtime.GenericGuardrail
+	Policy *PolicyEngine
 	SSOUserDefaults *SSOUserDefaults
 	LogMessages bool
 	publicModelGroups []string
@@ -268,6 +271,10 @@ func Load(reader io.Reader) (Config, error) {
 		return Config{}, err
 	}
 	config.Guardrails = guardrails
+	config.Policy, err = compilePolicies(file.Policies, file.PolicyAttachments)
+	if err != nil {
+		return Config{}, err
+	}
 	config.SSOUserDefaults = file.Callbacks.SSOUserDefaults
 	if err := config.SSOUserDefaults.validate(); err != nil {
 		return Config{}, err

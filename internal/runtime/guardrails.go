@@ -25,7 +25,7 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	s.mu.RLock()
 	guards := s.guardrails
 	s.mu.RUnlock()
-	if len(guards) == 0 {
+	if len(guards) == 0 && s.config.PolicyGuardrails == nil {
 		return nil, true
 	}
 	requested := make(map[string]bool)
@@ -45,6 +45,11 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	delete(input, "guardrails")
+	if s.config.PolicyGuardrails != nil {
+		for _, name := range s.config.PolicyGuardrails(r, model) {
+			requested[name] = true
+		}
+	}
 	var selected []GenericGuardrail
 	for _, guard := range guards {
 		if guard.Default || requested[guard.Name] {

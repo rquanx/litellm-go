@@ -296,6 +296,7 @@ func main() {
 		config.MCPUserOAuthStore = credentials
 		config.MCPUserOAuthIdentity = keys.MCPUserIdentity
 	}
+	config.PolicyGuardrails = proxy.Policy.GuardrailsFor(keys)
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {
@@ -336,6 +337,7 @@ func main() {
 		keys.SetTeamMemberSpend(spend)
 		handler = keys.Handler(handler)
 	}
+	handler = proxy.Policy.Handler(handler, config.Token)
 	if customers != nil {
 		handler = customers.Handler(handler)
 	}
