@@ -845,6 +845,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	}
 	if provider == "bedrock" {
 		endpoint = "bedrock-converse"
+		if strings.Contains(model, "amazon.nova-canvas") {
+			endpoint = "image-generation"
+			if entry.Info.Mode == "image_edit" {
+				endpoint = "image-edit"
+			}
+		}
 		if strings.Contains(model, "amazon.titan-embed-") || strings.Contains(model, "cohere.embed-") ||
 			strings.Contains(model, "amazon.nova-2-multimodal-embeddings") || strings.Contains(model, "twelvelabs.marengo-embed") {
 			endpoint = "bedrock-embeddings"
@@ -897,7 +903,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
-			(provider == "bedrock" && configured != endpoint) {
+			(provider == "bedrock" && configured != endpoint &&
+				!(strings.Contains(model, "amazon.nova-canvas") && (configured == "image-edit" || configured == "image-generation"))) {
 			return runtime.Candidate{}, errors.New("unsupported model endpoint")
 		}
 		endpoint = configured

@@ -953,6 +953,12 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 			return http.StatusBadGateway, nil, headers, true, err
 		}
 	}
+	if err == nil && status/100 == 2 && bedrockCanvasDeployment(candidate) {
+		data, err = bedrockCanvasResponse(data)
+		if err != nil {
+			return http.StatusBadGateway, nil, headers, true, err
+		}
+	}
 	return status, data, headers, retryable, err
 }
 
@@ -992,6 +998,14 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+	if bedrockCanvasDeployment(candidate) {
+		payload, err := bedrockCanvasPayload(input, candidate.Endpoint == "image-edit")
+		if err != nil {
+			return nil, "", invalidMediaRequest{err}
+		}
+		body, err := json.Marshal(payload)
+		return body, "application/json", err
+	}
 	if googleImageDeployment(candidate) {
 		var payload map[string]any
 		var err error
@@ -1189,6 +1203,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = audioTarget
 	} else if googleImageDeployment(candidate) {
 		target = googleImageTarget(candidate)
+	} else if bedrockCanvasDeployment(candidate) {
+		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/invoke"
 	} else if isGeminiEndpoint(endpoint) || endpoint == "gemini-count-tokens" {
 		target = geminiTarget(candidate, endpoint)
 	} else if isGeminiEndpoint(candidate.Endpoint) {
