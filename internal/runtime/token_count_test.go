@@ -1,11 +1,42 @@
 package runtime
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestBedrockNativeTokenCount(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		expected := `{"input":{"converse":{"messages":[{"content":[{"text":"fixture"}],"role":"user"}],"system":[{"text":"system"}],"toolConfig":{"tools":[{"toolSpec":{"description":"t_1_tool","inputSchema":{"json":{"properties":{},"type":"object"}},"name":"t_1_tool"}}]}}}}`
+		if r.URL.Path != "/model/us.anthropic.claude-3-5-sonnet-20241022-v2:0/count-tokens" ||
+			r.Header.Get("Authorization") != "Bearer fixture" || string(body) != expected {
+			t.Errorf("unexpected Bedrock token request %s: %s", r.URL, body)
+		}
+		io.WriteString(w, `{"inputTokens":42}`)
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{AuthorizeInference: true, Routes: []Route{{Alias: "demo", Candidates: []Candidate{
+		{Provider: "bedrock", ModelID: "us.anthropic.claude-3-5-sonnet-20241022-v2:0", Endpoint: "bedrock-converse",
+			APIBase: upstream.URL, APIKey: "fixture", Bedrock: &BedrockConfig{Region: "us-east-1"}},
+	}}}})
+	payload := `{"model":"demo","messages":[{"role":"user","content":"fixture"}],"system":"system","tools":[{"name":"1-tool"}]}`
+	request := httptest.NewRequest("POST", "/utils/token_counter?call_endpoint=true", strings.NewReader(payload))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"tokenizer_type":"bedrock_api"`) ||
+		!strings.Contains(response.Body.String(), `"total_tokens":42`) {
+		t.Fatalf("unexpected token count %d: %s", response.Code, response.Body)
+	}
+	response = httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest("POST", "/v1/messages/count_tokens", strings.NewReader(payload)))
+	if response.Code != 200 || strings.TrimSpace(response.Body.String()) != `{"input_tokens":42}` {
+		t.Fatalf("unexpected Anthropic-style token count %d: %s", response.Code, response.Body)
+	}
+}
 
 func TestTokenCounterUsesScopedProviderOrLocalTokenizer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

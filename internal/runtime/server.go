@@ -926,6 +926,21 @@ func streamConverter(endpoint, upstream, alias string, input map[string]any, lim
 }
 
 func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint string, candidate Candidate, payload requestPayload) (int, []byte, http.Header, bool, error) {
+	if candidate.Endpoint == "bedrock-converse" && endpoint == "anthropic-count-tokens" {
+		raw, _ := payload.fields["messages"].([]any)
+		messages := make([]map[string]any, 0, len(raw))
+		for _, value := range raw {
+			if message, ok := value.(map[string]any); ok {
+				messages = append(messages, message)
+			}
+		}
+		if len(messages) == 0 || len(messages) != len(raw) {
+			return http.StatusBadRequest, []byte(`{"error":{"message":"Expected a list of messages"}}`),
+				http.Header{"Content-Type": {"application/json"}}, false, nil
+		}
+		tools, _ := payload.fields["tools"].([]any)
+		return s.countBedrockInput(ctx, request, candidate, bedrockTokenCountPayload(messages, payload.fields["system"], tools))
+	}
 	if candidate.Endpoint == "bedrock-embeddings" {
 		return s.bedrockEmbeddings(ctx, request, candidate, payload)
 	}
@@ -1003,6 +1018,10 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 }
 
 func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+	if endpoint == "bedrock-count-tokens" {
+		body, err := json.Marshal(input.fields)
+		return body, "application/json", err
+	}
 	if bedrockImageDeployment(candidate) {
 		payload, err := bedrockImagePayload(input, candidate)
 		if err != nil {
@@ -1236,6 +1255,8 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		target = strings.TrimSuffix(strings.TrimRight(candidate.APIBase, "/"), "/rerank") + "/rerank"
 	} else if candidate.Endpoint == "rerank" {
 		target = rerankTarget(candidate)
+	} else if endpoint == "bedrock-count-tokens" {
+		target = strings.TrimRight(candidate.APIBase, "/") + "/model/" + url.PathEscape(candidate.ModelID) + "/count-tokens"
 	} else if candidate.Endpoint == "bedrock-converse" {
 		target = bedrockURL(candidate.APIBase, candidate.ModelID, stream)
 	} else if candidate.Endpoint == "bedrock-embeddings" {
@@ -1354,6 +1375,9 @@ func (body *releaseBody) Close() error {
 }
 
 func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias string) []byte {
+	if endpoint == "anthropic-count-tokens" {
+		return body
+	}
 	if candidateEndpoint == "bedrock-converse" {
 		var native map[string]any
 		if json.Unmarshal(body, &native) != nil || native == nil {
@@ -1393,7 +1417,7 @@ func normalizeResponse(endpoint, candidateEndpoint string, body []byte, alias st
 		encoded, _ := json.Marshal(chat)
 		return encoded
 	}
-	if endpoint == "anthropic-count-tokens" || (endpoint != "responses" && endpoint != "chat-completions" && endpoint != "embeddings" && endpoint != "anthropic-messages" && endpoint != "completions") {
+	if endpoint != "responses" && endpoint != "chat-completions" && endpoint != "embeddings" && endpoint != "anthropic-messages" && endpoint != "completions" {
 		return body
 	}
 	if endpoint == "chat-completions" && candidateEndpoint == "responses" {

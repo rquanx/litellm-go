@@ -91,7 +91,7 @@ func servesEndpoint(request, provider string) bool {
 		return provider == "responses" || provider == "responses-compact"
 	}
 	if request == "anthropic-count-tokens" {
-		return provider == "anthropic-messages"
+		return provider == "anthropic-messages" || provider == "bedrock-converse"
 	}
 	if isGeminiEndpoint(request) {
 		return isGeminiEndpoint(provider)

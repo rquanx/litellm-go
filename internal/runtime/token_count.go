@@ -43,7 +43,24 @@ func (s *Server) countTokens(w http.ResponseWriter, request *http.Request, scope
 		}
 		if len(input.Messages) > 0 {
 			for _, candidate := range route.Candidates {
-				if candidate.Endpoint != "anthropic-messages" || !candidateAllowed(scope, candidate) {
+				if !candidateAllowed(scope, candidate) {
+					continue
+				}
+				if candidate.Endpoint == "bedrock-converse" {
+					sent := bedrockTokenCountPayload(input.Messages, input.System, input.Tools)
+					status, body, _, _, err := s.countBedrockInput(request.Context(), request, candidate, sent)
+					var native struct {
+						Count int `json:"input_tokens"`
+					}
+					if err == nil && status/100 == 2 && json.Unmarshal(body, &native) == nil {
+						result := tokenCountResult(native.Count, input.Model, candidate.ModelID, "bedrock_api")
+						result["original_response"] = json.RawMessage(body)
+						writeJSON(w, http.StatusOK, result)
+						return
+					}
+					continue
+				}
+				if candidate.Endpoint != "anthropic-messages" {
 					continue
 				}
 				status, body, _, _, err := s.callJSON(request.Context(), request, "anthropic-count-tokens", candidate,
