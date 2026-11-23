@@ -37,6 +37,21 @@ func (plan responseGuardrails) active() bool {
 	return len(plan.independent) > 0 || len(plan.pipelines) > 0
 }
 
+func (plan responseGuardrails) supportsStreaming(endpoint string) bool {
+	if !plan.active() {
+		return true
+	}
+	if endpoint != "chat-completions" || len(plan.pipelines) > 0 {
+		return false
+	}
+	for _, guard := range plan.independent {
+		if guard.Provider != "azure/text_moderations" {
+			return false
+		}
+	}
+	return true
+}
+
 type GuardrailPolicyMatch struct {
 	Name   string
 	Reason string
@@ -116,7 +131,7 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 			plan.independent = append(plan.independent, guard)
 		}
 	}
-	if stream && plan.active() {
+	if stream && !plan.supportsStreaming(endpoint) {
 		writeError(w, 400, "guardrail_error", "Streaming requires a compatible response guardrail")
 		return responseGuardrails{}, false
 	}

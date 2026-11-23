@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rquanx/minato-runtime/internal/runtime"
@@ -207,6 +208,65 @@ litellm_settings:
 	server.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture input"}`)))
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "Violated OpenAI moderation policy") {
 		t.Fatalf("unexpected moderation response %d %s", w.Code, w.Body)
+	}
+}
+
+func TestAzureTextModerationStopsStreamingBeforeFlaggedChunk(t *testing.T) {
+	var mu sync.Mutex
+	var inspected []string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"first\"}}]}\n\n")
+			io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" withheld\"}}]}\n\n")
+			io.WriteString(w, "data: [DONE]\n\n")
+		case "/contentsafety/text:analyze":
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			mu.Lock()
+			inspected = append(inspected, body.Text)
+			mu.Unlock()
+			severity := 0
+			if body.Text == "first withheld" {
+				severity = 4
+			}
+			fmt.Fprintf(w, `{"categoriesAnalysis":[{"category":"Violence","severity":%d}]}`, severity)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer origin.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/fixture, api_base: %[1]q}
+litellm_settings:
+  guardrails:
+    - guardrail_name: moderate
+      litellm_params: {guardrail: azure/text_moderations, mode: post_call, api_base: %[1]q, api_key: fixture, default_on: true}
+`, origin.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Routes: config.Routes, Guardrails: config.Guardrails})
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[],"stream":true}`))
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, r)
+	body := w.Body.String()
+	if w.Code != 200 || !strings.Contains(body, `"content":"first"`) || strings.Contains(body, "withheld") ||
+		!strings.Contains(body, "content_policy_violation") || strings.Contains(body, "[DONE]") {
+		t.Fatalf("unexpected moderated stream %d %s", w.Code, body)
+	}
+	mu.Lock()
+	actual := strings.Join(inspected, "|")
+	mu.Unlock()
+	if actual != "first|first withheld" {
+		t.Fatalf("moderation did not receive accumulated text: %q", actual)
 	}
 }
 

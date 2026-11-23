@@ -697,7 +697,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			writeError(writer, http.StatusBadRequest, "streaming_unsupported", "This endpoint does not support event streams")
 			return
 		}
-		s.inferStream(writer, request, endpoint, route, payload, cache)
+		s.inferStream(writer, request, endpoint, route, payload, cache,postGuardrails)
 		return
 	}
 	attempts := make([]map[string]any, 0, len(route.Candidates))
@@ -818,7 +818,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	}
 }
 
-func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload, cache inferenceCacheRequest) {
+func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload, cache inferenceCacheRequest,guardrails responseGuardrails) {
 	attempts := make([]map[string]any, 0, len(route.Candidates))
 	plan := s.attemptPlan(route.Alias)
 	for {
@@ -921,8 +921,15 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 				}
 			}
 			capture := streamCacheCapture{responses: cache.responses, disabled: cacheKey == "" || !cache.write || cache.ttl <= 0}
+			var guarded streamGuardrailState
 			emit := func(frame []byte) bool {
 				output := convert(frame)
+				if guardrails.active() {
+					if failure:=s.checkStreamGuardrails(request,guardrails,&guarded,output);failure!=nil {
+						writeStreamGuardrailError(writer,flush,failure)
+						return false
+					}
+				}
 				capture.add(output)
 				return writeStreamFrame(writer, flush, output)
 			}
