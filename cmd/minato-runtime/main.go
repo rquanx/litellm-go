@@ -306,6 +306,10 @@ func main() {
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
+	if stateDB != nil && keys != nil {
+		handler,err=proxyconfig.WithBudgetManagement(handler,stateDB,keys)
+		if err!=nil {log.Fatal(err)}
+	}
 	if *configPath != "" {
 		var err error
 		if stateDB != nil {
