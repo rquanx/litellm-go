@@ -631,6 +631,12 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
+	if s.config.AuthorizeInference && (endpoint == "responses" || endpoint == "chat-completions") {
+		if err := s.expandMCPInferenceTools(request, endpoint, input); err != nil {
+			writeError(writer, http.StatusBadRequest, "mcp_tool_error", err.Error())
+			return
+		}
+	}
 	cache := s.prepareInferenceCache(request, endpoint, route.Alias, stream, &payload)
 	if stream {
 		if !endpoints[endpoint].streaming {
