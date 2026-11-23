@@ -71,7 +71,7 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 			decoded, err = nativeResourceID(decoded, family, &deployment)
 		}
 		if err != nil ||
-			!(request.Method == http.MethodGet && action == "" ||
+			!((request.Method == http.MethodGet || request.Method == http.MethodDelete) && action == "" ||
 				family == "videos" && (request.Method == http.MethodGet && action == "content" ||
 					request.Method == http.MethodPost && action == "remix")) {
 			writeError(w, http.StatusNotFound, "video_not_found", "Unknown video resource operation")
@@ -115,6 +115,16 @@ func (s *Server) videoResource(w http.ResponseWriter, request *http.Request, sco
 			}
 			alias = model
 		}
+	}
+	if provider == "runwayml" || (provider == "" && (alias != "" || deployment != "")) {
+		if candidate, ok := s.selectRunwayVideo(alias, deployment, scope); ok {
+			s.runwayVideoResource(w, request, candidate, target, payload)
+			return
+		}
+	}
+	if request.Method == http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Unsupported video operation")
+		return
 	}
 	candidate, ok := s.selectResourceCandidate(alias, deployment, provider, scope)
 	if !ok && ((provider == "" && (alias != "" || deployment != "")) || provider == "gemini" || provider == "vertex_ai") {

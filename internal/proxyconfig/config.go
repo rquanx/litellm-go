@@ -614,6 +614,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
+	runway := provider == "runwayml"
 	nativeAudio := provider == "elevenlabs" || provider == "deepgram" || provider == "aws_polly"
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
 	_, explicitOCR := strings.CutPrefix(model, "ocr/")
@@ -625,7 +626,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !runway) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -749,6 +750,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = "https://api.cohere.ai"
 		}
 	}
+	if runway && base == "" {
+		base = "https://api.dev.runwayml.com/v1"
+	}
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
 		(parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -757,6 +761,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	key, err := resolveEnv(entry.Params.APIKey)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_key: %w", err)
+	}
+	if key == "" && runway {
+		key = os.Getenv("RUNWAYML_API_SECRET")
+		if key == "" {
+			key = os.Getenv("RUNWAYML_API_KEY")
+		}
 	}
 	if key == "" && nativeAudio {
 		key = os.Getenv(strings.ToUpper(provider)+"_API_KEY")
@@ -860,6 +870,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
+	if runway {
+		endpoint = "videos"
+		if version == "" {
+			version = os.Getenv("RUNWAYML_DEFAULT_API_VERSION")
+		}
+	}
 	if nativeAudio {
 		endpoint = "transcription"
 		if provider == "aws_polly" || provider == "elevenlabs" && entry.Info.Mode != "audio_transcription" && !strings.HasPrefix(model, "scribe") {
@@ -945,7 +961,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if nativeAudio && !(provider != "aws_polly" && configured == "transcription") && !((provider == "elevenlabs" || provider == "aws_polly") && configured == "speech") {
 			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
-		if configured == "" || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
+		if configured == "" || (runway && configured != "videos") || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint && !runtime.BedrockSupportsImage(model, configured)) {
