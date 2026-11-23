@@ -19,25 +19,25 @@ import (
 )
 
 type modelRegistry struct {
-	handler http.Handler
-	keys *KeyRegistry
-	server *runtime.Server
-	base   Config
-	token  string
-	store  stateStore
-	mu     sync.Mutex
-	models []deployment
+	handler     http.Handler
+	keys        *KeyRegistry
+	server      *runtime.Server
+	base        Config
+	token       string
+	store       stateStore
+	mu          sync.Mutex
+	models      []deployment
 	credentials map[string]providerCredential
-	router routerPatch
+	router      routerPatch
 	searchTools []managedSearchTool
 	passThrough []passThroughConfig
-	mcpServers map[string]mcpServerConfig
+	mcpServers  map[string]mcpServerConfig
 	mcpToolsets []runtime.MCPToolset
-	publicHub publicModelHubState
+	publicHub   publicModelHubState
 }
 
 func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
-	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"),nil)
+	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"), nil)
 }
 
 func WithPostgresModelManagement(ctx context.Context, server *runtime.Server, config Config, token string, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
@@ -49,8 +49,8 @@ func WithPostgresModelManagement(ctx context.Context, server *runtime.Server, co
 	return registry, nil
 }
 
-func withModelManagement(server *runtime.Server, config Config, token string, store stateStore,keys *KeyRegistry) (*modelRegistry, error) {
-	registry := &modelRegistry{server: server, base: config, token: token, store: store,keys:keys}
+func withModelManagement(server *runtime.Server, config Config, token string, store stateStore, keys *KeyRegistry) (*modelRegistry, error) {
+	registry := &modelRegistry{server: server, base: config, token: token, store: store, keys: keys}
 	registry.base.models = slices.Clone(config.models)
 	if store != nil {
 		if token == "" {
@@ -95,6 +95,9 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.HandleFunc("GET /.well-known/litellm-ui-config", publicUIConfig)
 	mux.HandleFunc("GET /litellm/.well-known/litellm-ui-config", publicUIConfig)
 	registry.registerPublicModelHub(mux)
+	mux.HandleFunc("POST /cost/estimate", registry.estimateCost)
+	mux.HandleFunc("POST /spend/calculate", registry.estimateCost)
+	mux.HandleFunc("GET /model/cost_map/source", registry.costMapSource)
 	server.ReplaceMCPToolsets(registry.mcpToolsets)
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
@@ -102,6 +105,66 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux.Handle("/", server)
 	registry.handler = mux
 	return registry, nil
+}
+
+func (registry *modelRegistry) costMapSource(w http.ResponseWriter, r *http.Request) {
+	if !registry.allowed(w, r) {
+		return
+	}
+	modelJSON(w, http.StatusOK, map[string]any{"source": "LiteLLM v1.85.0 embedded model price snapshot"})
+}
+
+func (registry *modelRegistry) estimateCost(w http.ResponseWriter, r *http.Request) {
+	if !registry.allowed(w, r) {
+		return
+	}
+	var input struct {
+		Model            string `json:"model"`
+		ModelName        string `json:"model_name"`
+		PromptTokens     int    `json:"prompt_tokens"`
+		InputTokens      int    `json:"input_tokens"`
+		CompletionTokens int    `json:"completion_tokens"`
+		OutputTokens     int    `json:"output_tokens"`
+	}
+	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
+		modelError(w, http.StatusBadRequest, "Invalid cost estimate request")
+		return
+	}
+	model := input.Model
+	if model == "" {
+		model = input.ModelName
+	}
+	if model == "" {
+		modelError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+	in := input.PromptTokens
+	if in == 0 {
+		in = input.InputTokens
+	}
+	out := input.CompletionTokens
+	if out == 0 {
+		out = input.OutputTokens
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	var inputPrice, outputPrice *float64
+	for _, deployment := range append(slices.Clone(registry.base.models), registry.models...) {
+		if deployment.Alias != model && deployment.Params.Model != model {
+			continue
+		}
+		_, prices, err := tokenPrice(deployment.Params.Model, deployment.Params.InputPrice, deployment.Params.OutputPrice)
+		if err == nil {
+			inputPrice, outputPrice = prices[0], prices[1]
+			break
+		}
+	}
+	if inputPrice == nil || outputPrice == nil {
+		modelError(w, http.StatusNotFound, "Model pricing is unavailable")
+		return
+	}
+	cost := float64(in)*(*inputPrice) + float64(out)*(*outputPrice)
+	modelJSON(w, http.StatusOK, map[string]any{"model": model, "prompt_tokens": in, "completion_tokens": out, "cost": cost, "currency": "USD"})
 }
 
 func (registry *modelRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -260,7 +323,7 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 			model.Params.AzureADToken = existing.Params.AzureADToken
 		}
 		for _, setting := range []struct {
-			current *string
+			current  *string
 			previous string
 		}{
 			{&model.Params.AzureTenant, existing.Params.AzureTenant},
