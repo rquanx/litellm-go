@@ -236,6 +236,14 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.countTokens(writer, request, modelScope)
 		return
 	}
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/query" {
+		s.ragQuery(writer, request, modelScope)
+		return
+	}
+	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/ingest" {
+		s.ragIngest(writer, request, modelScope)
+		return
+	}
 	if s.config.AuthorizeInference && request.Method == http.MethodGet && request.URL.Path == "/model_group/info" {
 		s.modelGroups(writer, request, modelScope)
 		return
