@@ -33,6 +33,41 @@ func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, 
 		return true
 	}
 	var candidate Candidate
+	var scopedDiscovery bool
+	if discovery && s.config.VectorRegistryLookup != nil && len(segments) >= 9 && segments[5] == "collections" && segments[7] == "dataStores" {
+		provider, params, found, allowed, err := s.config.VectorRegistryLookup(r, segments[8])
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "resource_error", "Could not read Discovery Engine registration")
+			return true
+		}
+		if found {
+			if !allowed || provider != "vertex_ai/search_api" {
+				writeError(w, http.StatusNotFound, "resource_not_found", "Unknown Discovery Engine datastore")
+				return true
+			}
+			if !modelAllowed(scope, "*") && (r.Method != http.MethodPost || len(segments) != 11 ||
+				segments[9] != "servingConfigs" || !strings.HasSuffix(segments[10], ":search")) {
+				writeError(w, http.StatusForbidden, "model_not_allowed", "The key only allows Discovery Engine search")
+				return true
+			}
+			alias, _ := params["model"].(string)
+			selected, ok := s.selectGoogleResourceCandidate(alias, "", "vertex_ai", scope, false)
+			if !ok || selected.Vertex == nil || !selected.UseInPassThrough {
+				writeError(w, http.StatusForbidden, "model_not_allowed", "No authorized Discovery Engine deployment")
+				return true
+			}
+			collection, _ := params["vertex_collection_id"].(string)
+			if collection == "" {
+				collection = "default_collection"
+			}
+			if !vertexRAGComponent.MatchString(collection) {
+				writeError(w, http.StatusBadRequest, "invalid_request", "Invalid registered Discovery Engine collection")
+				return true
+			}
+			segments[6] = collection
+			candidate, scopedDiscovery = selected, true
+		}
+	}
 	var resolvedAlias bool
 	var originalModel, action string
 	modelIndex := -1
@@ -44,7 +79,7 @@ func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	s.mu.RLock()
-	if modelIndex >= 0 && modelAllowed(scope, originalModel) {
+	if !discovery && modelIndex >= 0 && modelAllowed(scope, originalModel) {
 		if route, found := s.configuredRoutes[originalModel]; found {
 			for _, deployment := range route.Candidates {
 				if deployment.Vertex != nil && deployment.UseInPassThrough && candidateAllowed(scope, deployment) {
@@ -74,7 +109,7 @@ func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusForbidden, "model_not_allowed", "No authorized Vertex pass-through deployment for this path")
 		return true
 	}
-	if !modelAllowed(scope, "*") && (r.Method != http.MethodPost || !slices.Contains([]string{
+	if !scopedDiscovery && !modelAllowed(scope, "*") && (r.Method != http.MethodPost || !slices.Contains([]string{
 		"generateContent", "streamGenerateContent", "countTokens", "predict", "rawPredict", "streamRawPredict",
 	}, action)) {
 		writeError(w, http.StatusForbidden, "model_not_allowed", "This Vertex operation requires unrestricted model access")

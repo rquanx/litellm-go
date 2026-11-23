@@ -25,7 +25,7 @@ func TestVLLMPassThroughMapsScopedAliases(t *testing.T) {
 	})
 	for _, tc := range []struct {
 		path, model string
-		status int
+		status      int
 	}{
 		{"/vllm/v1/chat/completions", "allowed", 200},
 		{"/vllm/v1/chat/completions", "denied", 403},
@@ -83,7 +83,7 @@ func TestVertexPassThroughUsesAuthorizedDeploymentProjectAndRegion(t *testing.T)
 		}}}},
 	})
 	for _, tc := range []struct {
-		model string
+		model  string
 		status int
 	}{{"alias", 200}, {"denied", 403}} {
 		path := "/vertex-ai/v1/projects/caller/locations/global/publishers/google/models/" + tc.model + ":streamGenerateContent"
@@ -141,7 +141,7 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 		AuthorizeKey: func(token string) ([]string, bool) { return []string{"limited"}, token == "fixture-limited" }})
 	for _, tc := range []struct {
 		path, token string
-		status int
+		status      int
 	}{
 		{"/gemini/v1beta/models?key=fixture-master&pageSize=2", "", 200},
 		{"/gemini/v1beta/models?key=wrong", "", 401},
@@ -175,5 +175,39 @@ func TestProviderPassThroughKeepsGatewayCredentialsLocal(t *testing.T) {
 	server.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("configured deployment did not take precedence: %d", w.Code)
+	}
+}
+
+func TestVertexDiscoveryPassThroughUsesScopedDatastore(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const path = "/v1/projects/verified/locations/global/collections/registered/dataStores/docs/servingConfigs/default_config:search"
+		if r.Method != http.MethodPost || r.URL.Path != path || r.Header.Get("Authorization") != "Bearer provider-key" {
+			t.Errorf("unexpected Discovery Engine request %s %s", r.Method, r.URL.Path)
+		}
+		w.Write([]byte(`{"results":[]}`))
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "master", AuthorizeInference: true,
+		AuthorizeKey: func(key string) ([]string, bool) { return []string{"discovery"}, key == "limited" },
+		VectorRegistryLookup: func(_ *http.Request, id string) (string, map[string]any, bool, bool, error) {
+			return "vertex_ai/search_api", map[string]any{"model": "discovery", "vertex_collection_id": "registered"}, true, id == "docs", nil
+		},
+		Routes: []Route{{Alias: "discovery", Candidates: []Candidate{{
+			Provider: "vertex_ai", Endpoint: "gemini-generate", DeploymentID: "vertex", UseInPassThrough: true,
+			ModelID: "gemini", APIKey: "provider-key", APIBase: origin.URL, Vertex: &VertexConfig{Project: "verified", Location: "global", DiscoveryBase: origin.URL},
+		}}}},
+	})
+	for _, f := range []struct {
+		method, id string
+		status     int
+	}{{"POST", "docs", 200}, {"POST", "private", 404}, {"DELETE", "docs", 403}} {
+		path := "/vertex_ai/discovery/v1/projects/caller/locations/us/collections/caller/dataStores/" + f.id + "/servingConfigs/default_config:search"
+		req := httptest.NewRequest(f.method, path, strings.NewReader(`{"query":"demo"}`))
+		req.Header.Set("Authorization", "Bearer limited")
+		w := httptest.NewRecorder()
+		server.ServeHTTP(w, req)
+		if w.Code != f.status {
+			t.Fatalf("%s %s returned %d %s", f.method, f.id, w.Code, w.Body)
+		}
 	}
 }
