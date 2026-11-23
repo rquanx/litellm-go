@@ -25,7 +25,19 @@ func azureOIDCSource(reference string) (func(context.Context) (string, error), e
 		return azureOIDCEnv("CIRCLE_OIDC_TOKEN"), nil
 	case "circleci_v2":
 		return azureOIDCEnv("CIRCLE_OIDC_TOKEN_V2"), nil
-	case "env_path", "azure", "file":
+	case "azure":
+		if os.Getenv("AZURE_FEDERATED_TOKEN_FILE") == "" {
+			var entry deployment
+			entry.Params.AzureScope = audience
+			entry.Params.AzureTokenRefresh = true
+			source, _, err := entry.azureIdentity(true, "")
+			if err != nil {
+				return nil, err
+			}
+			return source, nil
+		}
+		fallthrough
+	case "env_path", "file":
 		return func(context.Context) (string, error) {
 			path := audience
 			switch kind {

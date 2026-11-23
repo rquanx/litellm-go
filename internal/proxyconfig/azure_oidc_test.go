@@ -3,10 +3,13 @@ package proxyconfig
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAzureIdentityUsesOIDCAndPasswordCredentials(t *testing.T) {
@@ -70,5 +73,30 @@ func TestAzureOIDCSourceReadsCurrentAssertion(t *testing.T) {
 		if path == outside && err == nil {
 			t.Fatal("assertion outside credential directory was accepted")
 		}
+	}
+}
+
+func TestAzureOIDCFallsBackToManagedIdentity(t *testing.T) {
+	identity := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("resource") != "https://fixture.example" || r.URL.Query().Get("client_id") != "fixture-client" {
+			t.Errorf("wrong Azure OIDC fallback request %s", r.URL.RawQuery)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"access_token":"fixture-assertion","token_type":"Bearer","expires_on":"%d","resource":"https://fixture.example"}`, time.Now().Add(time.Hour).Unix())
+	}))
+	defer identity.Close()
+	t.Setenv("AZURE_FEDERATED_TOKEN_FILE", "")
+	t.Setenv("AZURE_CREDENTIAL", "ManagedIdentityCredential")
+	t.Setenv("AZURE_CLIENT_ID", "fixture-client")
+	t.Setenv("IDENTITY_ENDPOINT", identity.URL)
+	t.Setenv("IDENTITY_HEADER", "fixture")
+	t.Setenv("IDENTITY_SERVER_THUMBPRINT", "")
+	t.Setenv("MSI_ENDPOINT", "")
+	source, err := azureOIDCSource("oidc/azure/https://fixture.example/.default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token, err := source(context.Background()); err != nil || token != "fixture-assertion" {
+		t.Fatalf("Azure managed identity did not return an assertion: %v", err)
 	}
 }
