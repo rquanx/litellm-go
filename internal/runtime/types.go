@@ -45,6 +45,7 @@ type Candidate struct {
 	TPM              *int              `json:"tpm,omitempty"`
 	Bedrock          *BedrockConfig    `json:"bedrock,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
+	HealthMode string `json:"-"`
 	DisableBackgroundHealthCheck bool `json:"-"`
 	UseInPassThrough bool `json:"-"`
 }

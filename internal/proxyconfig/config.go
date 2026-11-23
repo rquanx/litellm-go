@@ -1007,7 +1007,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		Tags: slices.Clone(entry.Params.Tags), TagRegex: patterns, RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
-		DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
+		HealthMode: entry.Info.Mode, DisableBackgroundHealthCheck: entry.Info.DisableBackgroundHealthCheck,
 		UseInPassThrough: entry.Params.UseInPassThrough,
 		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
 		Vertex: vertex, AzureADToken: azureADToken, AzureToken: azureToken, AzureIdentityKey: azureIdentityKey, WatsonX: watsonx}, nil

@@ -190,6 +190,15 @@ func (s *Server) filterUnhealthyCandidates(candidates []Candidate) []Candidate {
 }
 
 func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate Candidate) int {
+	if candidate.HealthMode == "realtime" {
+		return s.probeRealtime(ctx, candidate)
+	}
+	if candidate.HealthMode == "batch" {
+		switch candidate.Provider {
+		case "openai", "azure", "hosted_vllm", "vertex_ai":
+			return s.probeBatchList(ctx, r, candidate)
+		}
+	}
 	const prompt = "ping"
 	endpoint := candidate.Endpoint
 	var fields map[string]any
@@ -240,4 +249,48 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 		return http.StatusBadGateway
 	}
 	return status
+}
+
+// A Realtime health check only opens the provider WebSocket.
+func (s *Server) probeRealtime(ctx context.Context, candidate Candidate) int {
+	switch candidate.Provider {
+	case "openai", "azure", "xai":
+	default:
+		return http.StatusNotImplemented
+	}
+
+	select {
+	case s.sem <- struct{}{}:
+	case <-ctx.Done():
+		return http.StatusRequestTimeout
+	}
+	defer func() { <-s.sem }()
+
+	conn, err := s.dialProviderSocket(ctx, candidate, realtimeAddress(candidate, ""), make(http.Header))
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return http.StatusRequestTimeout
+		}
+		return http.StatusBadGateway
+	}
+	_ = conn.CloseNow()
+	return http.StatusOK
+}
+func (s *Server) probeBatchList(ctx context.Context, parent *http.Request, candidate Candidate) int {
+	request := ragSubrequest(parent.WithContext(ctx), http.MethodGet, "/v1/batches?limit=1", nil, false)
+	result := &ragResult{header: make(http.Header), limit: s.config.MaxBodyBytes}
+	if candidate.Provider == "vertex_ai" {
+		if candidate.Vertex == nil {
+			return http.StatusBadGateway
+		}
+		if _, ok := s.sendVertexBatch(result, request, candidate, http.MethodGet, vertexBatchPath(candidate)+"?pageSize=1", nil); ok {
+			return http.StatusOK
+		}
+	} else {
+		s.forwardOpenAIResource(result, request, candidate, "", "/v1/batches", "", nil)
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		return http.StatusRequestTimeout
+	}
+	return result.status
 }
