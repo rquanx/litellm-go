@@ -51,6 +51,9 @@ func (api promptAPI) renderStoredPrompt(r *http.Request, fields map[string]any) 
 	if prompt.Params["prompt_integration"] == "langfuse" {
 		return renderLangfusePrompt(r, fields, prompt)
 	}
+	if prompt.Params["prompt_integration"] == "gitlab" || prompt.Params["prompt_integration"] == "bitbucket" {
+		return renderRepositoryPrompt(r, fields, prompt)
+	}
 	if prompt.Params["prompt_integration"] != "dotprompt" {
 		return http.StatusBadRequest, errors.New("Unsupported prompt integration")
 	}

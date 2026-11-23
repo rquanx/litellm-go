@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -94,6 +95,48 @@ func TestLangfusePromptUsesEscapedNameAndBasicAuth(t *testing.T) {
 	if code != 0 || err != nil || fields["model"] != "demo" || fields["temperature"] != 0.2 ||
 		len(messages) != 1 || messages[0].(map[string]any)["content"] != "Hello fixture" || fields["prompt_id"] != nil {
 		t.Fatalf("unexpected Langfuse rendering: %d %v %+v", code, err, fields)
+	}
+}
+
+func TestRepositoryPromptAdaptersResolveDotprompt(t *testing.T) {
+	const source = "---\nmodel: fixture\n---\nSystem: Hello {{name}}"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.EscapedPath() {
+		case "/projects/org%2Frepo/repository/files/prompts%2Fwelcome.prompt/raw":
+			http.NotFound(w, r)
+		case "/projects/org%2Frepo/repository/files/prompts%2Fwelcome.prompt":
+			if r.URL.Query().Get("ref") != "next" || r.Header.Get("Private-Token") != "fixture-token" {
+				t.Errorf("unexpected GitLab request %s", r.URL)
+			}
+			fmt.Fprintf(w, `{"content":%q}`, base64.StdEncoding.EncodeToString([]byte(source)))
+		case "/repositories/org/repo/src/next/prompts/welcome.prompt":
+			user, key, ok := r.BasicAuth()
+			if !ok || user != "fixture-user" || key != "fixture-token" {
+				t.Error("Bitbucket basic authentication missing")
+			}
+			io.WriteString(w, source)
+		default:
+			t.Errorf("unexpected repository path %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer origin.Close()
+	for _, provider := range []string{"gitlab", "bitbucket"} {
+		t.Run(provider, func(t *testing.T) {
+			settings := map[string]any{"base_url": origin.URL, "access_token": "fixture-token", "prompts_path": "prompts", "project": "org/repo",
+				"workspace": "org", "repository": "repo", "username": "fixture-user"}
+			if provider == "bitbucket" {
+				settings["auth_method"] = "basic"
+			}
+			record := promptRecord{PromptID: "welcome", Params: map[string]any{"prompt_integration": provider, "git_ref": "next", provider + "_config": settings}}
+			fields := map[string]any{"model": "placeholder", "prompt_variables": map[string]any{"name": "Ada"}}
+			code, err := renderRepositoryPrompt(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), fields, record)
+			messages, _ := fields["messages"].([]any)
+			if code != 0 || err != nil || fields["model"] != "fixture" || len(messages) != 1 ||
+				messages[0].(map[string]any)["content"] != "Hello Ada" {
+				t.Fatalf("unexpected repository rendering %d %v %+v", code, err, fields)
+			}
+		})
 	}
 }
 

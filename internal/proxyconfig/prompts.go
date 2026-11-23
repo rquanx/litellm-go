@@ -38,6 +38,13 @@ func (record promptRecord) public() promptRecord {
 	delete(record.Params, "api_key")
 	delete(record.Params, "langfuse_secret")
 	delete(record.Params, "langfuse_secret_key")
+	for _, name := range []string{"gitlab_config", "bitbucket_config"} {
+		if config, ok := record.Params[name].(map[string]any); ok {
+			config = maps.Clone(config)
+			delete(config, "access_token")
+			record.Params[name] = config
+		}
+	}
 	delete(record.Params, "provider_specific_query_params")
 	if address, ok := record.Params["api_base"].(string); ok {
 		if clean, _, found := strings.Cut(address, "?"); found {

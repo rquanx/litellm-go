@@ -82,6 +82,20 @@ func renderGenericPrompt(r *http.Request, fields map[string]any, record promptRe
 }
 
 func fetchManagedPrompt(parent context.Context, target *url.URL, authorization string, params map[string]any, template any) (int, error) {
+	headers := make(http.Header)
+	headers.Set("Accept", "application/json")
+	headers.Set("Content-Type", "application/json")
+	if authorization != "" {
+		headers.Set("Authorization", authorization)
+	}
+	raw, _, err := fetchPromptContent(parent, target, headers, params)
+	if err != nil {
+		return 0, err
+	}
+	return len(raw), json.Unmarshal(raw, template)
+}
+
+func fetchPromptContent(parent context.Context, target *url.URL, headers http.Header, params map[string]any) ([]byte, int, error) {
 	timeout := 30 * time.Second
 	if seconds, ok := params["timeout"].(float64); ok && seconds >= 1 && seconds <= 30 {
 		timeout = time.Duration(seconds * float64(time.Second))
@@ -90,26 +104,22 @@ func fetchManagedPrompt(parent context.Context, target *url.URL, authorization s
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
-	request.Header.Set("Accept", "application/json")
-	request.Header.Set("Content-Type", "application/json")
-	if authorization != "" {
-		request.Header.Set("Authorization", authorization)
-	}
+	request.Header = headers.Clone()
 	response, err := managedPromptHTTPClient.Do(request)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
-		return 0, errors.New("prompt manager rejected the request")
+		return nil, response.StatusCode, errors.New("prompt manager rejected the request")
 	}
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxManagedPromptBytes+1))
 	if err != nil || len(raw) > maxManagedPromptBytes {
-		return 0, errors.New("could not read prompt manager response")
+		return nil, response.StatusCode, errors.New("could not read prompt manager response")
 	}
-	return len(raw), json.Unmarshal(raw, template)
+	return raw, response.StatusCode, nil
 }
 
 func substituteManagedPrompt(messages []map[string]any, fields map[string]any, size int, pattern *regexp.Regexp) error {
