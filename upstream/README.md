@@ -86,6 +86,8 @@ Go tests cover OVHCloud transcript fallback the Scaleway JSON and plain-text res
 
 The MiniMax speech fixture verifies voice mapping, clamped speed, output settings, bearer authentication and hex decoding to a binary WAV response. URL output is unsupported. [Upstream MiniMax speech](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/llms/minimax/text_to_speech/transformation.py)
 
+The Runway speech fixture exercises the task submission, authenticated polling, voice mapping and downloading audio without forwarding the provider key. [Upstream Runway speech](https://github.com/BerriAI/litellm/blob/v1.85.0/litellm/llms/runwayml/text_to_speech/transformation.py)
+
 Go audio fixtures cover the ElevenLabs and Deepgram request transformations, Azure SSML escaping and output formats, and Vertex OAuth headers and binary audio decoding.
 
 A local A2A fixture verifies public card rewriting, private agent visibility, credential handling and streamed relay. Go tests also exercise managed agent creation, publication, rename and deletion across restarts.

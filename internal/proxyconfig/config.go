@@ -630,6 +630,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 func (entry deployment) candidate() (runtime.Candidate, error) {
 	provider, model, found := strings.Cut(entry.Params.Model, "/")
 	runway := provider == "runwayml"
+	runwaySpeech := runway && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "eleven_") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	pgVector := provider == "pg_vector"
 	minimaxSpeech := provider == "minimax" && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "speech-") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	nativeAudio := provider == "elevenlabs" || provider == "deepgram" || provider == "aws_polly"
@@ -794,7 +795,10 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		base = os.Getenv("PG_VECTOR_API_BASE")
 	}
 	if runway && base == "" {
-		base = "https://api.dev.runwayml.com/v1"
+		base = os.Getenv("RUNWAYML_API_BASE")
+		if base == "" {
+			base = "https://api.dev.runwayml.com/v1"
+		}
 	}
 	parsed, err := url.Parse(base)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
@@ -1006,7 +1010,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			endpoint = inferred
 		}
 	}
-	if vertexSpeech || minimaxSpeech {
+	if vertexSpeech || minimaxSpeech || runwaySpeech {
 		endpoint = "speech"
 	}
 	if azureSpeech {
@@ -1033,7 +1037,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if nativeAudio && !(provider != "aws_polly" && configured == "transcription") && !((provider == "elevenlabs" || provider == "aws_polly") && configured == "speech") {
 			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
-		if configured == "" || (runway && configured != "videos") || (pgVector && configured != "vector-stores") || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
+		if configured == "" || (runway && configured != endpoint) || (pgVector && configured != "vector-stores") || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint && !runtime.BedrockSupportsImage(model, configured)) {

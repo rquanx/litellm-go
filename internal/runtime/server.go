@@ -1015,6 +1015,9 @@ func (s *Server) callJSON(ctx context.Context, request *http.Request, endpoint s
 		tools, _ := payload.fields["tools"].([]any)
 		return s.countBedrockInput(ctx, request, candidate, bedrockTokenCountPayload(messages, payload.fields["system"], tools))
 	}
+	if candidate.Provider == "runwayml" && candidate.Endpoint == "speech" {
+		return s.runwaySpeech(ctx, candidate, payload)
+	}
 	if candidate.Endpoint == "bedrock-embeddings" {
 		return s.bedrockEmbeddings(ctx, request, candidate, payload)
 	}
