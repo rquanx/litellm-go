@@ -2,11 +2,14 @@ package proxyconfig
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/rquanx/minato-runtime/internal/runtime"
 )
 
 type teamMembership struct {
@@ -38,9 +41,8 @@ func memberIndex(owner team, userID string) int {
 }
 
 func (registry *KeyRegistry) writeTeamMembership(w http.ResponseWriter, r *http.Request, operation string) {
-	if !registry.requireMaster(w, r) {
-		return
-	}
+	token := runtime.ProxyCredential(r)
+	master := subtle.ConstantTimeCompare([]byte(registry.master), []byte(token)) == 1
 	var input struct {
 		TeamID string `json:"team_id"`
 		UserID string `json:"user_id"`
@@ -68,6 +70,22 @@ func (registry *KeyRegistry) writeTeamMembership(w http.ResponseWriter, r *http.
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	current, exists := registry.state.Teams[input.TeamID]
+	if !master {
+		if _, _, authorized := registry.authorizeLocked(token); !authorized {
+			modelError(w, http.StatusUnauthorized, "Proxy token required")
+			return
+		}
+		key := registry.state.Keys[keyDigest(token)]
+		if key.RotationTarget != "" {
+			key = registry.state.Keys[key.RotationTarget]
+		}
+		member := memberIndex(current, key.UserID)
+		if key.UserID == "" || member < 0 || current.Blocked || current.Members[member].Role != "admin" ||
+			(key.TeamID != "" && key.TeamID != current.ID) || key.ProjectID != "" {
+			modelError(w, http.StatusForbidden, "Team administrator access required")
+			return
+		}
+	}
 	if !exists {
 		modelError(w, http.StatusNotFound, "Team not found")
 		return

@@ -167,3 +167,37 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	send("POST", "/organization/member_add", master, `{"organization_id":"new-org","member":{"user_id":"user","role":"internal_user"}}`, 200)
 	send("GET", "/v1/models", user.Key, "", 401)
 }
+
+func TestTeamAdminManagesOnlyOwnMemberships(t *testing.T) {
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.state.Users = map[string]internalUser{
+		"admin": {ID:"admin", Role:"internal_user"},
+		"member": {ID:"member", Role:"internal_user"},
+	}
+	registry.state.Teams["owned"] = team{ID:"owned", Members:[]teamMembership{{UserID:"admin", Role:"admin"}}}
+	registry.state.Teams["other"] = team{ID:"other"}
+	registry.state.Keys[keyDigest("team-admin")] = virtualKey{UserID:"admin"}
+	registry.state.Keys[keyDigest("team-member")] = virtualKey{UserID:"member"}
+	handler := registry.Handler(http.NotFoundHandler())
+	for _, fixture := range []struct {
+		operation, token, body string
+		status int
+	}{
+		{"add", "team-member", `{"team_id":"owned","member":{"user_id":"member","role":"user"}}`, http.StatusForbidden},
+		{"add", "team-admin", `{"team_id":"other","member":{"user_id":"member","role":"user"}}`, http.StatusForbidden},
+		{"add", "team-admin", `{"team_id":"owned","member":{"user_id":"member","role":"user"}}`, http.StatusOK},
+		{"delete", "team-admin", `{"team_id":"owned","user_id":"member"}`, http.StatusOK},
+		{"add", "", `{"team_id":"owned","member":{"user_id":"member","role":"user"}}`, http.StatusUnauthorized},
+	} {
+		r := httptest.NewRequest(http.MethodPost, "/team/member_"+fixture.operation, strings.NewReader(fixture.body))
+		r.Header.Set("Authorization", "Bearer "+fixture.token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != fixture.status {
+			t.Fatalf("%s returned %d: %s", fixture.operation, w.Code, w.Body)
+		}
+	}
+}
