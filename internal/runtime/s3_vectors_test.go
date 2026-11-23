@@ -12,6 +12,13 @@ import (
 func TestS3VectorsIngestAndSearch(t *testing.T) {
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/v1/ocr":
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "data:application/pdf;base64,") {
+				t.Errorf("unexpected OCR document %s", body)
+			}
+			io.WriteString(w, `{"pages":[{"markdown":"fixture"}]}`)
+			return
 		case "/v1/embeddings":
 			io.WriteString(w, `{"data":[{"embedding":[0.25,0.75],"index":0}],"usage":{"prompt_tokens":1,"total_tokens":1}}`)
 			return
@@ -51,6 +58,7 @@ func TestS3VectorsIngestAndSearch(t *testing.T) {
 	routes := []Route{
 		{Alias: "aws", Candidates: []Candidate{{Provider: "bedrock", Endpoint: "bedrock-converse", ModelID: "aws", DeploymentID: "aws",
 			Bedrock: &BedrockConfig{Region: "us-east-1", AccessKey: "fixture", SecretKey: "secret", VectorBase: cloud.URL}}}},
+		{Alias: "ocr", Candidates: []Candidate{{Provider: "mistral", Endpoint: "ocr", ModelID: "mistral-ocr-latest", DeploymentID: "ocr", APIBase: cloud.URL}}},
 		{Alias: "embed", Candidates: []Candidate{{Provider: "openai", Endpoint: "embeddings", ModelID: "embed", DeploymentID: "embed", APIBase: cloud.URL}}},
 	}
 	server := NewServer(Config{AuthorizeInference: true, Routes: routes, Token: "master", AuthorizeKey: func(key string) ([]string, bool) {
@@ -68,6 +76,10 @@ func TestS3VectorsIngestAndSearch(t *testing.T) {
 	upload := send("/v1/rag/ingest", "master", `{"file":{"filename":"doc.txt","content":"Zml4dHVyZQ=="},"ingest_options":{"embedding":{"model":"embed"},"vector_store":{"custom_llm_provider":"s3_vectors","model":"aws","vector_bucket_name":"fixture-bucket","index_name":"fixture-index"}}}`)
 	if upload.Code != http.StatusOK || !strings.Contains(upload.Body.String(), "fixture-bucket:fixture-index") {
 		t.Fatalf("unexpected S3 ingestion result %d %s", upload.Code, upload.Body)
+	}
+	ocr := send("/v1/rag/ingest", "master", `{"file":{"filename":"doc.txt","content":"JVBESg==","content_type":"application/pdf"},"ingest_options":{"ocr":{"model":"ocr"},"embedding":{"model":"embed"},"vector_store":{"custom_llm_provider":"s3_vectors","model":"aws","vector_bucket_name":"fixture-bucket","index_name":"fixture-index"}}}`)
+	if ocr.Code != http.StatusOK {
+		t.Fatalf("unexpected OCR ingestion result %d %s", ocr.Code, ocr.Body)
 	}
 	for _, key := range []string{"master", "scoped"} {
 		result := send("/v1/vector_stores/fixture-bucket:fixture-index/search", key, `{"custom_llm_provider":"s3_vectors","model":"aws","embedding_model":"embed","query":"fixture"}`)

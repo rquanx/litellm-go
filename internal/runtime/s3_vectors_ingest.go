@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
 func (s *Server) ingestS3Vectors(w http.ResponseWriter, r *http.Request, scope []string, alias, id, name string, options map[string]any, input ragIngestInput) {
@@ -28,8 +27,8 @@ func (s *Server) ingestS3Vectors(w http.ResponseWriter, r *http.Request, scope [
 		index = "litellm-" + newUUID()
 	}
 	if !bedrockRAGBucket.MatchString(bucket) || !bedrockRAGBucket.MatchString(index) || !validResourceSegment(input.filename) ||
-		!utf8.Valid(input.file) || strings.TrimSpace(string(input.file)) == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "An S3 vector bucket, valid index and nonempty UTF-8 document are required")
+		len(input.file) == 0 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "An S3 vector bucket, valid index and nonempty document are required")
 		return
 	}
 	strategy, _ := input.Options["chunking_strategy"].(map[string]any)
@@ -39,23 +38,26 @@ func (s *Server) ingestS3Vectors(w http.ResponseWriter, r *http.Request, scope [
 		writeError(w, http.StatusBadRequest, "invalid_request", "Invalid S3 Vectors chunk size or overlap")
 		return
 	}
-	text := []rune(strings.TrimSpace(string(input.file)))
-	count := 1
-	if len(text) > size {
-		step := size - overlap
-		count += (len(text) - size + step - 1) / step
+	var separators []string
+	if values, _ := strategy["separators"].([]any); len(values) > 0 {
+		separators = make([]string, 0, len(values))
+		for _, value := range values {
+			separator, ok := value.(string)
+			if !ok {
+				writeError(w, http.StatusBadRequest, "invalid_request", "Chunk separators must be strings")
+				return
+			}
+			separators = append(separators, separator)
+		}
 	}
-	if count > 500 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "The document exceeds the maximum of 500 vector chunks")
+	text, ok := s.ragDocumentText(w, r, scope, input)
+	if !ok {
 		return
 	}
-	chunks := make([]string, 0, count)
-	for start := 0; start < len(text); start += size - overlap {
-		end := min(start+size, len(text))
-		chunks = append(chunks, string(text[start:end]))
-		if end == len(text) {
-			break
-		}
+	chunks := splitRAGDocument(text, size, overlap, separators)
+	if len(chunks) == 0 || len(chunks) > maxRAGChunks {
+		writeError(w, http.StatusBadRequest, "invalid_request", "The document must contain between 1 and 500 vector chunks")
+		return
 	}
 	region, _ := options["aws_region_name"].(string)
 	candidate, status := s.bedrockControlDeployment(r, alias, region, "", scope)
