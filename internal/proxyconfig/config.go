@@ -96,6 +96,11 @@ type deployment struct {
 		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
 		AWSSessionToken string `yaml:"aws_session_token" json:"aws_session_token,omitempty"`
 		AWSProfile string `yaml:"aws_profile_name" json:"aws_profile_name,omitempty"`
+		AWSRole string `yaml:"aws_role_name" json:"aws_role_name,omitempty"`
+		AWSRoleSession string `yaml:"aws_session_name" json:"aws_session_name,omitempty"`
+		AWSWebIdentity string `yaml:"aws_web_identity_token" json:"aws_web_identity_token,omitempty"`
+		AWSSTSEndpoint string `yaml:"aws_sts_endpoint" json:"aws_sts_endpoint,omitempty"`
+		AWSExternalID string `yaml:"aws_external_id" json:"aws_external_id,omitempty"`
 		AWSBedrockControlEndpoint string `yaml:"aws_bedrock_control_endpoint" json:"aws_bedrock_control_endpoint,omitempty"`
 		AWSBatchRoleARN string `yaml:"aws_batch_role_arn" json:"aws_batch_role_arn,omitempty"`
 		S3OutputBucket string `yaml:"s3_output_bucket_name" json:"s3_output_bucket_name,omitempty"`
@@ -743,7 +748,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if key == "" && provider == "openai" && parsed.Scheme == "https" && parsed.Host == "api.openai.com" {
 		key = os.Getenv("OPENAI_API_KEY")
 	}
-	if key == "" && provider == "bedrock" {
+	if provider == "bedrock" && entry.Params.AWSRole != "" {
+		key = ""
+	} else if key == "" && provider == "bedrock" {
 		key = os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
 	}
 	if key == "" && mistralOCR {
@@ -982,6 +989,9 @@ func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {
 	profile, err := resolveEnv(entry.Params.AWSProfile)
 	if err != nil {
 		return nil, err
+	}
+	if entry.Params.AWSRole != "" {
+		return entry.assumeAWSRole(config, profile)
 	}
 	if config.Region == "" || (config.AccessKey == "" && (strings.HasPrefix(entry.Params.Model, "aws_polly/") || (entry.Params.APIKey == "" && os.Getenv("AWS_BEARER_TOKEN_BEDROCK") == ""))) {
 		options := []func(*awsconfig.LoadOptions) error{awsconfig.WithRegion(config.Region)}

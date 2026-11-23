@@ -250,6 +250,21 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSProfile == "" {
 			model.Params.AWSProfile = existing.Params.AWSProfile
 		}
+		if model.Params.AWSRole == "" {
+			model.Params.AWSRole = existing.Params.AWSRole
+		}
+		if model.Params.AWSRoleSession == "" {
+			model.Params.AWSRoleSession = existing.Params.AWSRoleSession
+		}
+		if model.Params.AWSWebIdentity == "" {
+			model.Params.AWSWebIdentity = existing.Params.AWSWebIdentity
+		}
+		if model.Params.AWSSTSEndpoint == "" {
+			model.Params.AWSSTSEndpoint = existing.Params.AWSSTSEndpoint
+		}
+		if model.Params.AWSExternalID == "" {
+			model.Params.AWSExternalID = existing.Params.AWSExternalID
+		}
 		if model.Params.AWSBedrockControlEndpoint == "" {
 			model.Params.AWSBedrockControlEndpoint = existing.Params.AWSBedrockControlEndpoint
 		}

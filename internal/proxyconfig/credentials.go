@@ -75,6 +75,9 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 		"aws_access_key_id": &entry.Params.AWSAccessKey, "aws_secret_access_key": &entry.Params.AWSSecretKey,
 		"aws_session_token": &entry.Params.AWSSessionToken, "aws_region_name": &entry.Params.AWSRegion,
 		"aws_profile_name": &entry.Params.AWSProfile, "vertex_project": &entry.Params.VertexProject,
+		"aws_role_name": &entry.Params.AWSRole, "aws_session_name": &entry.Params.AWSRoleSession,
+		"aws_web_identity_token": &entry.Params.AWSWebIdentity, "aws_sts_endpoint": &entry.Params.AWSSTSEndpoint,
+		"aws_external_id": &entry.Params.AWSExternalID,
 		"vertex_location": &entry.Params.VertexLocation,
 	} {
 		if *target == "" {

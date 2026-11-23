@@ -106,6 +106,8 @@ Go Nova fixtures cover synchronous inference and single-input segmented job subm
 
 Bedrock Files uploads and streams S3 objects through the existing file endpoints. It converts OpenAI-style JSONL records for configured Nova and Claude models and accepts native Bedrock records. Local fixtures verify S3 signing, prefix checks, and ownership across upload and download. Completed batch output objects can be downloaded after status retrieval when their bucket and prefix match the deployment configuration.
 
+Bedrock and Polly can use AWS STS role assumption or web identity exchange with a configured role. Local fixtures verify external ID handling, temporary credentials, and credential reuse.
+
 The Go Marengo fixture covers inline image encoding, response normalization and token estimation.
 
 Configured Bedrock Claude models accept Anthropic Messages through InvokeModel and InvokeModelWithResponseStream. The Python transformer and Go fixture matched API version, cache directive normalization and beta filtering. Go decodes AWS events into Anthropic SSE and carries cached input and terminal token usage into the message delta. Mantle, Claude Platform and additional Claude feature transformations remain open.
