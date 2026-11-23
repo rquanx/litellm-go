@@ -110,7 +110,7 @@ func TestGenericAPIDeliveryFormats(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		callback.send(context.Background(), sink.Client(), []runtime.InferenceEvent{
+		callback[0].send(context.Background(), sink.Client(), []runtime.InferenceEvent{
 			{ID: "first", Status: "success"}, {ID: "second", Status: "failure", HTTPStatus: 429},
 		})
 		var bodies []string
@@ -124,5 +124,28 @@ func TestGenericAPIDeliveryFormats(t *testing.T) {
 			!strings.Contains(bodies[1], `"error_code":"429"`) {
 			t.Fatalf("invalid %s delivery: %v", format, bodies)
 		}
+	}
+}
+
+func TestGenericCallbackPresetsUseIndependentDestinations(t *testing.T) {
+	generic := httptest.NewServer(http.NotFoundHandler())
+	defer generic.Close()
+	named := httptest.NewServer(http.NotFoundHandler())
+	defer named.Close()
+	t.Setenv("RUBRIK_WEBHOOK_URL", named.URL)
+	t.Setenv("RUBRIK_API_KEY", "fixture")
+	t.Setenv("GENERIC_LOGGER_HEADERS", "")
+	callbacks, _, err := prepareCallback(callbackSettings{
+		Endpoint: generic.URL, Callbacks: []string{"generic_api", "rubrik"}, Failure: []string{"rubrik"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(callbacks) != 2 || callbacks[0].endpoint != generic.URL || callbacks[1].endpoint != named.URL {
+		t.Fatalf("unexpected configured callback names %v", callbacks.Names())
+	}
+	if !callbacks[0].failure || !callbacks[1].success || callbacks[1].failure ||
+		callbacks[1].headers["Authorization"] != "Bearer fixture" {
+		t.Fatal("callback preset did not preserve its event and header settings")
 	}
 }

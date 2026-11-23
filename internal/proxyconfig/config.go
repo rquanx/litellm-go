@@ -178,7 +178,7 @@ type Config struct {
 	policyFallbacks []map[string][]string
 	modelGroupAliases map[string]modelGroupAlias
 	credentials map[string]providerCredential
-	Callback *GenericCallback
+	Callback GenericCallbacks
 	LogMessages bool
 	publicModelGroups []string
 	publicModelLinks map[string]any

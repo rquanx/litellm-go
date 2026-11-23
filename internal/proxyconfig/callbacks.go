@@ -3,6 +3,7 @@ package proxyconfig
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -45,7 +47,10 @@ type callbackSettings struct {
 	} `yaml:"responses"`
 }
 
+type GenericCallbacks []*GenericCallback
+
 type GenericCallback struct {
+	name     string
 	endpoint string
 	format   string
 	headers  map[string]string
@@ -55,40 +60,84 @@ type GenericCallback struct {
 	delay    time.Duration
 }
 
-func prepareCallback(settings callbackSettings) (*GenericCallback, bool, error) {
-	for _, names := range [][]string{settings.Callbacks, settings.Success, settings.Failure} {
-		for _, name := range names {
-			if name != "generic_api" {
-				return nil, false, errors.New("unsupported LiteLLM callback")
-			}
-		}
-	}
-	if len(settings.Callbacks)+len(settings.Success)+len(settings.Failure) == 0 {
+type callbackPreset struct {
+	Endpoint string            `json:"endpoint"`
+	Headers  map[string]string `json:"headers"`
+	Format   string            `json:"log_format"`
+	Events   []string          `json:"event_types"`
+}
+
+//go:embed callback_presets.json
+var callbackPresetData []byte
+
+var callbackEnvironment = regexp.MustCompile(`\{\{environment_variables\.([A-Z_]+)\}\}`)
+
+func expandCallbackEnvironment(value string) string {
+	return callbackEnvironment.ReplaceAllStringFunc(value, func(reference string) string {
+		return os.Getenv(callbackEnvironment.FindStringSubmatch(reference)[1])
+	})
+}
+
+func prepareCallback(settings callbackSettings) (GenericCallbacks, bool, error) {
+	names := slices.Concat(settings.Callbacks, settings.Success, settings.Failure)
+	if len(names) == 0 {
 		return nil, false, nil
 	}
-	endpoint, err := resolveEnv(settings.Endpoint)
-	if err != nil {
-		return nil, false, err
+	var callbackPresets map[string]callbackPreset
+	if err := json.Unmarshal(callbackPresetData, &callbackPresets); err != nil {
+		return nil, false, errors.New("invalid embedded callback presets")
 	}
-	if endpoint == "" {
+	callbacks := make(GenericCallbacks, 0, len(names))
+	used := make(map[string]bool)
+	for _, name := range names {
+		if used[name] {
+			continue
+		}
+		used[name] = true
+		preset, known := callbackPresets[name]
+		if name != "generic_api" && !known {
+			return nil, false, errors.New("unsupported LiteLLM callback")
+		}
+		callback, err := prepareGenericCallback(name, settings, preset)
+		if err != nil {
+			return nil, false, err
+		}
+		callbacks = append(callbacks, callback)
+	}
+	return callbacks, settings.DisableMessages != nil && !*settings.DisableMessages, nil
+}
+
+func prepareGenericCallback(name string, settings callbackSettings, preset callbackPreset) (*GenericCallback, error) {
+	configured := settings.Endpoint
+	if name != "generic_api" {
+		configured = expandCallbackEnvironment(preset.Endpoint)
+	}
+	endpoint, err := resolveEnv(configured)
+	if err != nil {
+		return nil, err
+	}
+	if endpoint == "" && name == "generic_api" {
 		endpoint = os.Getenv("GENERIC_LOGGER_ENDPOINT")
 	}
 	address, err := url.Parse(endpoint)
 	if err != nil || address.Hostname() == "" || address.User != nil || address.Fragment != "" ||
 		(address.Scheme != "http" && address.Scheme != "https") {
-		return nil, false, errors.New("generic_api callback requires an HTTP or HTTPS endpoint")
+		return nil, errors.New("generic_api callback requires an HTTP or HTTPS endpoint")
 	}
 	headers := make(map[string]string)
+	for header, value := range preset.Headers {
+		headers[header] = expandCallbackEnvironment(value)
+	}
 	if raw := strings.TrimSpace(os.Getenv("GENERIC_LOGGER_HEADERS")); raw != "" {
 		if strings.HasPrefix(raw, "{") {
 			if json.Unmarshal([]byte(raw), &headers) != nil {
-				return nil, false, errors.New("invalid GENERIC_LOGGER_HEADERS")
+				return nil, errors.New("invalid GENERIC_LOGGER_HEADERS")
 			}
 		} else {
 			for item := range strings.SplitSeq(raw, ",") {
 				name, value, found := strings.Cut(item, "=")
 				if !found || strings.TrimSpace(name) == "" {
-					return nil, false, errors.New("invalid GENERIC_LOGGER_HEADERS")
+					return nil, errors.New("invalid GENERIC_LOGGER_HEADERS")
 				}
 				headers[strings.TrimSpace(name)] = strings.TrimSpace(value)
 			}
@@ -97,30 +146,58 @@ func prepareCallback(settings callbackSettings) (*GenericCallback, bool, error) 
 	for name, value := range settings.Headers {
 		resolved, err := resolveEnv(value)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		headers[name] = resolved
 	}
 	if settings.MaxRetries < 0 || settings.MaxRetries > 8 {
-		return nil, false, errors.New("invalid generic_api max retries")
+		return nil, errors.New("invalid generic_api max retries")
 	}
 	delay := time.Second
 	if value := settings.RetryDelay; value != nil {
 		if *value < 0 || *value > 60 || math.IsNaN(*value) {
-			return nil, false, errors.New("invalid generic_api retry delay")
+			return nil, errors.New("invalid generic_api retry delay")
 		}
 		delay = time.Duration(*value * float64(time.Second))
 	}
-	format := settings.Format
+	format := preset.Format
+	if settings.Format != "" && name == "generic_api" {
+		format = settings.Format
+	}
 	if format == "" {
 		format = "json_array"
 	}
 	if format != "json_array" && format != "ndjson" && format != "single" {
-		return nil, false, errors.New("invalid generic_api log format")
+		return nil, errors.New("invalid generic_api log format")
 	}
-	all := slices.Contains(settings.Callbacks, "generic_api")
-	return &GenericCallback{endpoint: endpoint, format: format, headers: headers, retries: settings.MaxRetries, delay: delay, success: all || slices.Contains(settings.Success, "generic_api"),
-		failure: all || slices.Contains(settings.Failure, "generic_api")}, settings.DisableMessages != nil && !*settings.DisableMessages, nil
+	all := slices.Contains(settings.Callbacks, name)
+	success, failure := all || slices.Contains(settings.Success, name), all || slices.Contains(settings.Failure, name)
+	if len(preset.Events) > 0 {
+		success = success && slices.Contains(preset.Events, "llm_api_success")
+		failure = failure && slices.Contains(preset.Events, "llm_api_failure")
+	}
+	return &GenericCallback{name: name, endpoint: endpoint, format: format, headers: headers,
+		retries: settings.MaxRetries, delay: delay, success: success, failure: failure}, nil
+}
+
+func (callbacks GenericCallbacks) Names() []string {
+	names := make([]string, 0, len(callbacks))
+	for _, callback := range callbacks {
+		names = append(names, callback.name)
+	}
+	return names
+}
+
+func (callbacks GenericCallbacks) Start(ctx context.Context) func(runtime.InferenceEvent) {
+	send := make([]func(runtime.InferenceEvent), 0, len(callbacks))
+	for _, callback := range callbacks {
+		send = append(send, callback.Start(ctx))
+	}
+	return func(event runtime.InferenceEvent) {
+		for _, callback := range send {
+			callback(event)
+		}
+	}
 }
 
 func (callback *GenericCallback) Start(ctx context.Context) func(runtime.InferenceEvent) {

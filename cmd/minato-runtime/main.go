@@ -191,7 +191,7 @@ func main() {
 	}
 	if proxy.Callback != nil {
 		config.Callback = proxy.Callback.Start(context.Background())
-		config.CallbackNames = []string{"generic_api"}
+		config.CallbackNames = proxy.Callback.Names()
 		config.LogMessages = proxy.LogMessages
 	}
 	var spend *proxyconfig.SpendLog
