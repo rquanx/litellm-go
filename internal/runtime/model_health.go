@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"net/http"
+	"net/textproto"
 	"slices"
 	"strings"
 	"sync"
@@ -10,7 +11,7 @@ import (
 )
 
 type healthDeployment struct {
-	alias string
+	alias     string
 	candidate Candidate
 }
 
@@ -192,7 +193,10 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 	const prompt = "ping"
 	endpoint := candidate.Endpoint
 	var fields map[string]any
+	var form []formPart
 	switch {
+	case endpoint == "responses":
+		fields = map[string]any{"input": prompt}
 	case isConversationEndpoint(endpoint):
 		endpoint = "chat-completions"
 		fields = map[string]any{"messages": []any{map[string]any{"role": "user", "content": prompt}}, "max_tokens": 5}
@@ -207,10 +211,28 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 		fields = map[string]any{"query": prompt, "documents": []string{prompt}, "top_n": 1}
 	case endpoint == "speech":
 		fields = map[string]any{"input": prompt, "voice": "alloy"}
+	case endpoint == "image-generation":
+		fields = map[string]any{"prompt": prompt}
+	case endpoint == "transcription":
+		form = []formPart{{
+			name: "file",
+			header: textproto.MIMEHeader{
+				"Content-Disposition": {`form-data; name="file"; filename="audio_health_check.wav"`},
+				"Content-Type":        {"audio/wav"},
+			},
+			body: healthProbeWAV,
+		}, {
+			name: "model",
+			header: textproto.MIMEHeader{
+				"Content-Disposition": {`form-data; name="model"`},
+			},
+		}}
+	case endpoint == "ocr":
+		fields = map[string]any{"document": map[string]any{"type": "document_url", "document_url": healthProbePDF}}
 	default:
 		return http.StatusNotImplemented
 	}
-	status, _, _, _, err := s.callJSON(ctx, r, endpoint, candidate, requestPayload{fields: fields})
+	status, _, _, _, err := s.callJSON(ctx, r, endpoint, candidate, requestPayload{fields: fields, form: form})
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return http.StatusRequestTimeout
