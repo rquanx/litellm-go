@@ -28,6 +28,7 @@ type InferenceEvent struct {
 	CacheHit                 bool            `json:"cache_hit"`
 	CacheReadInputTokens     int             `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int             `json:"cache_creation_input_tokens,omitempty"`
+	ResponseID               string          `json:"-"`
 	APISource                string          `json:"-"`
 	HTTPStatus               int             `json:"-"`
 	FirstOutput              float64         `json:"-"`
@@ -115,6 +116,7 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 		NativeCacheCreation int          `json:"cache_creation_input_tokens"`
 	}
 	var payload struct {
+		ID       string `json:"id"`
 		Type     string `json:"type"`
 		Usage    usage  `json:"usage"`
 		Response struct {
@@ -133,6 +135,9 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	}
 	if json.Unmarshal(data, &payload) != nil {
 		return
+	}
+	if payload.ID != "" {
+		recorder.event.ResponseID = payload.ID
 	}
 	if recorder.event.CallType == "acreate_interaction" {
 		var result struct {

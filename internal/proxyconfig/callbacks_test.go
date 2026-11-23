@@ -149,3 +149,15 @@ func TestGenericCallbackPresetsUseIndependentDestinations(t *testing.T) {
 		t.Fatal("callback preset did not preserve its event and header settings")
 	}
 }
+
+func TestLegacyGenericCallbackFormatsUsageAndNulls(t *testing.T) {
+	payload := legacyCallbackPayload(runtime.InferenceEvent{
+		ID: "call-id", ResponseID: "completion-id", CallType: "acompletion", Prompt: 3, Completion: 2, Total: 5,
+		Messages: json.RawMessage(`[{"role":"user","content":"it's a test"}]`),
+	})
+	if payload["id"] != "completion-id" || payload["cache_hit"] != "False" || payload["response"] != "None" ||
+		payload["usage"] != "{'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5}" ||
+		payload["messages"] != `[{'content': "it's a test", 'role': 'user'}]` {
+		t.Fatalf("unexpected v1 callback %v", payload)
+	}
+}

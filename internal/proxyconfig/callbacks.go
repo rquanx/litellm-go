@@ -28,6 +28,7 @@ type callbackSettings struct {
 	Callbacks         []string             `yaml:"callbacks"`
 	Success           []string             `yaml:"success_callback"`
 	Failure           []string             `yaml:"failure_callback"`
+	UseV1             bool                 `yaml:"generic_api_use_v1"`
 	Format            string               `yaml:"generic_logger_log_format"`
 	MaxRetries        int                  `yaml:"generic_logger_max_retries"`
 	RetryDelay        *float64             `yaml:"generic_logger_retry_delay"`
@@ -54,6 +55,7 @@ type GenericCallback struct {
 	endpoint string
 	format   string
 	headers  map[string]string
+	legacy   bool
 	success  bool
 	failure  bool
 	retries  int
@@ -177,7 +179,7 @@ func prepareGenericCallback(name string, settings callbackSettings, preset callb
 		failure = failure && slices.Contains(preset.Events, "llm_api_failure")
 	}
 	return &GenericCallback{name: name, endpoint: endpoint, format: format, headers: headers,
-		retries: settings.MaxRetries, delay: delay, success: success, failure: failure}, nil
+		legacy: settings.UseV1, retries: settings.MaxRetries, delay: delay, success: success, failure: failure}, nil
 }
 
 func (callbacks GenericCallbacks) Names() []string {
@@ -246,7 +248,11 @@ func (callback *GenericCallback) Start(ctx context.Context) func(runtime.Inferen
 func (callback *GenericCallback) send(ctx context.Context, client *http.Client, batch []runtime.InferenceEvent) {
 	payload := make([]map[string]any, 0, len(batch))
 	for _, event := range batch {
-		payload = append(payload, standardCallbackPayload(event))
+		if callback.legacy {
+			payload = append(payload, legacyCallbackPayload(event))
+		} else {
+			payload = append(payload, standardCallbackPayload(event))
+		}
 	}
 	switch callback.format {
 	case "single":
