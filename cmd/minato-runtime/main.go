@@ -19,6 +19,7 @@ func main() {
 	configPath := flag.String("config", os.Getenv("MINATO_RUNTIME_PROXY_CONFIG"), "LiteLLM-compatible YAML configuration")
 	statePath := flag.String("model-state", os.Getenv("MINATO_RUNTIME_MODEL_STATE"), "Optional path for persisted dynamic models")
 	keyStatePath := flag.String("key-state", os.Getenv("MINATO_RUNTIME_KEY_STATE"), "Optional path for persisted virtual keys")
+	importCredentials := flag.Bool("import-litellm-credentials", false, "Copy supported LiteLLM provider credentials into Go PostgreSQL state")
 	importModels := flag.Bool("import-litellm-models", false, "Copy LiteLLM models into empty Go proxy PostgreSQL state and exit")
 	importKeys := flag.Bool("import-litellm-keys", false, "Copy supported LiteLLM key digests into empty Go proxy state and exit")
 	importAccess := flag.Bool("import-litellm-access", false, "Import supported LiteLLM access records and keys into empty Go PostgreSQL state")
@@ -95,7 +96,7 @@ func main() {
 		config.LegacyVectorStores = proxyconfig.LegacyVectorStoreLookup(stateDB)
 	}
 	importCount := 0
-	for _, requested := range []bool{*importModels, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend} {
+	for _, requested := range []bool{*importModels, *importCredentials, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend} {
 		if requested {
 			importCount++
 		}
@@ -145,6 +146,14 @@ func main() {
 				log.Fatal(err)
 			}
 			log.Printf("Imported %d LiteLLM virtual keys", count)
+			return
+		}
+		if *importCredentials {
+			count, err := proxyconfig.ImportLiteLLMCredentials(stateDB, proxy)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Printf("Imported %d LiteLLM provider credentials", count)
 			return
 		}
 		count, err := proxyconfig.ImportLiteLLMModels(stateDB, proxy)

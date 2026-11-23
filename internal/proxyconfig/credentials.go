@@ -50,11 +50,10 @@ func (credential providerCredential) validate() error {
 	if strings.TrimSpace(credential.Name) == "" || len(credential.Values) == 0 {
 		return errors.New("credential_name and credential_values are required")
 	}
+	var entry deployment
+	fields := entry.credentialFields()
 	for field := range credential.Values {
-		switch field {
-		case "api_key", "api_base", "api_version", "azure_ad_token", "aws_access_key_id", "aws_secret_access_key", "aws_session_token",
-			"aws_region_name", "aws_profile_name", "vertex_project", "vertex_location":
-		default:
+		if _, ok := fields[field]; !ok && field != "vertex_credentials" && field != "vertex_ai_credentials" {
 			return errors.New("unsupported provider credential field")
 		}
 	}
@@ -69,7 +68,23 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 	if !exists {
 		return deployment{}, errors.New("referenced provider credential is missing")
 	}
-	for name, target := range map[string]*string{
+	for name, target := range entry.credentialFields() {
+		if *target == "" {
+			*target = credential.Values[name]
+		}
+	}
+	if entry.Params.VertexCredentials == nil && entry.Params.VertexAICredentials == nil {
+		if value := credential.Values["vertex_credentials"]; value != "" {
+			entry.Params.VertexCredentials = value
+		} else if value := credential.Values["vertex_ai_credentials"]; value != "" {
+			entry.Params.VertexAICredentials = value
+		}
+	}
+	return entry, nil
+}
+
+func (entry *deployment) credentialFields() map[string]*string {
+	return map[string]*string{
 		"api_key": &entry.Params.APIKey, "api_base": &entry.Params.APIBase, "api_version": &entry.Params.APIVersion,
 		"azure_ad_token": &entry.Params.AzureADToken,
 		"tenant_id": &entry.Params.AzureTenant, "client_id": &entry.Params.AzureClient,
@@ -83,19 +98,16 @@ func (entry deployment) withCredential(credentials map[string]providerCredential
 		"aws_web_identity_token": &entry.Params.AWSWebIdentity, "aws_sts_endpoint": &entry.Params.AWSSTSEndpoint,
 		"aws_external_id": &entry.Params.AWSExternalID,
 		"vertex_location": &entry.Params.VertexLocation,
-	} {
-		if *target == "" {
-			*target = credential.Values[name]
-		}
+		"aws_bedrock_control_endpoint": &entry.Params.AWSBedrockControlEndpoint,
+		"aws_bedrock_agent_endpoint": &entry.Params.AWSBedrockAgentEndpoint,
+		"aws_bedrock_agent_runtime_endpoint": &entry.Params.AWSBedrockAgentRuntimeEndpoint,
+		"aws_s3vectors_endpoint": &entry.Params.AWSS3VectorsEndpoint,
+		"aws_batch_role_arn": &entry.Params.AWSBatchRoleARN,
+		"s3_bucket_name": &entry.Params.S3Bucket, "s3_endpoint_url": &entry.Params.S3Endpoint,
+		"s3_region_name": &entry.Params.S3Region, "s3_output_bucket_name": &entry.Params.S3OutputBucket,
+		"s3_encryption_key_id": &entry.Params.S3EncryptionKey,
+		"bucket_name": &entry.Params.GCSBucket, "gcs_endpoint": &entry.Params.GCSEndpoint,
 	}
-	if entry.Params.VertexCredentials == nil && entry.Params.VertexAICredentials == nil {
-		if value := credential.Values["vertex_credentials"]; value != "" {
-			entry.Params.VertexCredentials = value
-		} else if value := credential.Values["vertex_ai_credentials"]; value != "" {
-			entry.Params.VertexAICredentials = value
-		}
-	}
-	return entry, nil
 }
 
 func (credential providerCredential) masked() providerCredential {

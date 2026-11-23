@@ -118,6 +118,16 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	if count, err := ImportLiteLLMModels(db, Config{MasterKey: master}); err != nil || count != 1 {
 		t.Fatalf("model import count=%d, err=%v", count, err)
 	}
+	unused, _ := json.Marshal(map[string]string{"azure_password": encrypted, "tenant_id": "test-tenant"})
+	if _, err := db.Exec(`INSERT INTO "LiteLLM_CredentialsTable" VALUES ('fixture-unused',$1::jsonb,NULL)`, string(unused)); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := ImportLiteLLMCredentials(db, Config{MasterKey: master}); err != nil || count != 1 {
+		t.Fatalf("unused credential import count=%d, err=%v", count, err)
+	}
+	if count, err := ImportLiteLLMCredentials(db, Config{MasterKey: master}); err != nil || count != 0 {
+		t.Fatalf("repeated credential import count=%d, err=%v", count, err)
+	}
 	if count, err := ImportLiteLLMKeys(db); err != nil || count != 1 {
 		t.Fatalf("key import count=%d, err=%v", count, err)
 	}
@@ -129,6 +139,7 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	var models modelState
 	if err := postgresModels(db, master).load(&models); err != nil || len(models.Models) != 1 ||
 		models.Credentials["fixture-provider"].Values["api_key"] != "provider-secret" ||
+		models.Credentials["fixture-unused"].Values["azure_password"] != "provider-secret" ||
 		models.Models[0].Params.CredentialName != "fixture-provider" || models.Models[0].Info.ID != "upstream-deployment" {
 		t.Fatalf("imported configuration could not be restored: %v", err)
 	}
