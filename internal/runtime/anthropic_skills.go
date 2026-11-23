@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -123,4 +124,34 @@ func (s *Server) anthropicSkill(w http.ResponseWriter, r *http.Request, scope []
 		data = wrapOpenAIResource(data, anthropicSkillFamily, candidate.DeploymentID)
 	}
 	writeRawResponse(w, response.StatusCode, response.Header, data)
+}
+
+func pinAnthropicSkillReferences(route *Route, fields map[string]any) error {
+	container, _ := fields["container"].(map[string]any)
+	skills, _ := container["skills"].([]any)
+	var deployment string
+	for _, raw := range skills {
+		skill, _ := raw.(map[string]any)
+		id, _ := skill["skill_id"].(string)
+		if !strings.HasPrefix(id, "minato_") {
+			continue
+		}
+		native, err := nativeResourceID(id, anthropicSkillFamily, &deployment)
+		if err != nil {
+			return err
+		}
+		skill["skill_id"] = native
+	}
+	if deployment == "" {
+		return nil
+	}
+	for _, candidate := range route.Candidates {
+		if candidate.Provider == "anthropic" && candidate.DeploymentID == deployment {
+			route.Candidates = []Candidate{candidate}
+			route.ContextFallback = nil
+			route.PolicyFallback = nil
+			return nil
+		}
+	}
+	return errors.New("Anthropic skills belong to another deployment")
 }

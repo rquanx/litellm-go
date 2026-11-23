@@ -526,6 +526,12 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			route.PolicyFallback = filterTaggedDeployments(route.PolicyFallback, input, request.UserAgent(), s.config.TagsMatchAll)
 		}
 	}
+	if s.config.AuthorizeInference && endpoint == "anthropic-messages" {
+		if err := pinAnthropicSkillReferences(&route, input); err != nil {
+			writeError(writer, http.StatusBadRequest, "invalid_skill_reference", err.Error())
+			return
+		}
+	}
 	if s.config.AuthorizeInference && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
