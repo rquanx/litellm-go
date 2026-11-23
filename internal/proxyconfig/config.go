@@ -632,6 +632,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	runway := provider == "runwayml"
 	runwaySpeech := runway && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "eleven_") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	pgVector := provider == "pg_vector"
+	milvus := provider == "milvus"
 	minimaxSpeech := provider == "minimax" && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "speech-") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	nativeAudio := provider == "elevenlabs" || provider == "deepgram" || provider == "aws_polly"
 	nativeRerank := (provider == "infinity" || provider == "huggingface" || provider == "watsonx") && entry.rerankConfigured()
@@ -648,7 +649,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		(provider == "azure_ai" && !strings.Contains(model, "doc-intelligence") && !strings.Contains(model, "documentintelligence")))
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
-		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector && !minimaxSpeech) {
+		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector && !milvus && !minimaxSpeech) {
 		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
 	}
 	if provider == "openai" {
@@ -794,6 +795,9 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 			base = "https://api.cohere.ai"
 		}
 	}
+	if milvus && base == "" {
+		base = os.Getenv("MILVUS_API_BASE")
+	}
 	if pgVector && base == "" {
 		base = os.Getenv("PG_VECTOR_API_BASE")
 	}
@@ -811,6 +815,12 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	key, err := resolveEnv(entry.Params.APIKey)
 	if err != nil {
 		return runtime.Candidate{}, fmt.Errorf("api_key: %w", err)
+	}
+	if milvus && key == "" {
+		key = os.Getenv("MILVUS_API_KEY")
+		if key == "" {
+			return runtime.Candidate{}, errors.New("milvus requires api_key or MILVUS_API_KEY")
+		}
 	}
 	if pgVector && key == "" {
 		key = os.Getenv("PG_VECTOR_API_KEY")
@@ -945,7 +955,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
-	if pgVector {
+	if pgVector || milvus {
 		endpoint = "vector-stores"
 	}
 	if runway {
@@ -1042,7 +1052,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		if nativeAudio && !(provider != "aws_polly" && configured == "transcription") && !((provider == "elevenlabs" || provider == "aws_polly") && configured == "speech") {
 			return runtime.Candidate{}, errors.New("unsupported native audio endpoint")
 		}
-		if configured == "" || (runway && configured != endpoint) || (pgVector && configured != "vector-stores") || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
+		if configured == "" || (runway && configured != endpoint) || ((pgVector || milvus) && configured != "vector-stores") || ((provider == "gemini" || provider == "vertex_ai") && configured != "google-embeddings" && configured != "image-generation" && configured != "image-edit" && !(vertexSpeech && configured == "speech") &&
 			!(provider == "vertex_ai" && (configured == "rerank" || (configured == "ocr" && partnerOCR)))) ||
 			(configured == "anthropic-messages") != (provider == "anthropic") ||
 			(provider == "bedrock" && configured != endpoint && !runtime.BedrockSupportsImage(model, configured)) {

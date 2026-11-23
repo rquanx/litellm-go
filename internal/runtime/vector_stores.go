@@ -235,6 +235,19 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 			return
 		}
 	}
+	if provider == "milvus" {
+		if family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Milvus supports vector store search")
+			return
+		}
+		candidate, ok := s.selectResourceProvider(alias, deployment, provider, scope, true)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "model_required", "Select a configured Milvus deployment")
+			return
+		}
+		s.searchMilvus(w, request, candidate, id, fields, scope)
+		return
+	}
 	if provider == "s3_vectors" {
 		if family != "vector_stores_search" {
 			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "S3 Vectors supports vector search")
@@ -388,6 +401,14 @@ func (s *Server) applyVectorRegistry(w http.ResponseWriter, r *http.Request, id,
 		for _, field := range []string{"embedding_model", "vector_bucket_name", "aws_region_name"} {
 			if params[field] != nil {
 				fields[field] = params[field]
+			}
+		}
+		if registered == "milvus" {
+			for _, key := range []string{"milvus_db_name", "milvus_partition_names"} {
+				fields[key] = params[key]
+			}
+			if fields["milvus_text_field"] == nil {
+				fields["milvus_text_field"] = params["milvus_text_field"]
 			}
 		}
 		if registered == "vertex_ai/search_api" {

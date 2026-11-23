@@ -83,7 +83,7 @@ func (s *Server) selectResourceCandidate(alias, deployment, provider string, sco
 	return s.selectResourceProvider(alias, deployment, provider, scope, false)
 }
 
-func (s *Server) selectResourceProvider(alias, deployment, provider string, scope []string, pgVector bool) (Candidate, bool) {
+func (s *Server) selectResourceProvider(alias, deployment, provider string, scope []string, vectorOnly bool) (Candidate, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var selected Candidate
@@ -93,8 +93,8 @@ func (s *Server) selectResourceProvider(alias, deployment, provider string, scop
 		}
 		for _, candidate := range route.Candidates {
 			compatible := candidate.Provider == "openai" || candidate.Provider == "azure"
-			if pgVector {
-				compatible = candidate.Provider == "pg_vector"
+			if vectorOnly {
+				compatible = candidate.Provider == provider
 			}
 			if !candidateAllowed(scope, candidate) || !compatible ||
 				(provider != "" && candidate.Provider != provider) || candidate.DeploymentID == "" {

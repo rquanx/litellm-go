@@ -54,9 +54,21 @@ func safeVectorParams(value any) map[string]any {
 		_ = json.Unmarshal([]byte(encoded), &params)
 	}
 	safe := make(map[string]any)
-	for _, name := range []string{"model", "embedding_model", "litellm_embedding_model", "vector_bucket_name", "aws_region_name", "vertex_project", "vertex_location", "vertex_collection_id"} {
+	for _, name := range []string{"model", "embedding_model", "litellm_embedding_model", "vector_bucket_name", "aws_region_name", "vertex_project", "vertex_location", "vertex_collection_id", "milvus_db_name", "milvus_text_field"} {
 		if field, ok := params[name].(string); ok {
 			safe[name] = field
+		}
+	}
+	if names, ok := params["milvus_partition_names"].([]any); ok {
+		valid := true
+		for _, name := range names {
+			if _, ok := name.(string); !ok {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			safe["milvus_partition_names"] = names
 		}
 	}
 	return safe
