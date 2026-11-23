@@ -422,6 +422,7 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 		if !explicit {
 			targets = fallbacks["*"]
 		}
+		var chained []string
 		for _, target := range targets {
 			if explicit && searchNames[alias] && searchNames[target] && byAlias[target] == nil {
 				continue
@@ -437,7 +438,34 @@ func (config Config) buildRoutes(models []deployment) ([]runtime.Route, error) {
 				return nil, fmt.Errorf("model %q has an incompatible fallback %q", alias, target)
 			}
 			seen[target] = true
+			chained = append(chained, target)
+		}
+		seen = map[string]bool{alias: true}
+		var appendChain func(string) error
+		appendChain = func(target string) error {
+			if seen[target] || !hasCompatibleDeployment(byAlias[alias], byAlias[target]) {
+				return nil
+			}
+			seen[target] = true
 			candidates = append(candidates, byAlias[target]...)
+			if len(candidates) > 16 {
+				return fmt.Errorf("model %q exceeds the 16-candidate limit", alias)
+			}
+			nested, exists := fallbacks[target]
+			if !exists {
+				nested = fallbacks[config.modelGroupAliases[target].Model]
+			}
+			for _, next := range nested {
+				if err := appendChain(next); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		for _, target := range chained {
+			if err := appendChain(target); err != nil {
+				return nil, err
+			}
 		}
 		for _, target := range config.defaultFallbacks {
 			if !seen[target] && hasCompatibleDeployment(byAlias[alias], byAlias[target]) {

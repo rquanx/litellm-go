@@ -90,3 +90,31 @@ router_settings:
 		t.Fatal("a specialized fallback ran for the wrong failure or scope")
 	}
 }
+
+func TestConfiguredFallbackChainsAreOrderedAndCycleBounded(t *testing.T) {
+	config,err:=Load(strings.NewReader(`
+model_list:
+  - model_name: primary
+    litellm_params: {model: openai/model-a, api_key: fixture}
+  - model_name: first
+    litellm_params: {model: openai/model-b, api_key: fixture}
+  - model_name: nested
+    litellm_params: {model: openai/model-c, api_key: fixture}
+  - model_name: last
+    litellm_params: {model: openai/model-d, api_key: fixture}
+router_settings:
+  fallbacks:
+    - primary: [first,last]
+    - first: [nested]
+    - nested: [primary]
+`))
+	if err!=nil{t.Fatal(err)}
+	for _,route:=range config.Routes{
+		if route.Alias!="primary"{continue}
+		var got []string
+		for _,candidate:=range route.Candidates{got=append(got,candidate.ModelID)}
+		if strings.Join(got,",")!="model-a,model-b,model-c,model-d"{t.Fatalf("wrong fallback order: %v",got)}
+		return
+	}
+	t.Fatal("primary route missing")
+}
