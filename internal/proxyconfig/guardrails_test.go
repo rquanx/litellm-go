@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -345,9 +346,10 @@ func TestPostgresTeamGuardrailReviewIsScoped(t *testing.T) {
 		io.WriteString(w, `{"id":"result","choices":[]}`)
 	}))
 	defer upstream.Close()
-	server := runtime.NewServer(runtime.Config{Token: "master", AuthorizeInference: true, AuthorizeKey: keys.Authorize, GuardrailTeam: keys.GuardrailTeam,
+	config := runtime.Config{Token: "master", AuthorizeInference: true, AuthorizeKey: keys.Authorize, GuardrailTeam: keys.GuardrailTeam,
 		Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{{Provider: "openai", ModelID: "fixture", APIBase: upstream.URL, Endpoint: "chat-completions"}}}},
-	})
+	}
+	server := runtime.NewServer(config)
 	handler, err := WithGuardrailRegistry(server, server, keys, db, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -380,13 +382,19 @@ func TestPostgresTeamGuardrailReviewIsScoped(t *testing.T) {
 	call(http.MethodGet, path, "team-two", "", 404)
 	const chat = "/v1/chat/completions"
 	const body = `{"model":"demo","messages":[]}`
+	secondServer := runtime.NewServer(config)
+	replica, err := WithGuardrailRegistry(secondServer, secondServer, keys, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	call(http.MethodPost, chat, "team-one", body, 200)
 	call(http.MethodPost, path+"/approve", "team-one", "", 401)
 	call(http.MethodPost, path+"/approve", "master", "", 200)
 	call(http.MethodPost, chat, "team-one", body, 400)
 	call(http.MethodPost, chat, "team-two", body, 200)
-	handler, err = WithGuardrailRegistry(server, server, keys, db, nil)
-	if err != nil {
+	handler = replica
+	call(http.MethodPost, chat, "team-one", body, 200)
+	if err := replica.refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	call(http.MethodPost, chat, "team-one", body, 400)

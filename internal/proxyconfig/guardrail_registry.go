@@ -15,12 +15,13 @@ import (
 )
 
 type guardrailRegistry struct {
-	db     *sql.DB
-	keys   *KeyRegistry
-	server *runtime.Server
-	static []runtime.GenericGuardrail
-	mu     sync.Mutex
-	rows   map[string]guardrailRecord
+	db      *sql.DB
+	keys    *KeyRegistry
+	server  *runtime.Server
+	static  []runtime.GenericGuardrail
+	mu      sync.Mutex
+	rows    map[string]guardrailRecord
+	handler http.Handler
 }
 
 type guardrailRecord struct {
@@ -31,7 +32,7 @@ type guardrailRecord struct {
 
 const guardrailTable = `"LiteLLM_GuardrailsTable"`
 
-func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyRegistry, db *sql.DB, static []runtime.GenericGuardrail) (http.Handler, error) {
+func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyRegistry, db *sql.DB, static []runtime.GenericGuardrail) (*guardrailRegistry, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+guardrailTable+` (
@@ -43,33 +44,9 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 		return nil, errors.New("could not initialize guardrails registry")
 	}
 	registry := &guardrailRegistry{db: db, keys: keys, server: server, static: static, rows: make(map[string]guardrailRecord)}
-	records, err := db.QueryContext(ctx, `SELECT guardrail_id,guardrail_name,litellm_params,guardrail_info,COALESCE(team_id,'') FROM `+guardrailTable+`
-		WHERE status='active'`)
-	if err != nil {
+	if err := registry.refresh(ctx); err != nil {
 		return nil, err
 	}
-	defer records.Close()
-	for records.Next() {
-		var row guardrailRecord
-		var params, info []byte
-		if err := records.Scan(&row.ID, &row.Spec.Name, &params, &info, &row.Spec.Team); err != nil {
-			return nil, err
-		}
-		_ = decodePolicyCondition(params, &row.Spec.Params)
-		if !supportedGuardrailProvider(row.Spec.Params.Provider) {
-			continue
-		}
-		_ = decodePolicyCondition(info, &row.Info)
-		registry.rows[row.ID] = row
-	}
-	if err := records.Err(); err != nil {
-		return nil, err
-	}
-	guards, err := registry.compile(registry.rows)
-	if err != nil {
-		return nil, err
-	}
-	server.ReplaceGuardrails(guards)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /guardrails/list", registry.read)
 	mux.HandleFunc("GET /v2/guardrails/list", registry.read)
@@ -86,13 +63,59 @@ func WithGuardrailRegistry(next http.Handler, server *runtime.Server, keys *KeyR
 	submissions.HandleFunc("POST /guardrails/submissions/{guardrail_id}/approve", registry.reviewSubmission)
 	submissions.HandleFunc("POST /guardrails/submissions/{guardrail_id}/reject", registry.reviewSubmission)
 	mux.Handle("/", next)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	registry.handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/guardrails/submissions" || strings.HasPrefix(r.URL.Path, "/guardrails/submissions/") {
 			submissions.ServeHTTP(w, r)
 			return
 		}
 		mux.ServeHTTP(w, r)
-	}), nil
+	})
+	return registry, nil
+}
+
+func (registry *guardrailRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	registry.handler.ServeHTTP(w, r)
+}
+
+func (registry *guardrailRegistry) RunRefresh(ctx context.Context) {
+	refreshPostgresRegistry(ctx, "guardrail", registry.refresh)
+}
+
+func (registry *guardrailRegistry) refresh(ctx context.Context) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	records, err := registry.db.QueryContext(ctx, `SELECT guardrail_id,guardrail_name,litellm_params,guardrail_info,COALESCE(team_id,'')
+		FROM `+guardrailTable+` WHERE status='active'`)
+	if err != nil {
+		return err
+	}
+	defer records.Close()
+	rows := make(map[string]guardrailRecord)
+	for records.Next() {
+		var row guardrailRecord
+		var params, info []byte
+		if err := records.Scan(&row.ID, &row.Spec.Name, &params, &info, &row.Spec.Team); err != nil {
+			return err
+		}
+		if err := decodePolicyCondition(params, &row.Spec.Params); err != nil {
+			return err
+		}
+		if !supportedGuardrailProvider(row.Spec.Params.Provider) {
+			continue
+		}
+		_ = decodePolicyCondition(info, &row.Info)
+		rows[row.ID] = row
+	}
+	if err := records.Err(); err != nil {
+		return err
+	}
+	guards, err := registry.compile(rows)
+	if err != nil {
+		return err
+	}
+	registry.rows = rows
+	registry.server.ReplaceGuardrails(guards)
+	return nil
 }
 
 func (registry *guardrailRegistry) compile(rows map[string]guardrailRecord) ([]runtime.GenericGuardrail, error) {

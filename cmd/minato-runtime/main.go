@@ -336,8 +336,10 @@ func main() {
 		if err != nil { log.Fatal(err) }
 		handler, err = proxyconfig.WithPromptManagement(handler, stateDB, keys)
 		if err != nil { log.Fatal(err) }
-		handler, err = proxyconfig.WithGuardrailRegistry(handler, server, keys, stateDB, proxy.Guardrails)
+		guardrailRegistry, err := proxyconfig.WithGuardrailRegistry(handler, server, keys, stateDB, proxy.Guardrails)
 		if err != nil { log.Fatal(err) }
+		handler = guardrailRegistry
+		go guardrailRegistry.RunRefresh(context.Background())
 	}
 	if keys != nil {
 		keys.SetSSOUserDefaults(proxy.SSOUserDefaults)

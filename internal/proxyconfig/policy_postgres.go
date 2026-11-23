@@ -149,6 +149,10 @@ func (registry *PolicyRegistry) RunRefresh(ctx context.Context) {
 	if registry.db == nil {
 		return
 	}
+	refreshPostgresRegistry(ctx, "policy", registry.refresh)
+}
+
+func refreshPostgresRegistry(ctx context.Context, name string, refresh func(context.Context) error) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -157,10 +161,10 @@ func (registry *PolicyRegistry) RunRefresh(ctx context.Context) {
 			return
 		case <-ticker.C:
 			refreshCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			err := registry.refresh(refreshCtx)
+			err := refresh(refreshCtx)
 			cancel()
 			if err != nil && ctx.Err() == nil {
-				log.Print("could not refresh PostgreSQL policy snapshot")
+				log.Printf("could not refresh PostgreSQL %s snapshot", name)
 			}
 		}
 	}
