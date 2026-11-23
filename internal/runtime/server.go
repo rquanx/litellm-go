@@ -583,6 +583,20 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			route.PolicyFallback = filterTaggedDeployments(route.PolicyFallback, input, request.UserAgent(), s.config.TagsMatchAll)
 		}
 	}
+	if s.config.AuthorizeInference && (endpoint == "responses" || endpoint == "chat-completions") {
+		automatic := make(map[string]mcpInferenceTool)
+		if err := s.expandMCPInferenceTools(request, endpoint, input, automatic); err != nil {
+			writeError(writer, http.StatusBadRequest, "mcp_tool_error", err.Error())
+			return
+		}
+		if len(automatic) > 0 {
+			if recorder, ok := writer.(*callbackResponse); ok {
+				writer = recorder.ResponseWriter
+			}
+			s.inferWithMCPTools(writer, request, endpoint, alias, modelScope, input, automatic, stream)
+			return
+		}
+	}
 	if s.config.AuthorizeInference && endpoint == "anthropic-messages" {
 		if err := pinAnthropicResources(&route, input); err != nil {
 			writeError(writer, http.StatusBadRequest, "invalid_resource_reference", err.Error())
@@ -628,12 +642,6 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 		if originalPollingPayload != nil {
 			s.startResponsePolling(writer, request, route.Alias, originalPollingPayload)
-			return
-		}
-	}
-	if s.config.AuthorizeInference && (endpoint == "responses" || endpoint == "chat-completions") {
-		if err := s.expandMCPInferenceTools(request, endpoint, input); err != nil {
-			writeError(writer, http.StatusBadRequest, "mcp_tool_error", err.Error())
 			return
 		}
 	}
