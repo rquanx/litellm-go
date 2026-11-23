@@ -128,6 +128,9 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	if family == "batches" && s.bedrockControlBatchResource(writer, request, alias, provider, scope) {
 		return
 	}
+	if family == "batches" && s.vertexBatchResource(writer, request, alias, provider, scope) {
+		return
+	}
 	if family == "files" && s.bedrockFileContent(writer, request, alias, provider, scope) {
 		return
 	}
@@ -197,6 +200,11 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 					}
 					bodyProvider, _ := payload.fields["custom_llm_provider"].(string)
 					fileID, _ := payload.fields["input_file_id"].(string)
+					if provider == "vertex_ai" || bodyProvider == "vertex_ai" ||
+						(provider == "" && bodyProvider == "" && strings.HasPrefix(fileID, "gs://")) {
+						s.createVertexBatch(writer, request, alias, scope, fileID)
+						return
+					}
 					bedrock := provider == "bedrock" || bodyProvider == "bedrock"
 					if provider == "" && bodyProvider == "" && alias != "" && strings.HasPrefix(fileID, "s3://") {
 						_, status := s.bedrockControlDeployment(request, alias, "", "", scope)
