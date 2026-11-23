@@ -174,6 +174,42 @@ litellm_settings:
 	}
 }
 
+func TestOpenAIModerationInspectsResponsesInput(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		if r.URL.Path != "/v1/moderations" || r.Header.Get("Authorization") != "Bearer moderator-key" ||
+			!strings.Contains(string(raw), `"model":"omni-moderation-latest"`) ||
+			!strings.Contains(string(raw), `"input":"fixture input"`) {
+			t.Errorf("unexpected moderation request %s %s", r.URL.Path, raw)
+		}
+		io.WriteString(w, `{"results":[{"flagged":true}]}`)
+	}))
+	defer origin.Close()
+	t.Setenv("OPENAI_API_KEY", "moderator-key")
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+model_list:
+  - model_name: demo
+    litellm_params: {model: openai/fixture, api_base: %[1]q}
+litellm_settings:
+  guardrails:
+    - guardrail_name: moderator
+      litellm_params:
+        guardrail: openai_moderation
+        mode: pre_call
+        api_base: "%[1]s/v1"
+        default_on: true
+`, origin.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{AuthorizeInference: true, Routes: config.Routes, Guardrails: config.Guardrails})
+	w := httptest.NewRecorder()
+	server.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","input":"fixture input"}`)))
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "Violated OpenAI moderation policy") {
+		t.Fatalf("unexpected moderation response %d %s", w.Code, w.Body)
+	}
+}
+
 func TestPostgresGuardrailRegistryPublishesAndRestoresRules(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
 	if dsn == "" {

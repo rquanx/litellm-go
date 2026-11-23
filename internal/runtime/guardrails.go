@@ -16,6 +16,7 @@ type GenericGuardrail struct {
 	Parameters              map[string]any
 	Provider                string
 	Azure                   *AzureSafetyOptions
+	ModerationModel         string
 }
 
 type GuardrailPolicy struct {
@@ -168,6 +169,9 @@ type guardrailFailure struct {
 func (s *Server) evaluateGenericGuardrail(r *http.Request, guard GenericGuardrail, model, stage string, input map[string]any) *guardrailFailure {
 	if guard.Azure != nil {
 		return s.evaluateAzureSafety(r, guard, stage, input)
+	}
+	if guard.Provider == "openai_moderation" {
+		return s.evaluateOpenAIModeration(r, guard, input)
 	}
 	texts, replace := guardrailText(input)
 	body, _ := json.Marshal(map[string]any{"model": model, "input_type": stage, "texts": texts,

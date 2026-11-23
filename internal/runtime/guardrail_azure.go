@@ -20,25 +20,13 @@ type AzureSafetyOptions struct {
 func (s *Server) evaluateAzureSafety(r *http.Request, guard GenericGuardrail, stage string, input map[string]any) *guardrailFailure {
 	var texts []string
 	if stage == "request" {
-		messages, _ := input["messages"].([]any)
-		var latest []string
-		for i := len(messages) - 1; i >= 0; i-- {
-			message, _ := messages[i].(map[string]any)
-			if message["role"] != "user" {
-				break
-			}
-			latest = append(latest, azureMessageText(message["content"]))
-		}
-		for i, j := 0, len(latest)-1; i < j; i, j = i+1, j-1 {
-			latest[i], latest[j] = latest[j], latest[i]
-		}
-		texts = []string{strings.TrimSpace(strings.Join(latest, "\n"))}
+		texts = []string{latestGuardrailUserPrompt(input)}
 	} else {
 		choices, _ := input["choices"].([]any)
 		for _, raw := range choices {
 			choice, _ := raw.(map[string]any)
 			message, _ := choice["message"].(map[string]any)
-			texts = append(texts, azureMessageText(message["content"]))
+			texts = append(texts, guardrailMessageText(message["content"]))
 		}
 	}
 	for _, text := range texts {
@@ -54,7 +42,7 @@ func (s *Server) evaluateAzureSafety(r *http.Request, guard GenericGuardrail, st
 	return nil
 }
 
-func azureMessageText(content any) string {
+func guardrailMessageText(content any) string {
 	if text, ok := content.(string); ok {
 		return text
 	}
@@ -67,6 +55,24 @@ func azureMessageText(content any) string {
 		}
 	}
 	return strings.Join(texts, "\n")
+}
+
+func latestGuardrailUserPrompt(input map[string]any) string {
+	messages, _ := input["messages"].([]any)
+	start := len(messages)
+	for start > 0 {
+		message, _ := messages[start-1].(map[string]any)
+		if message["role"] != "user" {
+			break
+		}
+		start--
+	}
+	latest := make([]string, 0, len(messages)-start)
+	for _, raw := range messages[start:] {
+		message, _ := raw.(map[string]any)
+		latest = append(latest, guardrailMessageText(message["content"]))
+	}
+	return strings.TrimSpace(strings.Join(latest, "\n"))
 }
 
 func (s *Server) checkAzureSafetyChunk(r *http.Request, guard GenericGuardrail, text string) *guardrailFailure {

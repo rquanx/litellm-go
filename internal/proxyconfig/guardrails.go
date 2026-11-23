@@ -26,12 +26,13 @@ type genericGuardrailSpec struct {
 		Blocklists         []string       `yaml:"blocklistNames" json:"blocklistNames"`
 		HaltOnBlocklistHit bool           `yaml:"haltOnBlocklistHit" json:"haltOnBlocklistHit"`
 		OutputType         string         `yaml:"outputType" json:"outputType"`
+		Model              string         `yaml:"model" json:"model"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 }
 
 func supportedGuardrailProvider(provider string) bool {
 	switch provider {
-	case "generic_guardrail_api", "azure/prompt_shield", "azure/text_moderations":
+	case "generic_guardrail_api", "azure/prompt_shield", "azure/text_moderations", "openai_moderation":
 		return true
 	default:
 		return false
@@ -62,6 +63,20 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 		if key == "" && p.Provider == "generic_guardrail_api" {
 			key = os.Getenv("GENERIC_GUARDRAIL_API_KEY")
 		}
+		if p.Provider == "openai_moderation" {
+			if base == "" {
+				base = "https://api.openai.com/v1"
+			}
+			if key == "" {
+				key = os.Getenv("OPENAI_API_KEY")
+			}
+			if key == "" {
+				return nil, errors.New("OpenAI Moderation requires an API key")
+			}
+			if p.Model == "" {
+				p.Model = "omni-moderation-latest"
+			}
+		}
 		target, err := url.Parse(base)
 		if err != nil || target.Hostname() == "" || (target.Scheme != "http" && target.Scheme != "https") ||
 			target.User != nil || target.RawQuery != "" || target.Fragment != "" || target.ForceQuery {
@@ -69,7 +84,10 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 		}
 		endpoint := "/beta/litellm_basic_guardrail_api"
 		var azure *runtime.AzureSafetyOptions
-		if p.Provider != "generic_guardrail_api" {
+		switch p.Provider {
+		case "openai_moderation":
+			endpoint = "/moderations"
+		case "azure/prompt_shield", "azure/text_moderations":
 			if key == "" {
 				return nil, errors.New("Azure Content Safety requires an API key")
 			}
@@ -96,7 +114,7 @@ func prepareGenericGuardrails(specs []genericGuardrailSpec) ([]runtime.GenericGu
 		}
 		target.Path, target.RawPath = path, ""
 		result = append(result, runtime.GenericGuardrail{Name: spec.Name, URL: target.String(), APIKey: key,
-			Post: p.Mode == "post_call", Default: p.Default, FailOpen: p.Fallback == "fail_open", Parameters: p.Parameters, Provider: p.Provider, Azure: azure})
+			Post: p.Mode == "post_call", Default: p.Default, FailOpen: p.Fallback == "fail_open", Parameters: p.Parameters, Provider: p.Provider, Azure: azure, ModerationModel: p.Model})
 		seen[spec.Name] = true
 	}
 	return result, nil
