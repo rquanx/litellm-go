@@ -21,6 +21,7 @@ type Candidate struct {
 	APIVersion       string            `json:"apiVersion,omitempty"`
 	AzureADToken     string            `json:"-"`
 	Provider         string            `json:"provider,omitempty"`
+	Region           string            `json:"region,omitempty"`
 	DeploymentID     string            `json:"deploymentId,omitempty"`
 	ParamMappings    map[string]string `json:"paramMappings,omitempty"`
 	RelativeAPIBase  bool              `json:"relativeApiBase,omitempty"`

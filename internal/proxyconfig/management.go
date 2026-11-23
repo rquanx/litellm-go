@@ -235,6 +235,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.AWSRegion == "" {
 			model.Params.AWSRegion = existing.Params.AWSRegion
 		}
+		if model.Params.Region == "" {
+			model.Params.Region = existing.Params.Region
+		}
 		if model.Params.AWSAccessKey == "" {
 			model.Params.AWSAccessKey = existing.Params.AWSAccessKey
 		}

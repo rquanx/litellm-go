@@ -77,6 +77,7 @@ type deployment struct {
 		Model   string `yaml:"model" json:"model"`
 		APIBase string `yaml:"api_base" json:"api_base,omitempty"`
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
+		Region string `yaml:"region_name" json:"region_name,omitempty"`
 		UseInPassThrough bool `yaml:"use_in_pass_through" json:"use_in_pass_through,omitempty"`
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
@@ -931,7 +932,11 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 		patterns = append(patterns, compiled)
 	}
-	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model,
+	region, err := resolveEnv(entry.Params.Region)
+	if err != nil {
+		return runtime.Candidate{}, err
+	}
+	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model, Region: region,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		Tags: slices.Clone(entry.Params.Tags), TagRegex: patterns, RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,

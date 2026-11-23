@@ -26,7 +26,10 @@ type InferenceEvent struct {
 	Completion int             `json:"completion_tokens"`
 	Spend      *float64        `json:"response_cost"`
 	CacheHit   bool            `json:"cache_hit"`
+	CacheReadInputTokens int   `json:"cache_read_input_tokens,omitempty"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
 	KeyDigest  string          `json:"-"`
+	EndUser    string          `json:"end_user,omitempty"`
 	Messages   json.RawMessage `json:"messages"`
 	Response   json.RawMessage `json:"response"`
 }
@@ -168,6 +171,8 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 }
 
 func (recorder *callbackResponse) finish() {
+	recorder.event.CacheReadInputTokens = recorder.cachedTokens
+	recorder.event.CacheCreationInputTokens = recorder.cacheCreationTokens
 	recorder.event.EndTime = float64(time.Now().UnixNano()) / float64(time.Second)
 	recorder.event.Model = recorder.Header().Get("X-Minato-Runtime-Model")
 	recorder.event.Provider = recorder.Header().Get("X-Minato-Runtime-Source")

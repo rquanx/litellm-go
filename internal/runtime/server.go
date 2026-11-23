@@ -33,6 +33,7 @@ type Config struct {
 	NumRetries         int
 	MaxFallbacks       *int
 	AuthorizeKey       func(string) ([]string, bool)
+	CustomerPolicy     func(context.Context, string) (CustomerPolicy, error)
 	AuthorizeSearch    func(string) ([]string, bool)
 	AuthorizeMCP       func(string) (MCPAccess, bool)
 	AuthorizeMCPToolset func(string) ([]string, MCPAccess, bool)
@@ -464,8 +465,10 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	if alias == "" {
 		alias, _ = input["model"].(string)
 	}
+	customer := requestCustomerID(request, payload)
 	if s.config.Callback != nil {
 		recorder := &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream)}
+		recorder.event.EndUser = customer
 		if key := ProxyCredential(request); key != "" && !s.authorized(request) {
 			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 		}
@@ -490,6 +493,19 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		writeError(writer, http.StatusForbidden, "model_not_allowed", "The key does not allow this model")
 		return
 	}
+	var customerPolicy CustomerPolicy
+	if customer != "" && s.config.CustomerPolicy != nil {
+		var err error
+		customerPolicy, err = s.config.CustomerPolicy(request.Context(), customer)
+		if err != nil {
+			writeError(writer, http.StatusServiceUnavailable, "customer_lookup_failed", "Could not read customer access")
+			return
+		}
+		if customerPolicy.Blocked {
+			writeError(writer, http.StatusForbidden, "customer_blocked", "This customer is blocked")
+			return
+		}
+	}
 	s.mu.RLock()
 	route, ok := s.routes[alias]
 	if !ok {
@@ -510,6 +526,19 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	eligible := s.eligibleCandidates(request.Context(), route.Candidates, modelScope, endpoint, stream)
+	if customerPolicy.Region != "" {
+		eligible = customerRegionCandidates(eligible, customerPolicy.Region)
+		if len(eligible) == 0 && customerPolicy.DefaultModel != "" && modelAllowed(modelScope, customerPolicy.DefaultModel) {
+			s.mu.RLock()
+			regional := s.configuredRoutes[customerPolicy.DefaultModel]
+			s.mu.RUnlock()
+			eligible = customerRegionCandidates(s.eligibleCandidates(request.Context(), regional.Candidates, modelScope, endpoint, stream), customerPolicy.Region)
+		}
+		if len(eligible) == 0 {
+			writeError(writer, http.StatusBadRequest, "model_region_unavailable", "No deployment matches the customer's allowed region")
+			return
+		}
+	}
 	if s.config.EnableTagFiltering {
 		before := len(eligible)
 		eligible = filterTaggedDeployments(eligible, input, request.UserAgent(), s.config.TagsMatchAll)
@@ -525,6 +554,8 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route.Candidates = eligible
 	route.ContextFallback = s.eligibleCandidates(request.Context(), route.ContextFallback, modelScope, endpoint, stream)
 	route.PolicyFallback = s.eligibleCandidates(request.Context(), route.PolicyFallback, modelScope, endpoint, stream)
+	route.ContextFallback = customerRegionCandidates(route.ContextFallback, customerPolicy.Region)
+	route.PolicyFallback = customerRegionCandidates(route.PolicyFallback, customerPolicy.Region)
 	if s.config.EnableTagFiltering {
 		if route.ContextFallback != nil {
 			route.ContextFallback = filterTaggedDeployments(route.ContextFallback, input, request.UserAgent(), s.config.TagsMatchAll)

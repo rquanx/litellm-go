@@ -240,6 +240,17 @@ func main() {
 		defer state.Close()
 		config.RoutingState = state
 	}
+	var customers *proxyconfig.CustomerRegistry
+	if stateDB != nil && keys != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		var err error
+		customers, err = proxyconfig.OpenCustomers(ctx, stateDB, keys)
+		cancel()
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.CustomerPolicy = customers.Policy
+	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
 	if *configPath != "" {
@@ -269,6 +280,9 @@ func main() {
 	}
 	if keys != nil {
 		handler = keys.Handler(handler)
+	}
+	if customers != nil {
+		handler = customers.Handler(handler)
 	}
 	if spend != nil {
 		handler = spend.Handler(handler)
