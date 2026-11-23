@@ -169,13 +169,19 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		s.forwardOpenAIResource(w, request, candidate, family, path, contentType, body)
 		return
 	}
-	if family == "vector_stores_search" {
+	if path != vectorStorePath {
 		var ok bool
-		alias, provider, ok = s.applyVectorRegistry(w, request, id, alias, provider, fields)
+		var searchFields map[string]any
+		if family == "vector_stores_search" {
+			searchFields = fields
+		}
+		alias, provider, ok = s.applyVectorRegistry(w, request, id, alias, provider, searchFields)
 		if !ok {
 			return
 		}
-		body, _ = json.Marshal(fields)
+		if fields != nil {
+			body, _ = json.Marshal(fields)
+		}
 	}
 	if provider == "gemini" {
 		if candidate, ok := s.geminiResourceCandidate(alias, deployment, scope); ok {
@@ -354,13 +360,15 @@ func (s *Server) applyVectorRegistry(w http.ResponseWriter, r *http.Request, id,
 		}
 		alias = model
 	}
-	for _, field := range []string{"embedding_model", "vector_bucket_name", "aws_region_name"} {
-		if params[field] != nil {
-			fields[field] = params[field]
+	if fields != nil {
+		for _, field := range []string{"embedding_model", "vector_bucket_name", "aws_region_name"} {
+			if params[field] != nil {
+				fields[field] = params[field]
+			}
 		}
-	}
-	if selector, _ := params["litellm_embedding_model"].(string); selector != "" {
-		fields["embedding_model"] = selector
+		if selector, _ := params["litellm_embedding_model"].(string); selector != "" {
+			fields["embedding_model"] = selector
+		}
 	}
 	return alias, registered, true
 }

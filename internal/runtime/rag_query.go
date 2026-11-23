@@ -108,7 +108,7 @@ func (s *Server) ragQuery(w http.ResponseWriter, r *http.Request, scope []string
 	messages, _ := fields["messages"].([]any)
 	retrieval, _ := fields["retrieval_config"].(map[string]any)
 	id, _ := retrieval["vector_store_id"].(string)
-	if model == "" || len(messages) == 0 || (!validResourceSegment(id) && !(retrieval["custom_llm_provider"] == "vertex_ai" && vertexRAGStorePath(id))) {
+	if model == "" || len(messages) == 0 || (!validResourceSegment(id) && !vertexRAGStorePath(id)) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "A model, messages and vector_store_id are required")
 		return
 	}

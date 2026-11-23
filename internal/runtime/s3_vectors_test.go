@@ -84,11 +84,15 @@ func TestS3VectorsIngestAndSearch(t *testing.T) {
 	if ocr.Code != http.StatusOK {
 		t.Fatalf("unexpected OCR ingestion result %d %s", ocr.Code, ocr.Body)
 	}
+	retrieve := send("/v1/vector_stores/fixture-bucket:fixture-index", "scoped", `{}`)
+	if retrieve.Code != http.StatusNotFound {
+		t.Fatalf("registered store ownership bypassed on update: %d %s", retrieve.Code, retrieve.Body)
+	}
 	for _, key := range []string{"master", "scoped"} {
 		result := send("/v1/vector_stores/fixture-bucket:fixture-index/search", key, `{"query":"fixture"}`)
 		if key == "scoped" {
 			if result.Code != http.StatusNotFound {
-				t.Fatalf("wrong embedding access result %d %s", result.Code, result.Body)
+				t.Fatalf("wrong store access result %d %s", result.Code, result.Body)
 			}
 		} else if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), `"score":0.75`) {
 			t.Fatalf("wrong S3 search result %d %s", result.Code, result.Body)
