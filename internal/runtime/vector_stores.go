@@ -38,7 +38,9 @@ func vectorStoreOperation(path, method string, deployment *string) (string, stri
 	id, err := url.PathUnescape(parts[0])
 	if err == nil {
 		id = strings.TrimPrefix(id, geminiStorePrefix)
-		id, err = nativeResourceID(id, stores, deployment)
+		if !(len(parts) == 2 && parts[1] == "search" && method == http.MethodPost && vertexRAGStorePath(id)) {
+			id, err = nativeResourceID(id, stores, deployment)
+		}
 	}
 	if err != nil {
 		return "", "", err
@@ -173,6 +175,23 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 			return
 		}
 		writeError(w, http.StatusBadRequest, "model_required", "Select one configured Gemini vector store deployment")
+		return
+	}
+	if provider == "vertex_ai" {
+		if family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Vertex AI supports vector search and RAG corpus creation through ingestion")
+			return
+		}
+		candidate, ok := s.selectGoogleResourceCandidate(alias, deployment, provider, scope, false)
+		if !ok || candidate.Vertex == nil {
+			writeError(w, http.StatusBadRequest, "model_required", "Select a configured Vertex AI deployment")
+			return
+		}
+		s.searchVertexRAG(w, request, candidate, id, fields)
+		return
+	}
+	if vertexRAGStorePath(id) {
+		writeError(w, http.StatusBadRequest, "invalid_request", "A Vertex corpus requires the vertex_ai provider")
 		return
 	}
 	if provider == "bedrock" {

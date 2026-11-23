@@ -95,7 +95,7 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 	if provider == "" {
 		provider = "openai"
 	}
-	if provider != "openai" && provider != "azure" && provider != "gemini" && provider != "bedrock" {
+	if provider != "openai" && provider != "azure" && provider != "gemini" && provider != "bedrock" && provider != "vertex_ai" {
 		writeError(w, http.StatusBadRequest, "unsupported_provider", "No RAG ingestion adapter for this provider")
 		return
 	}
@@ -131,6 +131,13 @@ func (s *Server) ragIngest(w http.ResponseWriter, r *http.Request, scope []strin
 	}
 	if provider == "gemini" && (len(input.file) == 0 || input.FileID != "") {
 		writeError(w, http.StatusBadRequest, "invalid_request", "Gemini ingestion requires a document upload or URL")
+		return
+	}
+	if provider == "vertex_ai" {
+		if _, ok := input.Options["name"].(string); !ok || name == "litellm-rag-ingest" {
+			name = "litellm-rag-corpus"
+		}
+		s.ingestVertexRAG(w, r, scope, alias, vectors, name, store, input)
 		return
 	}
 	if provider == "bedrock" {
