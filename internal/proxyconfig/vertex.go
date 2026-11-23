@@ -58,6 +58,17 @@ func (entry deployment) vertexConfig(base string) (*runtime.VertexConfig, string
 			return nil, "", errors.New("gcs_endpoint must be an HTTP or HTTPS URL without credentials, query or fragment")
 		}
 	}
+	config.DiscoveryBase, err = resolveEnv(entry.Params.VertexDiscoveryEndpoint)
+	if err != nil {
+		return nil, "", err
+	}
+	if config.DiscoveryBase != "" {
+		target, err := url.Parse(config.DiscoveryBase)
+		if err != nil || (target.Scheme != "https" && target.Scheme != "http") || target.Hostname() == "" ||
+			target.User != nil || target.ForceQuery || target.RawQuery != "" || target.Fragment != "" {
+			return nil, "", errors.New("vertex_discovery_endpoint must be an HTTP or HTTPS URL without credentials, query or fragment")
+		}
+	}
 	if entry.Params.APIKey == "" {
 		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 10 * time.Second})
 		credentials, err := entry.vertexCredentials(ctx)

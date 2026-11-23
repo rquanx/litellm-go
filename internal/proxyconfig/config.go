@@ -126,6 +126,7 @@ type deployment struct {
 		VertexAICredentials any `yaml:"vertex_ai_credentials" json:"vertex_ai_credentials,omitempty"`
 		GCSBucket string `yaml:"bucket_name" json:"bucket_name,omitempty"`
 		GCSEndpoint string `yaml:"gcs_endpoint" json:"gcs_endpoint,omitempty"`
+		VertexDiscoveryEndpoint string `yaml:"vertex_discovery_endpoint" json:"vertex_discovery_endpoint,omitempty"`
 		WatsonXProject string `yaml:"watsonx_project" json:"watsonx_project,omitempty"`
 		WatsonXSpace string `yaml:"space_id" json:"space_id,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`

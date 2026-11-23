@@ -329,6 +329,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 		if model.Params.GCSEndpoint == "" {
 			model.Params.GCSEndpoint = existing.Params.GCSEndpoint
 		}
+		if model.Params.VertexDiscoveryEndpoint == "" {
+			model.Params.VertexDiscoveryEndpoint = existing.Params.VertexDiscoveryEndpoint
+		}
 		if model.Info.Endpoints == nil {
 			model.Info.Endpoints = existing.Info.Endpoints
 		}

@@ -191,6 +191,19 @@ func (s *Server) vectorStoreResource(w http.ResponseWriter, request *http.Reques
 		writeError(w, http.StatusBadRequest, "model_required", "Select one configured Gemini vector store deployment")
 		return
 	}
+	if provider == "vertex_ai/search_api" {
+		if family != "vector_stores_search" {
+			writeError(w, http.StatusBadRequest, "unsupported_endpoint", "Vertex AI Search supports vector store search")
+			return
+		}
+		candidate, ok := s.selectGoogleResourceCandidate(alias, deployment, "vertex_ai", scope, false)
+		if !ok || candidate.Vertex == nil {
+			writeError(w, http.StatusBadRequest, "model_required", "Select a configured Vertex AI deployment")
+			return
+		}
+		s.searchVertexDiscovery(w, request, candidate, id, fields)
+		return
+	}
 	if provider == "vertex_ai" {
 		candidate, ok := s.selectGoogleResourceCandidate(alias, deployment, provider, scope, false)
 		if !ok || candidate.Vertex == nil {
@@ -365,6 +378,9 @@ func (s *Server) applyVectorRegistry(w http.ResponseWriter, r *http.Request, id,
 			if params[field] != nil {
 				fields[field] = params[field]
 			}
+		}
+		if registered == "vertex_ai/search_api" {
+			fields["vertex_collection_id"] = params["vertex_collection_id"]
 		}
 		if selector, _ := params["litellm_embedding_model"].(string); selector != "" {
 			fields["embedding_model"] = selector

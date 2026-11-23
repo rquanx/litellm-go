@@ -107,6 +107,7 @@ func (entry *deployment) credentialFields() map[string]*string {
 		"s3_region_name": &entry.Params.S3Region, "s3_output_bucket_name": &entry.Params.S3OutputBucket,
 		"s3_encryption_key_id": &entry.Params.S3EncryptionKey,
 		"bucket_name": &entry.Params.GCSBucket, "gcs_endpoint": &entry.Params.GCSEndpoint,
+		"vertex_discovery_endpoint": &entry.Params.VertexDiscoveryEndpoint,
 	}
 }
 

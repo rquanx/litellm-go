@@ -89,7 +89,7 @@ func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, 
 	}
 	base := candidate.APIBase
 	if discovery {
-		base = "https://discoveryengine.googleapis.com"
+		base = vertexDiscoveryBase(candidate)
 	}
 	target, err := url.Parse(base)
 	if err != nil || target.Hostname() == "" || (target.Scheme != "https" && target.Scheme != "http") {

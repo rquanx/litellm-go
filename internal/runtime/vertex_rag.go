@@ -29,9 +29,13 @@ func vertexRAGCorpus(candidate Candidate, id string) (string, bool) {
 func (s *Server) vertexRAGRequest(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target, media string, body []byte) ([]byte, bool) {
 	base := strings.TrimRight(candidate.APIBase, "/")
 	base = strings.TrimSuffix(strings.TrimSuffix(base, "/v1beta1"), "/v1")
-	upstream, err := newGoogleResourceRequest(r, candidate, base+target, body)
+	return s.vertexDocumentRequest(w, r, candidate, method, base+target, media, body)
+}
+
+func (s *Server) vertexDocumentRequest(w http.ResponseWriter, r *http.Request, candidate Candidate, method, target, media string, body []byte) ([]byte, bool) {
+	upstream, err := newGoogleResourceRequest(r, candidate, target, body)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Could not prepare Vertex RAG request")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not prepare Vertex document request")
 		return nil, false
 	}
 	upstream.Method = method
@@ -51,7 +55,7 @@ func (s *Server) vertexRAGRequest(w http.ResponseWriter, r *http.Request, candid
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	status, raw, headers, err := s.sendGeminiFileRequest(&client, upstream)
 	if err != nil || status/100 == 3 {
-		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex RAG response")
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex document response")
 		return nil, false
 	}
 	if status/100 != 2 {

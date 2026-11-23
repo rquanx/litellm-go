@@ -123,7 +123,7 @@ func (s *Server) ragQuery(w http.ResponseWriter, r *http.Request, scope []string
 	}
 	searchFields := map[string]any{"query": query, "max_num_results": 10}
 	for from, to := range map[string]string{"top_k": "max_num_results", "filters": "filters", "model": "model", "custom_llm_provider": "custom_llm_provider",
-		"embedding_model": "embedding_model", "vector_bucket_name": "vector_bucket_name", "aws_region_name": "aws_region_name"} {
+		"embedding_model": "embedding_model", "vector_bucket_name": "vector_bucket_name", "aws_region_name": "aws_region_name", "vertex_collection_id": "vertex_collection_id"} {
 		if value := retrieval[from]; value != nil {
 			searchFields[to] = value
 		}

@@ -10,11 +10,12 @@ import (
 )
 
 type VertexConfig struct {
-	Project     string
-	Location    string
-	TokenSource oauth2.TokenSource
-	Bucket      string
-	StorageBase string
+	Project       string
+	Location      string
+	TokenSource   oauth2.TokenSource
+	Bucket        string
+	StorageBase   string
+	DiscoveryBase string
 }
 
 func geminiMethod(path string) (alias, endpoint string) {
