@@ -57,7 +57,7 @@ Set `LITELLM_GO_COMPATIBILITY_UPSTREAM=http://litellm:4000` to expose an existin
 
 If you enable the route publication API alongside a compatibility upstream, include `/internal/v1/routes/*` in the native path list.
 
-To launch the pinned backend alongside the gateway, set `LITELLM_COMPAT_CONFIG` to its LiteLLM YAML file and provide `LITELLM_MASTER_KEY`. Set `LITELLM_COMPAT_DATABASE_URL` for persistence and database-backed management features. The Python service is reachable through the gateway's existing local port 4000.
+To launch the pinned backend alongside the gateway, set `LITELLM_COMPAT_CONFIG` to its LiteLLM YAML file and provide `LITELLM_MASTER_KEY`. The compatibility Compose stack includes PostgreSQL for database-backed management features. Set `LITELLM_COMPAT_DATABASE_URL` to use an external PostgreSQL instance. The Python service is reachable through the gateway's existing local port 4000.
 
 ```bash
 docker compose -f compose.yaml -f compose.compatibility.yaml up -d --build
