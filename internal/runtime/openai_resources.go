@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -22,6 +24,25 @@ func resourceFamily(path string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeProviderResourcePath(r *http.Request) *http.Request {
+	escaped := strings.TrimPrefix(r.URL.EscapedPath(), "/")
+	prefix, rest, ok := strings.Cut(escaped, "/")
+	if !ok || prefix == "" || resourceFamily("/"+rest) == "" {
+		return r
+	}
+	provider, err := url.PathUnescape(prefix)
+	if err != nil || !validResourceSegment(provider) {
+		return r
+	}
+	path := *r.URL
+	path.Path = strings.TrimPrefix(path.Path, "/"+provider)
+	path.RawPath = "/" + rest
+	request := r.Clone(r.Context())
+	request.URL = &path
+	request.SetPathValue("resource_provider", provider)
+	return request
 }
 
 type openAIResourceID struct {
@@ -122,7 +143,14 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 	family := resourceFamily(request.URL.Path)
 	base := "/v1/" + family
 	method := request.Method
-	provider := request.URL.Query().Get("custom_llm_provider")
+	pathProvider := request.PathValue("resource_provider")
+	provider := pathProvider
+	if provider == "" {
+		provider = request.Header.Get("custom-llm-provider")
+	}
+	if provider == "" {
+		provider = request.URL.Query().Get("custom_llm_provider")
+	}
 	alias := request.URL.Query().Get("model")
 	if alias == "" {
 		alias = strings.TrimSpace(request.URL.Query().Get("target_model_names"))
@@ -192,7 +220,7 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 					return
 				}
 				formParts = form.form
-				if requested, _ := form.fields["custom_llm_provider"].(string); requested != "" {
+				if requested, _ := form.fields["custom_llm_provider"].(string); requested != "" && provider == "" {
 					provider = requested
 				}
 				if provider == "bedrock" {
@@ -214,6 +242,13 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 						alias, _ = payload.fields["model"].(string)
 					}
 					bodyProvider, _ := payload.fields["custom_llm_provider"].(string)
+					if pathProvider != "" {
+						bodyProvider = ""
+					}
+					if bodyProvider != "" && provider == "" {
+						provider = bodyProvider
+					}
+					delete(payload.fields, "custom_llm_provider")
 					fileID, _ := payload.fields["input_file_id"].(string)
 					if provider == "vertex_ai" || bodyProvider == "vertex_ai" ||
 						(provider == "" && bodyProvider == "" && strings.HasPrefix(fileID, "gs://")) {
@@ -280,7 +315,8 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		}
 		if family == "files" && isLegacyManagedFile(decoded) {
 			candidate, original, found := s.resolveLegacyFile(request, decoded, alias, scope)
-			if !found || method != http.MethodGet || !resourceActionAllowed(family, action, method) {
+			if !found || (provider != "" && candidate.Provider != provider) ||
+				method != http.MethodGet || !resourceActionAllowed(family, action, method) {
 				writeError(writer, http.StatusNotFound, "resource_not_found", "Unknown managed file or resource operation")
 				return
 			}
@@ -325,7 +361,7 @@ func (s *Server) openAIResource(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, http.StatusBadRequest, "model_required", "Select a configured Gemini file deployment")
 		return
 	}
-	candidate, ok := s.resourceCandidate(alias, deployment, scope)
+	candidate, ok := s.selectResourceCandidate(alias, deployment, provider, scope)
 	if !ok && family == "files" && provider == "" && (alias != "" || deployment != "") {
 		if anthropic, found := s.anthropicBatchDeployment(alias, deployment, scope); found {
 			s.forwardOpenAIResource(writer, request, anthropic, family, targetPath, contentType, body)
@@ -368,8 +404,7 @@ func (s *Server) forwardOpenAIResource(writer http.ResponseWriter, request *http
 	s.forwardResource(writer, request, candidate, family, path, contentType, body, nil)
 }
 
-func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Request, candidate Candidate,
-	family, path, contentType string, body []byte, transform func([]byte) ([]byte, error)) {
+func resourceUpstreamURL(candidate Candidate, path string) string {
 	base := strings.TrimRight(candidate.APIBase, "/")
 	target := strings.TrimSuffix(base, "/v1") + path
 	if candidate.Provider == "azure" && !strings.HasSuffix(base, "/openai/v1") {
@@ -378,6 +413,12 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 			target = strings.TrimSuffix(base, "/openai") + "/openai" + path
 		}
 	}
+	return target
+}
+
+func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Request, candidate Candidate,
+	family, path, contentType string, body []byte, transform func([]byte) ([]byte, error)) {
+	target := resourceUpstreamURL(candidate, path)
 	upstream, err := http.NewRequestWithContext(request.Context(), request.Method, target, bytes.NewReader(body))
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, "upstream_error", "Invalid upstream request")
@@ -416,6 +457,10 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 		}
 	}
 	upstream.URL.RawQuery = query.Encode()
+	if assistantFamily(path) != "" {
+		upstream.Header.Set("OpenAI-Beta", "assistants=v2")
+		upstream.Header.Set("Accept", request.Header.Get("Accept"))
+	}
 	if contentType != "" {
 		upstream.Header.Set("Content-Type", contentType)
 	}
@@ -441,13 +486,40 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 	case <-request.Context().Done():
 		return
 	}
-	defer func() { <-s.sem }()
+	release := func() { <-s.sem }
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	response, err := s.config.HTTPClient.Do(upstream)
 	if err != nil {
 		writeError(writer, http.StatusBadGateway, "upstream_error", "Could not reach resource provider")
 		return
 	}
 	defer response.Body.Close()
+	if response.StatusCode/100 == 2 && family == "thread_runs" && strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.Header().Set("Cache-Control", "no-cache")
+		writer.WriteHeader(response.StatusCode)
+		flush, _ := writer.(http.Flusher)
+		reader := bufio.NewReader(response.Body)
+		var pending []byte
+		for {
+			frame, err := readSSEFrame(reader, s.config.MaxBodyBytes)
+			if err == nil {
+				if next, runEvent := assistantStreamRunState(frame); runEvent {
+					pending = next
+				}
+			}
+			if err != nil || !writeStreamFrame(writer, flush, wrapAssistantFrame(frame, candidate.DeploymentID)) {
+				if len(pending) > 0 && continueAssistantRun(request, upstream, pending, release) {
+					release = nil
+				}
+				return
+			}
+		}
+	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 && strings.HasSuffix(path, "/content") &&
 		((family == "files" && strings.HasPrefix(path, "/v1/files/")) || family == "videos" || family == "container_files") {
 		writer.Header().Set("Content-Type", response.Header.Get("Content-Type"))
@@ -460,7 +532,26 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 		writeError(writer, http.StatusBadGateway, "upstream_error", "Could not read upstream resource")
 		return
 	}
-	if response.StatusCode >= 200 && response.StatusCode < 300 {
+	status, headers := response.StatusCode, response.Header
+	if status/100 == 2 && family == "thread_runs" {
+		response.Body.Close()
+		initial := body
+		observeAssistantRun(request, initial)
+		status, headers, body, err = s.pollAssistantRun(upstream, status, headers, body)
+		if err != nil {
+			if (request.Context().Err() != nil || errors.Is(err, context.DeadlineExceeded)) &&
+				continueAssistantRun(request, upstream, initial, release) {
+				release = nil
+			}
+			if errors.Is(err, context.DeadlineExceeded) || request.Context().Err() == context.DeadlineExceeded {
+				writeError(writer, http.StatusGatewayTimeout, "upstream_timeout", "Assistant run polling timed out")
+				return
+			}
+			writeError(writer, http.StatusBadGateway, "upstream_error", "Could not poll the assistant run")
+			return
+		}
+	}
+	if status/100 == 2 {
 		if transform != nil {
 			body, err = transform(body)
 			if err != nil {
@@ -474,7 +565,7 @@ func (s *Server) forwardResource(writer http.ResponseWriter, request *http.Reque
 			body = wrapOpenAIResource(body, family, candidate.DeploymentID)
 		}
 	}
-	writeRawResponse(writer, response.StatusCode, response.Header, body)
+	writeRawResponse(writer, status, headers, body)
 }
 
 func wrapOpenAIResource(body []byte, family, deployment string) []byte {
@@ -510,6 +601,13 @@ func wrapOpenAIResource(body []byte, family, deployment string) []byte {
 		if family == "container_files" {
 			if id, ok := entry["container_id"].(string); ok && id != "" {
 				entry["container_id"] = encodeResourceID("containers", deployment, id)
+			}
+		}
+		if family == "thread_runs" || family == "thread_messages" {
+			for field, kind := range map[string]string{"thread_id": "threads", "assistant_id": "assistants", "run_id": "thread_runs"} {
+				if id, ok := entry[field].(string); ok && id != "" {
+					entry[field] = encodeResourceID(kind, deployment, id)
+				}
 			}
 		}
 		if family == "eval_runs" {

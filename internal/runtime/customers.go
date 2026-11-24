@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ type CustomerPolicy struct {
 	BudgetError string
 	Region string
 	DefaultModel string
+	ModelPolicy func(context.Context, string) (KeyModelPolicy, error)
 }
 
 func customerRegionCandidates(candidates []Candidate, region string) []Candidate {

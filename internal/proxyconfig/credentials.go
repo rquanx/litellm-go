@@ -19,6 +19,7 @@ type providerCredential struct {
 }
 
 type modelState struct {
+	AllowedIPs []string `json:"allowed_ips,omitempty"`
 	Models      []deployment                 `json:"models"`
 	Credentials map[string]providerCredential `json:"credentials,omitempty"`
 	Router      routerPatch                   `json:"router_settings,omitempty"`
@@ -26,6 +27,8 @@ type modelState struct {
 	PassThrough []passThroughConfig          `json:"pass_through_endpoints,omitempty"`
 	MCPServers map[string]mcpServerConfig     `json:"mcp_servers,omitempty"`
 	MCPToolsets []runtime.MCPToolset          `json:"mcp_toolsets,omitempty"`
+	ToolPolicies map[string]toolPolicy         `json:"tool_policies,omitempty"`
+	MCPSemanticFilter map[string]any            `json:"mcp_semantic_filter,omitempty"`
 	PublicHub publicModelHubState             `json:"public_model_hub,omitzero"`
 }
 
@@ -130,7 +133,7 @@ func (registry *modelRegistry) registerCredentialRoutes(mux *http.ServeMux) {
 }
 
 func (registry *modelRegistry) listCredentials(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -144,7 +147,7 @@ func (registry *modelRegistry) listCredentials(w http.ResponseWriter, r *http.Re
 }
 
 func (registry *modelRegistry) getCredential(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -153,7 +156,7 @@ func (registry *modelRegistry) getCredential(w http.ResponseWriter, r *http.Requ
 }
 
 func (registry *modelRegistry) getModelCredential(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()

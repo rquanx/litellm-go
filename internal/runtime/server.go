@@ -6,15 +6,18 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
+	goruntime "runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,16 +27,35 @@ import (
 )
 
 type Config struct {
+	AllowedIPs []string
+	MCPSemanticFilter MCPSemanticFilterSettings
+	ToolPolicies map[string]ToolPolicy
+	AuthorizePassThrough func(token, path string) bool
+	DisableUserAgentTags bool
+	CheckProviderBudget func(context.Context, string) bool
+	AssistantRuns AssistantRunPersistence
 	Routes             []Route
+	DropParams bool
+	RequestDefaults map[string]any
+	AlwaysIncludeStreamUsage bool
 	AuthorizeInference bool
-	DisableRoutePublication bool
+	DisableProviderAPIs bool
+	RequireInferenceAuth bool
+	DisableManagementAPI bool
+	RoutePublicationToken string
 	Token              string
 	HTTPClient         *http.Client
 	MaxBodyBytes       int64
 	MaxConcurrent      int
 	NumRetries         int
+	RetryAfter         time.Duration
+	StreamTimeout time.Duration
 	MaxFallbacks       *int
 	AuthorizeKey       func(string) ([]string, bool)
+	CheckKeyBudget     func(context.Context, string) (KeyBudget, error)
+	CheckGlobalBudget  func(context.Context) (string, error)
+	CheckTagBudget func(context.Context, []string) (string, error)
+	ResolveDeploymentTags func(context.Context, []string) (map[string][]string, error)
 	CustomerPolicy     func(context.Context, string) (CustomerPolicy, error)
 	AuthorizeSearch    func(string) ([]string, bool)
 	AuthorizeAgent func(string) func(Agent) bool
@@ -61,6 +83,7 @@ type Config struct {
 	LatencySamples     int
 	Callback           func(InferenceEvent)
 	LogMessages        bool
+	CaptureSpendStream bool
 	Cooldown           time.Duration
 	AllowedFails       int
 	RetryPolicy        RetryPolicy
@@ -87,8 +110,13 @@ type Config struct {
 	PublicReadinessDetails bool
 }
 
+type MCPSemanticFilterSettings struct { Enabled bool; TopK int; SimilarityThreshold float64 }
+
+type ToolPolicy struct { Input, Output string }
+
 type Server struct {
 	config Config
+	inferenceCache atomic.Pointer[inferenceCacheState]
 	mu     sync.RWMutex
 	inFlight atomic.Int64
 	routes map[string]Route
@@ -98,6 +126,8 @@ type Server struct {
 	searchTools []SearchTool
 	mcpServers []MCPServer
 	mcpToolsets []MCPToolset
+	toolPolicies map[string]ToolPolicy
+	mcpSemanticFilter MCPSemanticFilterSettings
 	mcpSSESessions map[string]*clientMCPSession
 	mcpStreamableSessions map[string]*mcpStreamableSession
 	passThrough []PassThroughRoute
@@ -111,6 +141,11 @@ type Server struct {
 	deploymentLatency map[latencyKey]*latencyWindow
 	capacityMinute    int64
 	deploymentCapacity map[string]capacityUsage
+	keyRPMPruneAt int64
+	keyRPMWindows map[string]keyRPMWindow
+	keyTokenPruneAt int64
+	keyTokenWindows map[string]keyTokenWindow
+	keyParallel map[string]int
 	deploymentCooldown map[string]cooldownWindow
 	polling *responsePolling
 	mcpOAuthFlows mcpOAuthFlows
@@ -132,11 +167,8 @@ func NewServer(config Config) *Server {
 	if config.HealthCheckConcurrency <= 0 {
 		config.HealthCheckConcurrency = 8
 	}
-	if config.ContainerOwners == nil && config.AuthorizeInference {
+	if config.ContainerOwners == nil && config.AuthorizeInference && !config.DisableProviderAPIs {
 		config.ContainerOwners = &memoryContainerOwners{owners: make(map[containerKey]string)}
-	}
-	if config.InferenceCache.Enabled && config.InferenceCacheStore == nil {
-		config.InferenceCacheStore = newMemoryInferenceCache()
 	}
 	routes := make(map[string]Route, len(config.Routes))
 	for _, route := range config.Routes {
@@ -146,6 +178,7 @@ func NewServer(config Config) *Server {
 		passThrough: config.PassThrough, agents: config.Agents, guardrails: config.Guardrails,
 		mcpServers: config.MCPServers,
 		searchTools: config.SearchTools, searchFallbacks: config.SearchFallbacks, sem: make(chan struct{}, config.MaxConcurrent), veoReads: make(chan struct{}, 1)}
+	server.ReplaceInferenceCache(config.InferenceCache, config.InferenceCacheStore)
 	if config.ResponsePolling.All || len(config.ResponsePolling.Providers) > 0 {
 		server.polling = &responsePolling{entries: make(map[string]*pollingEntry)}
 	}
@@ -167,6 +200,38 @@ func (s *Server) ReplaceManagedConfiguration(routes []Route, searchTools []Searc
 	s.passThrough, s.mcpServers, s.mcpToolsets = passThrough, mcpServers, toolsets
 }
 
+func (s *Server) ReplaceAllowedIPs(allowed []string) {
+	s.mu.Lock()
+	s.config.AllowedIPs = slices.Clone(allowed)
+	s.mu.Unlock()
+}
+
+func (s *Server) allowedIP(request *http.Request) bool {
+	s.mu.RLock()
+	allowed := slices.Clone(s.config.AllowedIPs)
+	s.mu.RUnlock()
+	if len(allowed) == 0 {
+		return true
+	}
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	client := net.ParseIP(host)
+	if client == nil {
+		return false
+	}
+	for _, entry := range allowed {
+		if ip := net.ParseIP(strings.TrimSpace(entry)); ip != nil && ip.Equal(client) {
+			return true
+		}
+		if _, network, err := net.ParseCIDR(strings.TrimSpace(entry)); err == nil && network.Contains(client) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) replaceConfiguredRouting(routes []Route, searchTools []SearchTool, searchFallbacks map[string][]string) {
 	next := make(map[string]Route, len(routes))
 	for _, route := range routes {
@@ -180,9 +245,14 @@ func (s *Server) replaceConfiguredRouting(routes []Route, searchTools []SearchTo
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if !s.allowedIP(request) {
+		writeError(writer, http.StatusForbidden, "ip_not_allowed", "Request IP is not allowed")
+		return
+	}
+	providerAPIs := s.config.AuthorizeInference && !s.config.DisableProviderAPIs
 	s.inFlight.Add(1)
 	defer s.inFlight.Add(-1)
-	if request.Method == http.MethodPost && request.URL.Path == "/policies/test-pipeline" {
+	if !s.config.DisableManagementAPI && request.Method == http.MethodPost && request.URL.Path == "/policies/test-pipeline" {
 		if s.config.Token == "" || !s.authorized(request) {
 			writeError(writer, http.StatusUnauthorized, "authentication_error", "Proxy master key required")
 			return
@@ -190,46 +260,65 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.testGuardrailPipeline(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && s.serveInferenceCacheAdmin(writer, request) {
+	if !s.config.DisableManagementAPI && request.Method == http.MethodPost && request.URL.Path == "/utils/test_policies_and_guardrails" {
+		s.servePolicyGuardrailTest(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && s.serveAgent(writer, request) {
+	if !s.config.DisableManagementAPI && s.serveInferenceCacheAdmin(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveHealth(writer, request) {
+	if providerAPIs && request.Method == http.MethodPost &&
+		(request.URL.Path == "/guardrails/apply_guardrail" || request.URL.Path == "/apply_guardrail") {
+		s.serveGuardrailApply(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && s.serveSearch(writer, request) {
+	if providerAPIs && s.listPollingResponses(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveMCPUserCredentials(writer, request) {
+	if providerAPIs && s.serveAgent(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveMCPOAuth(writer, request) {
+	if providerAPIs && s.serveHealth(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveMCPREST(writer, request) {
+	if providerAPIs && s.serveSearch(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveMCPClientSSE(writer, request) {
+	if providerAPIs && s.serveMCPUserCredentials(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.serveMCPEndpoint(writer, request) {
+	if providerAPIs && s.serveMCPOAuth(writer, request) {
 		return
 	}
-	if s.config.AuthorizeInference && s.servePassThrough(writer, request) {
+	if providerAPIs && (s.serveMCPDiagnostics(writer, request) || s.serveMCPREST(writer, request)) {
 		return
 	}
-	alias, geminiEndpoint := geminiMethod(request.URL.Path)
+	if providerAPIs && s.serveMCPClientSSE(writer, request) {
+		return
+	}
+	if providerAPIs && s.serveMCPEndpoint(writer, request) {
+		return
+	}
+	if providerAPIs && s.servePassThrough(writer, request) {
+		return
+	}
+	var alias, geminiEndpoint string
+	if providerAPIs {
+		alias, geminiEndpoint = geminiMethod(request.URL.Path)
+	}
 	var deployment, deploymentOperation string
-	if s.config.AuthorizeInference && geminiEndpoint == "" {
+	if providerAPIs && geminiEndpoint == "" {
+		request = normalizeProviderResourcePath(request)
 		deployment, deploymentOperation = deploymentEndpoint(request.URL.Path)
 		path := request.URL.Path
 		azureResponses := path == "/openai/v1/responses" || strings.HasPrefix(path, "/openai/v1/responses/")
 		anthropicMessages := path == "/anthropic/v1/messages" || strings.HasPrefix(path, "/anthropic/v1/messages/")
-		if unversioned := proxyAlias(path); unversioned || azureResponses || anthropicMessages {
+		rerankV2 := path == "/v2/rerank"
+		if unversioned := proxyAlias(path); unversioned || azureResponses || anthropicMessages || rerankV2 {
 			normalized := *request.URL
-			if unversioned {
+			if rerankV2 {
+				normalized.Path, normalized.RawPath = "/v1/rerank", ""
+			} else if unversioned {
 				normalized.Path = "/v1" + path
 				if normalized.RawPath != "" {
 					normalized.RawPath = "/v1" + normalized.RawPath
@@ -251,13 +340,15 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	var modelScope []string
 	realtime := isRealtimeSocketPath(request.URL.Path)
 	rtHTTP := realtimeHTTPOperation(request.URL.Path)
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "calls" {
+	if providerAPIs && request.Method == http.MethodPost && rtHTTP == "calls" {
 		s.realtimeCall(writer, request)
 		return
 	}
-	if s.config.AuthorizeInference && (isInteraction || realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
+	cursorChat := providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/cursor/chat/completions"
+	if (s.config.AuthorizeInference || s.config.RequireInferenceAuth) && (cursorChat || isInteraction || realtime || rtHTTP != "" || deploymentOperation != "" || geminiEndpoint != "" ||
 		request.URL.Path == "/utils/token_counter" || request.URL.Path == "/utils/transform_request" || request.URL.Path == "/model_group/info" ||
-		strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
+		request.URL.Path == "/test" || request.URL.Path == "/settings" || request.URL.Path == "/active/callbacks" ||
+		request.URL.Path == "/debug/asyncio-tasks" || strings.HasPrefix(request.URL.Path, "/v1/")) && !s.authorized(request) {
 		allowed := false
 		if s.config.AuthorizeKey != nil {
 			modelScope, allowed = s.config.AuthorizeKey(ProxyCredential(request))
@@ -267,79 +358,93 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	if s.config.AuthorizeInference && isInteraction {
+	if cursorChat {
+		s.infer(writer, request, "chat-completions", "", modelScope)
+		return
+	}
+	if providerAPIs && isInteraction {
 		s.serveInteraction(writer, request, interaction, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/transform_request" {
+	if providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/utils/transform_request" {
 		s.transformPreview(writer, request, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
+	if providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/utils/token_counter" {
 		s.countTokens(writer, request, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/query" {
-		s.ragQuery(writer, request, modelScope)
+	if providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/api/event_logging/batch" {
+		// Anthropic event logging is telemetry-only. LiteLLM accepts the batch
+		// and intentionally does not process it in the proxy request path.
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/ingest" {
-		s.ragIngest(writer, request, modelScope)
+	if providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/query" {
+		s.serveRateLimitedResource(writer, request, modelScope, s.ragQuery)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodGet && request.URL.Path == "/model_group/info" {
+	if providerAPIs && request.Method == http.MethodPost && request.URL.Path == "/v1/rag/ingest" {
+		s.serveRateLimitedResource(writer, request, modelScope, s.ragIngest)
+		return
+	}
+	if providerAPIs && request.Method == http.MethodGet && request.URL.Path == "/model_group/info" {
 		s.modelGroups(writer, request, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodPost && rtHTTP == "client_secrets" {
+	if providerAPIs && request.Method == http.MethodPost && rtHTTP == "client_secrets" {
 		s.realtimeClientSecret(writer, request, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && realtime && request.Method == http.MethodGet &&
+	if providerAPIs && realtime && request.Method == http.MethodGet &&
 		strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
 		s.realtimeSocket(writer, request, modelScope)
 		return
 	}
-	if s.config.AuthorizeInference && strings.HasPrefix(request.URL.Path, responseResourcePrefix) &&
+	if providerAPIs && strings.HasPrefix(request.URL.Path, responseResourcePrefix) &&
 		request.URL.Path != endpoints["responses-compact"].path {
 		if !s.pollingResource(writer, request, modelScope) {
 			s.responseResource(writer, request, modelScope)
 		}
 		return
 	}
-	if s.config.AuthorizeInference && isVectorStorePath(request.URL.Path) {
-		s.vectorStoreResource(writer, request, modelScope)
+	if providerAPIs && isVectorStorePath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.vectorStoreResource)
 		return
 	}
-	if s.config.AuthorizeInference && isContainerPath(request.URL.Path) {
-		s.containerResource(writer, request, modelScope)
+	if providerAPIs && isContainerPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.containerResource)
 		return
 	}
-	if s.config.AuthorizeInference && isFineTuningPath(request.URL.Path) {
-		s.fineTuningResource(writer, request, modelScope)
+	if providerAPIs && assistantFamily(request.URL.Path) != "" {
+		s.serveRateLimitedResource(writer, request, modelScope, s.assistantResource)
 		return
 	}
-	if s.config.AuthorizeInference && isEvalPath(request.URL.Path) {
-		s.evalResource(writer, request, modelScope)
+	if providerAPIs && isFineTuningPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.fineTuningResource)
 		return
 	}
-	if s.config.AuthorizeInference && isVideoPath(request.URL.Path) {
-		s.videoResource(writer, request, modelScope)
+	if providerAPIs && isEvalPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.evalResource)
 		return
 	}
-	if s.config.AuthorizeInference && isAnthropicSkillPath(request.URL.Path) {
-		s.anthropicSkill(writer, request, modelScope)
+	if providerAPIs && isVideoPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.videoResource)
 		return
 	}
-	if s.config.AuthorizeInference && isAnthropicBatchPath(request.URL.Path) {
-		s.anthropicBatch(writer, request, modelScope)
+	if providerAPIs && isAnthropicSkillPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.anthropicSkill)
 		return
 	}
-	if s.config.AuthorizeInference && resourceFamily(request.URL.Path) != "" {
-		s.openAIResource(writer, request, modelScope)
+	if providerAPIs && isAnthropicBatchPath(request.URL.Path) {
+		s.serveRateLimitedResource(writer, request, modelScope, s.anthropicBatch)
 		return
 	}
-	if s.config.AuthorizeInference && request.Method == http.MethodGet &&
+	if providerAPIs && resourceFamily(request.URL.Path) != "" {
+		s.serveRateLimitedResource(writer, request, modelScope, s.openAIResource)
+		return
+	}
+	if providerAPIs && request.Method == http.MethodGet &&
 		request.URL.Path == "/v1/responses" && strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
 		s.responsesSocket(writer, request, modelScope)
 		return
@@ -354,26 +459,36 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 		endpoint := EndpointFromPath(request.URL.Path)
-		if endpoint != "" {
+		if endpoint != "" && (providerAPIs || !extendedResourceEndpoint(endpoint)) {
 			s.infer(writer, request, endpoint, "", modelScope)
 			return
 		}
-		if request.URL.Path == "/v1/messages/count_tokens" {
+		if providerAPIs && request.URL.Path == "/v1/messages/count_tokens" {
 			s.infer(writer, request, "anthropic-count-tokens", "", modelScope)
 			return
 		}
 	}
 	switch {
+	case request.Method == http.MethodGet && request.URL.Path == "/":
+		// LiteLLM exposes a small root health response. Keep this endpoint
+		// independent from /healthz so clients using the proxy root can
+		// verify that the HTTP listener is available.
+		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
+	case providerAPIs && request.Method == http.MethodGet && request.URL.Path == "/test":
+		writeJSON(writer, http.StatusOK, map[string]string{"route": request.URL.Path})
+	case providerAPIs && request.Method == http.MethodGet && request.URL.Path == "/debug/asyncio-tasks":
+		count := goruntime.NumGoroutine()
+		writeJSON(writer, http.StatusOK, map[string]any{"total_active_tasks": count, "by_name": map[string]int{"goroutine": count}})
 	case request.Method == http.MethodGet && (request.URL.Path == "/healthz" || request.URL.Path == "/health/liveliness"):
 		writeJSON(writer, http.StatusOK, map[string]string{"status": "ok"})
 	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
 		s.models(writer, request, modelScope)
-	case s.config.AuthorizeInference && request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
+	case providerAPIs && request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
 		s.modelInfo(writer, strings.TrimPrefix(request.URL.Path, "/v1/models/"), modelScope)
-	case !s.config.DisableRoutePublication && strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
+	case s.config.RoutePublicationToken != "" && strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
-		if !s.config.AuthorizeInference || !s.serveProviderPassThrough(writer, request) {
+		if !providerAPIs || !s.serveProviderPassThrough(writer, request) {
 			writeError(writer, http.StatusNotFound, "not_found", "Route not found")
 		}
 	}
@@ -451,8 +566,9 @@ func (s *Server) modelEntry(route Route, metadata bool, fallbackType string, sco
 }
 
 func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
-	if !s.authorized(request) {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+	token, bearer := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
+	if !bearer || subtle.ConstantTimeCompare([]byte(token), []byte(s.config.RoutePublicationToken)) != 1 {
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "Route publication token required")
 		return
 	}
 	alias := strings.TrimPrefix(request.URL.Path, "/internal/v1/routes/")
@@ -500,7 +616,83 @@ func (s *Server) route(writer http.ResponseWriter, request *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string]any{"alias": alias, "version": route.Version})
 }
 
+type KeyBudget struct {
+	ModelSpendDuration string
+	RouterSettings map[string]any
+	SpendIdentity string
+	Tracked       bool
+	ErrorMessage  string
+	Attribution   *SpendAttribution
+	RPMLimit      *int
+	TPMLimit      *int
+	ParallelLimit *int
+	OwnerLimits   []OwnerRateLimits
+	ModelPolicy func(context.Context, string) (KeyModelPolicy, error)
+	ModelRates func(string, OwnerRateLimits) []OwnerRateLimits
+}
+
+type OwnerRateLimits struct {
+	Identity string
+	RPM, TPM, Parallel *int
+}
+
+type SpendAttribution struct {
+	KeyAlias, UserID, TeamID, ProjectID, OrgID string
+}
+
+func (budget KeyBudget) apply(event *InferenceEvent) {
+	event.KeySpendIdentity, event.KeyBudgetTracked = budget.SpendIdentity, budget.Tracked
+	event.SpendAttribution = budget.Attribution
+	if budget.ModelSpendDuration != "" {
+		event.KeyModelBudgetDuration = budget.ModelSpendDuration
+	}
+}
+
+func (s *Server) checkKeyBudget(w http.ResponseWriter, r *http.Request) (KeyBudget, bool) {
+	return s.checkKeyBudgetForToken(w, r, ProxyCredential(r))
+}
+
+func (s *Server) checkKeyBudgetForToken(w http.ResponseWriter, r *http.Request, token string) (KeyBudget, bool) {
+	return s.readKeyBudget(w, r, token, true)
+}
+
+func (s *Server) readKeyBudget(w http.ResponseWriter, r *http.Request, token string, reserve bool) (KeyBudget, bool) {
+	tracked := s.config.CheckGlobalBudget != nil
+	if tracked {
+		message, err := s.config.CheckGlobalBudget(r.Context())
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "budget_lookup_failed", "Could not read proxy budget")
+			return KeyBudget{}, false
+		}
+		if message != "" {
+			writeBudgetExceeded(w, message)
+			return KeyBudget{}, false
+		}
+	}
+	if s.config.CheckKeyBudget == nil || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.config.Token)) == 1 {
+		return KeyBudget{Tracked: tracked}, true
+	}
+	budget, err := s.config.CheckKeyBudget(r.Context(), token)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "budget_lookup_failed", "Could not read key budget")
+		return KeyBudget{}, false
+	}
+	if budget.ErrorMessage != "" {
+		writeBudgetExceeded(w, budget.ErrorMessage)
+		return KeyBudget{}, false
+	}
+	if reserve && !s.admitRequestRateLimits(w, r, budget) {
+		return KeyBudget{}, false
+	}
+	budget.Tracked = budget.Tracked || tracked
+	return budget, true
+}
+
 func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoint, alias string, modelScope []string) {
+	keyBudget, allowed := s.readKeyBudget(writer, request, ProxyCredential(request), false)
+	if !allowed {
+		return
+	}
 	body, err := readBody(request, s.config.MaxBodyBytes)
 	if err != nil {
 		writeError(writer, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large")
@@ -512,6 +704,18 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	input := payload.fields
+	if request.URL.Path == "/cursor/chat/completions" && input["input"] != nil {
+		input = responsesToChat(input)
+		payload.fields = input
+	}
+	sessionID := request.Header.Get("X-LiteLLM-Trace-ID")
+	if sessionID == "" {
+		sessionID = request.Header.Get("X-LiteLLM-Session-ID")
+	}
+	if sessionID == "" {
+		sessionID, _ = input["litellm_session_id"].(string)
+	}
+	delete(input, "litellm_session_id")
 	if endpoint == "chat-completions" && s.config.ResolvePrompt != nil && input["prompt_id"] != nil {
 		if status, err := s.config.ResolvePrompt(request, input); err != nil {
 			writeError(writer, status, "prompt_error", err.Error())
@@ -519,6 +723,18 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	stream := endpoint == "gemini-stream" || request.Header.Get("Accept") == "text/event-stream" || inputBool(input, "stream")
+	if s.config.AlwaysIncludeStreamUsage && endpoint == "chat-completions" && inputBool(input, "stream") {
+		switch options := input["stream_options"].(type) {
+		case map[string]any:
+			if _, supplied := options["include_usage"]; !supplied {
+				options["include_usage"] = true
+			}
+		case nil:
+			if _, supplied := input["stream_options"]; !supplied {
+				input["stream_options"] = map[string]any{"include_usage": true}
+			}
+		}
+	}
 	if alias == "" {
 		alias, _ = input["model"].(string)
 	}
@@ -531,9 +747,59 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	customer := requestCustomerID(request, payload)
-	if s.config.Callback != nil {
-		recorder := &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream)}
+	tags := inferenceTags(input)
+	if len(tags) > 0 && s.config.CheckTagBudget != nil && modelAllowed(modelScope, alias) {
+		message, err := s.config.CheckTagBudget(request.Context(), tags)
+		if err != nil {
+			writeError(writer, http.StatusServiceUnavailable, "budget_lookup_failed", "Could not read tag budget")
+			return
+		}
+		if message != "" {
+			writeBudgetExceeded(writer, message)
+			return
+		}
+		keyBudget.Tracked = true
+	}
+	var modelPolicy KeyModelPolicy
+	if keyBudget.ModelPolicy != nil && modelAllowed(modelScope, alias) {
+		modelPolicy, allowed = s.checkKeyModelPolicy(writer, request, keyBudget.ModelPolicy, alias)
+		if !allowed {
+			return
+		}
+		keyBudget.Tracked = keyBudget.Tracked || modelPolicy.SpendDuration != ""
+	}
+	if modelAllowed(modelScope, alias) {
+		if keyBudget.ModelRates != nil {
+			keyBudget.OwnerLimits = append(keyBudget.OwnerLimits, keyBudget.ModelRates(alias, s.deploymentModelRateDefaults(alias))...)
+		}
+		if !s.admitRequestRateLimits(writer, request, keyBudget) {
+			return
+		}
+	}
+	var admission keyAdmission
+	if (keyBudget.ParallelLimit != nil || keyBudget.hasTokenLimit() || len(keyBudget.OwnerLimits) != 0) && modelAllowed(modelScope, alias) {
+		estimate := -1
+		if keyBudget.hasTokenLimit() {
+			estimate = estimatedInputTokens(input)
+		}
+		admission, allowed = s.admitKeyLimits(writer, request, keyBudget, estimate)
+		if !allowed {
+			return
+		}
+	}
+	var recorder *callbackResponse
+	defer func() { admission.finish(recorder) }()
+	if s.config.Callback != nil || len(admission.settlements) != 0 {
+		recorder = &callbackResponse{ResponseWriter: writer, event: newInferenceEvent(endpoint, alias, stream),
+			captureSpendStream: s.config.CaptureSpendStream}
+		recorder.event.SessionID = sessionID
 		recorder.event.EndUser = customer
+		recorder.event.Tags = tags
+		if !s.config.DisableUserAgentTags {
+			recorder.event.Tags = appendAnalyticsUserAgent(tags, request.UserAgent())
+		}
+		recorder.event.KeyModelBudgetDuration = modelPolicy.SpendDuration
+		keyBudget.apply(&recorder.event)
 		if key := ProxyCredential(request); key != "" && !s.authorized(request) {
 			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 		}
@@ -549,7 +815,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		defer func() {
 			if recorder.status != 0 {
 				recorder.finish()
-				s.config.Callback(recorder.event)
+				if s.config.Callback != nil {
+					s.config.Callback(recorder.event)
+				}
 			}
 		}()
 		writer = recorder
@@ -572,10 +840,18 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		}
 	}
 	if customerPolicy.BudgetError != "" {
-		writeJSON(writer, http.StatusTooManyRequests, map[string]any{"error": map[string]any{
-			"message": customerPolicy.BudgetError, "type": "budget_exceeded", "param": nil, "code": "429",
-		}})
+		writeBudgetExceeded(writer, customerPolicy.BudgetError)
 		return
+	}
+	if customerPolicy.ModelPolicy != nil {
+		policy, allowed := s.checkKeyModelPolicy(writer, request, customerPolicy.ModelPolicy, alias)
+		if !allowed {
+			return
+		}
+		if recorder != nil && policy.SpendDuration != "" {
+			recorder.event.CustomerModelBudgetDuration = policy.SpendDuration
+			recorder.event.KeyBudgetTracked = true
+		}
 	}
 	s.mu.RLock()
 	route, ok := s.routes[alias]
@@ -589,6 +865,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	if s.config.AuthorizeInference {
+		if len(keyBudget.RouterSettings) != 0 {
+			input["router_settings_override"] = keyBudget.RouterSettings
+		}
 		var err error
 		route, err = s.requestFallbacks(route, input, modelScope, endpoint)
 		if err != nil {
@@ -610,9 +889,18 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
+	var managedTags map[string][]string
 	if s.config.EnableTagFiltering {
+		if s.config.ResolveDeploymentTags != nil {
+			names := append(slices.Clone(tags), "default")
+			managedTags, err = s.config.ResolveDeploymentTags(request.Context(), names)
+			if err != nil {
+				writeError(writer, http.StatusServiceUnavailable, "tag_lookup_failed", "Could not resolve deployment tags")
+				return
+			}
+		}
 		before := len(eligible)
-		eligible = filterTaggedDeployments(eligible, input, request.UserAgent(), s.config.TagsMatchAll)
+		eligible = filterTaggedDeployments(withDeploymentTags(eligible, managedTags), input, request.UserAgent(), s.config.TagsMatchAll)
 		if before > 0 && len(eligible) == 0 {
 			writeError(writer, http.StatusBadRequest, "no_deployments_with_tag_routing", "No deployments match the request tags")
 			return
@@ -629,13 +917,13 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 	route.PolicyFallback = customerRegionCandidates(route.PolicyFallback, customerPolicy.Region)
 	if s.config.EnableTagFiltering {
 		if route.ContextFallback != nil {
-			route.ContextFallback = filterTaggedDeployments(route.ContextFallback, input, request.UserAgent(), s.config.TagsMatchAll)
+			route.ContextFallback = filterTaggedDeployments(withDeploymentTags(route.ContextFallback, managedTags), input, request.UserAgent(), s.config.TagsMatchAll)
 		}
 		if route.PolicyFallback != nil {
-			route.PolicyFallback = filterTaggedDeployments(route.PolicyFallback, input, request.UserAgent(), s.config.TagsMatchAll)
+			route.PolicyFallback = filterTaggedDeployments(withDeploymentTags(route.PolicyFallback, managedTags), input, request.UserAgent(), s.config.TagsMatchAll)
 		}
 	}
-	if s.config.AuthorizeInference && (endpoint == "responses" || endpoint == "chat-completions") {
+	if s.config.AuthorizeInference && !s.config.DisableProviderAPIs && (endpoint == "responses" || endpoint == "chat-completions") {
 		automatic := make(map[string]mcpInferenceTool)
 		if err := s.expandMCPInferenceTools(request, endpoint, input, automatic); err != nil {
 			writeError(writer, http.StatusBadRequest, "mcp_tool_error", err.Error())
@@ -657,13 +945,13 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			return
 		}
 	}
-	if s.config.AuthorizeInference && endpoint == "anthropic-messages" {
+	if s.config.AuthorizeInference && !s.config.DisableProviderAPIs && endpoint == "anthropic-messages" {
 		if err := pinAnthropicResources(&route, input); err != nil {
 			writeError(writer, http.StatusBadRequest, "invalid_resource_reference", err.Error())
 			return
 		}
 	}
-	if s.config.AuthorizeInference && endpoint == "responses" {
+	if s.config.AuthorizeInference && !s.config.DisableProviderAPIs && endpoint == "responses" {
 		var originalPollingPayload []byte
 		if s.shouldPollResponse(route, input) {
 			if postGuardrails.active() {
@@ -722,7 +1010,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 		return
 	}
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	plan := s.attemptPlan(route.Alias)
+	plan := s.routeAttemptPlan(route)
 	for {
 		candidate := route.Candidates[plan.index]
 		cacheKey := cache.key(candidate)
@@ -772,6 +1060,9 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			s.recordLatency(request.Context(), candidate, false, time.Since(started))
 			writeRuntimeMeta(writer, candidate, len(attempts), attempts)
 			body := normalizeResponse(endpoint, candidate.Endpoint, responseBody, route.Alias)
+			if s.config.AuthorizeInference && endpoint == "chat-completions" && candidate.Endpoint == "chat-completions" && candidate.Provider == "openai" {
+				body = normalizeOpenAIChat(body)
+			}
 			if endpoint == "ocr" && usesMistralOCR(candidate.Provider) {
 				if isDocumentIntelligence(candidate) {
 					body = azureDocumentOCRResponse(responseBody, route.Alias)
@@ -806,7 +1097,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 			if endpoint == "rerank" && candidate.Bedrock != nil {
 				body = bedrockRerankResponse(body)
 			}
-			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
+			if s.config.AuthorizeInference && !s.config.DisableProviderAPIs && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				body = wrapResponseBody(body, candidate, s.responseContainerEncoder(request, candidate))
 			}
 			if candidate.Endpoint == "bedrock-embeddings" && strings.HasPrefix(candidate.ModelID, "async_invoke/") {
@@ -841,7 +1132,7 @@ func (s *Server) infer(writer http.ResponseWriter, request *http.Request, endpoi
 
 func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, endpoint string, route Route, payload requestPayload, cache inferenceCacheRequest,guardrails responseGuardrails) {
 	attempts := make([]map[string]any, 0, len(route.Candidates))
-	plan := s.attemptPlan(route.Alias)
+	plan := s.routeAttemptPlan(route)
 	for {
 		candidate := route.Candidates[plan.index]
 		cacheKey := cache.key(candidate)
@@ -919,7 +1210,10 @@ func (s *Server) inferStream(writer http.ResponseWriter, request *http.Request, 
 			writer.WriteHeader(status)
 			flush, _ := writer.(http.Flusher)
 			convert := streamConverter(endpoint, candidate.Endpoint, route.Alias, payload.fields, s.config.MaxBodyBytes)
-			if s.config.AuthorizeInference && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
+			if s.config.AuthorizeInference && endpoint == "chat-completions" && candidate.Endpoint == "chat-completions" && candidate.Provider == "openai" {
+				convert = normalizeOpenAIChatStream(route.Alias)
+			}
+			if s.config.AuthorizeInference && !s.config.DisableProviderAPIs && endpoint == "responses" && candidate.Endpoint == "responses" && candidate.DeploymentID != "" {
 				encode := s.responseContainerEncoder(request, candidate)
 				convert = func(frame []byte) []byte { return wrapResponseEvent(frame, candidate, encode) }
 			}
@@ -1178,7 +1472,14 @@ func (s *Server) callStream(ctx context.Context, request *http.Request, endpoint
 	return response.StatusCode, response, retryableStatus(response.StatusCode), nil
 }
 
-func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream bool) ([]byte, string, error) {
+func encodePayload(input requestPayload, endpoint string, candidate Candidate, stream, globalDropParams bool) ([]byte, string, error) {
+	input.fields = applyDeploymentDefaults(input.fields, candidate.RequestDefaults, endpoint)
+	if input.fields["timeout"] != nil || input.fields["request_timeout"] != nil || input.fields["stream_timeout"] != nil {
+		input.fields = clone(input.fields)
+		delete(input.fields, "timeout")
+		delete(input.fields, "request_timeout")
+		delete(input.fields, "stream_timeout")
+	}
 	if endpoint == "bedrock-count-tokens" {
 		body, err := json.Marshal(input.fields)
 		return body, "application/json", err
@@ -1213,7 +1514,27 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 		return input.encodeMultipart(candidate.ModelID, stream)
 	}
 	targetEndpoint := candidate.Endpoint
-	payload := clone(input.fields)
+	var payload map[string]any
+	var nestedDrops []string
+	if endpoint == "chat-completions" {
+		var err error
+		payload, nestedDrops, err = prepareChatParams(input.fields, candidate, globalDropParams)
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		payload = clone(input.fields)
+	}
+	if endpoint == "embeddings" && targetEndpoint == "embeddings" && candidate.Provider == "openai" {
+		if err := prepareOpenAIEmbeddingParams(payload, candidate); err != nil {
+			return nil, "", err
+		}
+	}
+	if endpoint == "responses" && targetEndpoint == "responses" && candidate.Provider == "openai" {
+		if err := prepareOpenAIResponsesParams(payload, candidate, globalDropParams); err != nil {
+			return nil, "", err
+		}
+	}
 	if isGeminiEndpoint(targetEndpoint) {
 		delete(payload, "model")
 		delete(payload, "stream")
@@ -1309,6 +1630,10 @@ func encodePayload(input requestPayload, endpoint string, candidate Candidate, s
 			payload = mistralOCRRequest(payload)
 		}
 	}
+	dropNestedChatParams(payload, nestedDrops)
+	if targetEndpoint == "chat-completions" {
+		applyChatExtraBody(payload)
+	}
 	body, err := json.Marshal(payload)
 	return body, "application/json", err
 }
@@ -1320,11 +1645,17 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		return nil, ctx.Err()
 	}
 	preview, _ := ctx.Value(previewContextKey{}).(*rawRequestPreview)
+	timeout := providerRequestTimeout(payload.fields, candidate, stream, s.config.StreamTimeout)
+	var cancel context.CancelFunc = func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	finished := func() {}
 	if preview == nil {
 		finished = s.trackDeployment(ctx, candidate)
 	}
 	release := func() {
+		cancel()
 		finished()
 		<-s.sem
 	}
@@ -1378,10 +1709,19 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 		audioTarget, encoded, contentType, err = audioProviderRequest(payload, candidate)
 		if err != nil { err = invalidMediaRequest{err} }
 	} else {
-		encoded, contentType, err = encodePayload(payload, endpoint, candidate, stream)
+		payload.fields = applyRouterDefaults(payload.fields, s.config.RequestDefaults, candidate.RequestDefaults, endpoint)
+		encoded, contentType, err = encodePayload(payload, endpoint, candidate, stream, s.config.DropParams)
 	}
 	if err != nil {
 		release()
+		var unsupported unsupportedProviderParams
+		if errors.As(err, &unsupported) && ctx.Value(previewContextKey{}) == nil {
+			body, _ := json.Marshal(map[string]any{"error": map[string]any{
+				"message": "litellm.UnsupportedParamsError: " + unsupported.Error(),
+				"type": "invalid_request_error", "code": "400", "param": nil,
+			}})
+			return &http.Response{StatusCode: http.StatusBadRequest, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+		}
 		return nil, err
 	}
 	pathEndpoint := candidate.Endpoint
@@ -1537,7 +1877,13 @@ func (s *Server) send(ctx context.Context, request *http.Request, endpoint strin
 	if azureDocument {
 		response, err = s.callAzureDocumentOCR(upstream)
 	} else {
-		response, err = s.config.HTTPClient.Do(upstream)
+		client := s.config.HTTPClient
+		if timeout > 0 && client.Timeout > 0 {
+			override := *client
+			override.Timeout = 0
+			client = &override
+		}
+		response, err = client.Do(upstream)
 	}
 	if err != nil {
 		release()
@@ -1640,15 +1986,25 @@ func (s *Server) authorized(request *http.Request) bool {
 	if s.config.Token == "" {
 		return true
 	}
-	if s.config.AuthorizeInference {
-		return ProxyCredential(request) == s.config.Token
+	if s.config.AuthorizeInference || s.config.RequireInferenceAuth {
+		return subtle.ConstantTimeCompare([]byte(ProxyCredential(request)), []byte(s.config.Token)) == 1
 	}
 	token, _ := strings.CutPrefix(request.Header.Get("Authorization"), "Bearer ")
 	return token == s.config.Token
 }
 
+type verifiedProxyCredential struct{}
+
+// WithVerifiedProxyCredential supplies a credential validated by a gateway middleware.
+func WithVerifiedProxyCredential(r *http.Request, credential string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), verifiedProxyCredential{}, credential))
+}
+
 // ProxyCredential selects the credential from headers in LiteLLM order.
 func ProxyCredential(request *http.Request) string {
+	if token, ok := request.Context().Value(verifiedProxyCredential{}).(string); ok {
+		return token
+	}
 	if header := request.Header.Get("x-litellm-api-key"); header != "" {
 		key, _ := strings.CutPrefix(header, "Bearer ")
 		return key
@@ -1663,6 +2019,17 @@ func ProxyCredential(request *http.Request) string {
 	for _, header := range []string{"api-key", "x-api-key", "x-goog-api-key", "Ocp-Apim-Subscription-Key"} {
 		if key := request.Header.Get(header); key != "" {
 			return key
+		}
+	}
+	if request.Method == http.MethodGet && (isRealtimeSocketPath(request.URL.Path) ||
+		request.URL.Path == "/v1/responses" || request.URL.Path == "/responses" || request.URL.Path == "/openai/v1/responses") &&
+		strings.EqualFold(request.Header.Get("Upgrade"), "websocket") {
+		for _, line := range request.Header.Values("Sec-WebSocket-Protocol") {
+			for _, protocol := range strings.Split(line, ",") {
+				if key, ok := strings.CutPrefix(strings.TrimSpace(protocol), "openai-insecure-api-key."); ok {
+					return key
+				}
+			}
 		}
 	}
 	if _, endpoint := geminiMethod(request.URL.Path); endpoint != "" {
@@ -1724,6 +2091,12 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.WriteHeader(status)
 	_, _ = writer.Write(body)
 }
+func writeBudgetExceeded(writer http.ResponseWriter, message string) {
+	writeJSON(writer, http.StatusTooManyRequests, map[string]any{"error": map[string]any{
+		"message": message, "type": "budget_exceeded", "param": nil, "code": "429",
+	}})
+}
+
 func writeError(writer http.ResponseWriter, status int, code, message string) {
 	writeJSON(writer, status, map[string]any{"error": map[string]any{"message": message, "type": code, "code": code}})
 }

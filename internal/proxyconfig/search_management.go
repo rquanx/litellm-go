@@ -54,7 +54,7 @@ func (registry *modelRegistry) registerSearchToolRoutes(mux *http.ServeMux) {
 }
 
 func (registry *modelRegistry) availableSearchProviders(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	entries := make([]map[string]string, 0, len(searchProviderNames))
@@ -120,7 +120,7 @@ func searchToolEntry(entry managedSearchTool) map[string]any {
 }
 
 func (registry *modelRegistry) listSearchTools(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -142,7 +142,7 @@ func (registry *modelRegistry) listSearchTools(w http.ResponseWriter, r *http.Re
 }
 
 func (registry *modelRegistry) getSearchTool(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()

@@ -186,3 +186,67 @@ general_settings:
 		t.Fatalf("unexpected pass-through spend event %+v", event)
 	}
 }
+
+func TestCustomPassThroughRoutePermissions(t *testing.T) {
+	const master = "fixture-master"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer origin.Close()
+	keys, err := LoadKeys(master, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{
+		Token: master, AuthorizeInference: true, AuthorizeKey: keys.Authorize,
+		AuthorizePassThrough: keys.AuthorizePassThrough,
+	})
+	handler, err := WithModelManagement(server, Config{}, master, "", keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler = keys.Handler(handler)
+	call := func(method, path, token, body string, want int) string {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want || strings.Contains(w.Body.String(), "private-fixture") {
+			t.Fatalf("%s %s returned %d, want %d: %s", method, path, w.Code, want, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	for _, name := range []string{"/fixture", "/fixture-other"} {
+		call("POST", passThroughManagementPath, master, `{"path":"`+name+`","target":"`+origin.URL+`?secret=private-fixture","headers":{"Authorization":"private-fixture"},"include_subpath":true}`, 200)
+	}
+	call("POST", "/team/new", master, `{"team_id":"one","allowed_passthrough_routes":["/fixture"]}`, 200)
+	call("POST", "/team/new", master, `{"team_id":"empty","allowed_passthrough_routes":[]}`, 200)
+	call("POST", "/project/new", master, `{"project_id":"project","team_id":"one"}`, 200)
+	createKey := func(name, fields string) {
+		t.Helper()
+		call("POST", "/key/generate", master, `{"key":"`+name+`"`+fields+`}`, 200)
+	}
+	createKey("sk-project-key", `,"project_id":"project","allowed_passthrough_routes":[]`)
+	createKey("sk-no-grant", `,"team_id":"empty"`)
+	createKey("sk-override", `,"team_id":"one","allowed_passthrough_routes":["/fixture-other/path"]`)
+	call("GET", "/fixture", "invalid", "", 401)
+	call("GET", "/fixture", master, "", 204)
+	call("GET", "/fixture/path", "sk-project-key", "", 204)
+	call("GET", "/fixture-other", "sk-project-key", "", 403)
+	call("GET", "/fixture", "sk-no-grant", "", 403)
+	call("GET", "/fixture", "sk-override", "", 403)
+	call("GET", "/fixture-other", "sk-override", "", 403)
+	call("GET", "/fixture-other/path/suffix", "sk-override", "", 204)
+	call("POST", "/key/update", master, `{"key":"sk-override","allowed_passthrough_routes":[]}`, 200)
+	call("GET", "/fixture", "sk-override", "", 204)
+	body := call("GET", passThroughManagementPath+"/team/one", master, "", 200)
+	if !strings.Contains(body, `"path":"/fixture"`) || strings.Contains(body, "/fixture-other") {
+		t.Fatalf("unexpected team route listing: %s", body)
+	}
+	body = call("GET", passThroughManagementPath+"/team/empty", master, "", 200)
+	if !strings.Contains(body, `"endpoints":[]`) {
+		t.Fatalf("empty team grant listed routes: %s", body)
+	}
+	call("GET", passThroughManagementPath+"/team/missing", master, "", 404)
+}

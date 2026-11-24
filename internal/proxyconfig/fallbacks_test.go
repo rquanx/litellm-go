@@ -5,12 +5,76 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
+
+func TestFallbackManagementPublishesAndPersistsRoutes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct{ Model string }
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if input.Model == "primary" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `{"error":{"message":"fixture unavailable"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"fixture fallback"}}]}`)
+	}))
+	defer upstream.Close()
+	config, err := Load(strings.NewReader(fmt.Sprintf(`
+model_list:
+  - model_name: primary
+    litellm_params: {model: openai/primary, api_base: %q}
+  - model_name: backup
+    litellm_params: {model: openai/backup, api_base: %q}
+`, upstream.URL, upstream.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(t.TempDir(), "models.json")
+	boot := func() http.Handler {
+		t.Helper()
+		server := runtime.NewServer(runtime.Config{Routes: config.Routes, Token: "master", AuthorizeInference: true})
+		handler, err := WithModelManagement(server, config, "master", state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return handler
+	}
+	handler := boot()
+	call := func(method, path, token, body string, status int, expected string) {
+		t.Helper()
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != status || !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("%s %s: got %d %s, want %d containing %q", method, path, response.Code, response.Body, status, expected)
+		}
+	}
+	const fallback = `{"model":"primary","fallback_models":["backup"]}`
+	const chat = `{"model":"primary","messages":[]}`
+	call("POST", "/fallback", "invalid", fallback, 401, "")
+	call("GET", "/fallback/primary", "master", "", 404, "")
+	call("POST", "/fallback", "master", fallback, 200, "created successfully")
+	call("POST", "/fallback", "master", fallback, 200, "updated successfully")
+	call("POST", "/fallback", "master", `{"model":"primary","fallback_models":["unknown"]}`, 400, "")
+	call("POST", "/fallback", "master", `{"model":"primary","fallback_models":["backup"],"fallback_type":"context_window"}`, 200, "created successfully")
+	handler = boot()
+	call("GET", "/fallback/primary", "master", "", 200, `"fallback_models":["backup"]`)
+	call("POST", "/v1/chat/completions", "master", chat, 200, "fixture fallback")
+	call("DELETE", "/fallback/primary", "master", "", 200, "deleted successfully")
+	handler = boot()
+	call("POST", "/v1/chat/completions", "master", chat, 503, "fixture unavailable")
+	call("GET", "/fallback/primary?fallback_type=context_window", "master", "", 200, `"fallback_models":["backup"]`)
+}
 
 func TestSpecializedFallbacks(t *testing.T) {
 	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

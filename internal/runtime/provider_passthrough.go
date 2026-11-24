@@ -33,6 +33,9 @@ var providerPassThroughRoutes = map[string]providerPassThrough{
 func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request) bool {
 	provider, suffix, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	prefix := "/" + provider
+	if provider == "langfuse" {
+		return s.serveLangfusePassThrough(w, r, suffix)
+	}
 	if provider == "milvus" {
 		return s.serveMilvusPassThrough(w, r, suffix)
 	}
@@ -158,6 +161,7 @@ func (s *Server) serveProviderPassThrough(w http.ResponseWriter, r *http.Request
 			route.Headers.Set("Authorization", "Bearer "+key)
 		}
 	}
+	route.proxyToken = token
 	s.forwardPassThrough(w, r, route)
 	return true
 }

@@ -56,7 +56,7 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 		names := strings.Split(selector, ",")
 		toolset := s.mcpInferenceToolsetFilter(r, names, grants, toolsetAccess)
 		allowed := func(server MCPServer, tool string) bool {
-			return (ok && mcpInferenceServerMatch(server, names) && access(server, tool)) || toolset(server, tool)
+			return s.toolPolicyAllowed(server, tool) && ((ok && mcpInferenceServerMatch(server, names) && access(server, tool)) || toolset(server, tool))
 		}
 		for _, server := range s.currentMCPServers() {
 			if !allowed(server, "") {
@@ -78,10 +78,11 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 				}
 				discovered[server.ID] = entries
 			}
+			entries = s.semanticFilterMCPTools(entries, mcpInferenceQuery(fields))
 			for _, entry := range entries {
 				name, _ := entry["name"].(string)
 				fullName := server.Name + "-" + name
-				if !allowed(server, name) || !mcpFunctionName.MatchString(fullName) ||
+				if !allowed(server, name) || (s.toolPolicy(server, name).Input == "trusted" && mcpInferenceHasToolOutput(fields)) || !mcpFunctionName.MatchString(fullName) ||
 					!mcpInferenceToolAllowed(declaration["allowed_tools"], name, fullName) || used[fullName] {
 					continue
 				}
@@ -110,6 +111,32 @@ func (s *Server) expandMCPInferenceTools(r *http.Request, endpoint string, field
 	}
 	fields["tools"] = expanded
 	return nil
+}
+
+func mcpInferenceQuery(fields map[string]any) string {
+	if messages, ok := fields["messages"].([]any); ok { for _, raw := range messages { if message, ok := raw.(map[string]any); ok && message["role"] == "user" { if text, ok := message["content"].(string); ok { return text } } } }
+	if text, ok := fields["input"].(string); ok { return text }
+	return ""
+}
+
+func (s *Server) semanticFilterMCPTools(entries []map[string]any, query string) []map[string]any {
+	settings := s.semanticFilterSettings(); if !settings.Enabled || query == "" || len(entries) <= settings.TopK { return entries }
+	words := strings.Fields(strings.ToLower(query)); type scored struct { entry map[string]any; score float64 }
+	scoredEntries := make([]scored, 0, len(entries))
+	for _, entry := range entries { text, _ := entry["name"].(string); description, _ := entry["description"].(string); haystack := strings.ToLower(text+" "+description); hits := 0; for _, word := range words { if strings.Contains(haystack, word) { hits++ } }; score := float64(hits)/float64(max(1,len(words))); if score >= settings.SimilarityThreshold { scoredEntries = append(scoredEntries, scored{entry, score}) } }
+	slices.SortStableFunc(scoredEntries, func(a, b scored) int { if a.score > b.score { return -1 }; if a.score < b.score { return 1 }; return strings.Compare(a.entry["name"].(string), b.entry["name"].(string)) })
+	if len(scoredEntries) > settings.TopK { scoredEntries = scoredEntries[:settings.TopK] }
+	result := make([]map[string]any, len(scoredEntries)); for i, item := range scoredEntries { result[i] = item.entry }; return result
+}
+
+func mcpInferenceHasToolOutput(fields map[string]any) bool {
+	if messages, ok := fields["messages"].([]any); ok {
+		for _, raw := range messages { if message, ok := raw.(map[string]any); ok && message["role"] == "tool" { return true } }
+	}
+	if input, ok := fields["input"].([]any); ok {
+		for _, raw := range input { if item, ok := raw.(map[string]any); ok && item["type"] == "function_call_output" { return true } }
+	}
+	return false
 }
 
 func mcpInferenceServerMatch(server MCPServer, selectors []string) bool {
@@ -180,7 +207,7 @@ func (s *Server) inferWithMCPTools(w http.ResponseWriter, r *http.Request, endpo
 	seen := make(map[string]bool)
 	for index, call := range calls {
 		tool, found := allowed[call.name]
-		if !found || call.id == "" || seen[call.id] || json.Unmarshal([]byte(call.arguments), &arguments[index]) != nil ||
+		if !found || (s.toolPolicy(tool.server, tool.name).Input == "trusted" && mcpInferenceHasToolOutput(fields)) || call.id == "" || seen[call.id] || json.Unmarshal([]byte(call.arguments), &arguments[index]) != nil ||
 			!tool.server.allowsTool(tool.name) || !tool.server.allowsArguments(tool.name, arguments[index]) {
 			writeMCPInitialResult(w, initial, response, endpoint, stream)
 			return

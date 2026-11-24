@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -109,6 +110,11 @@ func (store *postgresState) loadAfter(ctx context.Context, target any, lastRevis
 }
 
 func (store *postgresState) save(value any) error {
+	return store.saveWithAudit(value)
+}
+
+func (store *postgresState) saveWithAudit(value any, events ...*managementAuditEvent) error {
+	events = slices.DeleteFunc(events, func(event *managementAuditEvent) bool { return event == nil })
 	payload, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -121,12 +127,22 @@ func (store *postgresState) save(value any) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	exec := store.db.ExecContext
+	var tx *sql.Tx
+	if len(events) > 0 {
+		tx, err = store.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		exec = tx.ExecContext
+	}
 	var result sql.Result
 	if store.revision == 0 {
-		result, err = store.db.ExecContext(ctx, `INSERT INTO minato_proxy_state (name, revision, value)
+		result, err = exec(ctx, `INSERT INTO minato_proxy_state (name, revision, value)
 			VALUES ($1, 1, $2::jsonb) ON CONFLICT (name) DO NOTHING`, store.name, string(payload))
 	} else {
-		result, err = store.db.ExecContext(ctx, `UPDATE minato_proxy_state SET value = $2::jsonb, revision = revision + 1
+		result, err = exec(ctx, `UPDATE minato_proxy_state SET value = $2::jsonb, revision = revision + 1
 			WHERE name = $1 AND revision = $3`, store.name, string(payload), store.revision)
 	}
 	if err != nil {
@@ -138,6 +154,16 @@ func (store *postgresState) save(value any) error {
 	}
 	if count != 1 {
 		return errConcurrentState
+	}
+	if len(events) > 0 {
+		for _, event := range events {
+			if err := event.insert(ctx, tx, store.revision == 0); err != nil {
+				return err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
 	store.revision++
 	return nil
@@ -165,7 +191,10 @@ func openState(value string, key *[32]byte) ([]byte, error) {
 }
 
 func postgresModels(db *sql.DB, master string) *postgresState {
-	secret := os.Getenv("MINATO_RUNTIME_STATE_KEY")
+	secret := os.Getenv("LITELLM_GO_STATE_KEY")
+	if secret == "" {
+		secret = os.Getenv("MINATO_RUNTIME_STATE_KEY")
+	}
 	if secret == "" {
 		secret = master
 	}

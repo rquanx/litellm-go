@@ -127,7 +127,7 @@ func prepareAgentCompletion(entry agentConfig, provider, base string) (runtime.C
 	if model.Params.Model == "" {
 		return runtime.Candidate{}, fmt.Errorf("a model is required for the A2A completion bridge")
 	}
-	if !strings.HasPrefix(model.Params.Model, provider+"/") {
+	if actual, _, _ := deploymentIdentity(model.Params.Model, model.Params.Provider); actual != provider {
 		model.Params.Model = provider + "/" + model.Params.Model
 	}
 	if model.Params.APIBase == "" {

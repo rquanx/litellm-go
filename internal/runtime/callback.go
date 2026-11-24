@@ -11,6 +11,7 @@ const maxCallbackMessageBytes = 64 << 10
 
 type InferenceEvent struct {
 	ID                       string          `json:"id"`
+	SessionID                string `json:"-"`
 	TraceID                  string          `json:"trace_id"`
 	CallType                 string          `json:"call_type"`
 	Stream                   bool            `json:"stream"`
@@ -33,8 +34,15 @@ type InferenceEvent struct {
 	HTTPStatus               int             `json:"-"`
 	FirstOutput              float64         `json:"-"`
 	KeyDigest                string          `json:"-"`
+	KeySpendIdentity         string          `json:"-"`
+	KeyBudgetTracked          bool            `json:"-"`
+	KeyModelBudgetDuration string `json:"-"`
+	CustomerModelBudgetDuration string `json:"-"`
+	SpendAttribution          *SpendAttribution `json:"-"`
 	EndUser                  string          `json:"end_user,omitempty"`
+	Tags []string `json:"-"`
 	Messages                 json.RawMessage `json:"messages"`
+	SpendStreamResponse      json.RawMessage `json:"-"`
 	Response                 json.RawMessage `json:"response"`
 }
 
@@ -53,6 +61,9 @@ type callbackResponse struct {
 	event               InferenceEvent
 	status              int
 	capture             bool
+	captureSpendStream  bool
+	spendStream         []byte
+	spendStreamOverflow bool
 	rpcFailure          bool
 	price               [2]*float64
 	cachePrice          *float64
@@ -85,6 +96,9 @@ func (recorder *callbackResponse) Write(data []byte) (int, error) {
 		for _, frame := range bytes.Split(data, []byte("\n\n")) {
 			if value := streamErrorBody(frame); len(value) != 0 {
 				recorder.recordJSON(value)
+				if recorder.captureSpendStream {
+					recorder.recordSpendFrame(value)
+				}
 			}
 		}
 	} else {
@@ -204,15 +218,38 @@ func (recorder *callbackResponse) recordJSON(data []byte) {
 	}
 }
 
+func (recorder *callbackResponse) recordSpendFrame(value []byte) {
+	if recorder.spendStreamOverflow || !json.Valid(value) {
+		return
+	}
+	if len(recorder.spendStream)+len(value)+2 > maxCallbackMessageBytes {
+		recorder.spendStreamOverflow = true
+		recorder.spendStream = nil
+		return
+	}
+	separator := byte(',')
+	if len(recorder.spendStream) == 0 {
+		separator = '['
+	}
+	recorder.spendStream = append(recorder.spendStream, separator)
+	recorder.spendStream = append(recorder.spendStream, value...)
+}
+
 func (recorder *callbackResponse) finish() {
+	if len(recorder.spendStream) > 0 {
+		recorder.event.SpendStreamResponse = append(recorder.spendStream, ']')
+		recorder.spendStream = nil
+	}
 	recorder.event.CacheReadInputTokens = recorder.cachedTokens
 	recorder.event.CacheCreationInputTokens = recorder.cacheCreationTokens
 	recorder.event.EndTime = float64(time.Now().UnixNano()) / float64(time.Second)
-	if routeModel := recorder.Header().Get("X-Minato-Runtime-Model"); routeModel != "" {
-		recorder.event.Model = routeModel
+	if recorder.ResponseWriter != nil {
+		if routeModel := recorder.Header().Get("X-Minato-Runtime-Model"); routeModel != "" {
+			recorder.event.Model = routeModel
+		}
 	}
 	recorder.event.HTTPStatus = recorder.status
-	if recorder.event.Provider == "" {
+	if recorder.event.Provider == "" && recorder.ResponseWriter != nil {
 		recorder.event.Provider = recorder.Header().Get("X-Minato-Runtime-Source")
 	}
 	recorder.event.Status = "success"

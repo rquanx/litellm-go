@@ -48,37 +48,126 @@ type customerActivityDay struct {
 	Breakdown map[string]map[string]customerBreakdown `json:"breakdown"`
 }
 
+type activityScope struct {
+	ids     []string
+	aliases map[string]string
+	user    string
+}
+
 func (log *SpendLog) customerActivity(w http.ResponseWriter, r *http.Request) {
-	if !log.keys.requireMaster(w, r) {
+	if !log.keys.requireAdminRead(w, r) {
 		return
 	}
-	log.entityActivity(w, r, "end_user", nil)
+	log.entityActivity(w, r, "end_user", activityScope{})
+}
+
+func (log *SpendLog) organizationActivity(w http.ResponseWriter, r *http.Request) {
+	aliases, scope, ok := log.organizationActivityScope(w, r)
+	if ok {
+		log.entityActivity(w, r, "organization", activityScope{ids: scope, aliases: aliases})
+	}
+}
+
+func (log *SpendLog) organizationActivityScope(w http.ResponseWriter, r *http.Request) (map[string]string, []string, bool) {
+	log.keys.mu.RLock()
+	defer log.keys.mu.RUnlock()
+	caller, ok := log.keys.identifyReadCallerLocked(r)
+	if !ok {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+		return nil, nil, false
+	}
+	aliases := make(map[string]string)
+	var scope []string
+	if !caller.admin {
+		scope = []string{}
+	}
+	for id, org := range log.keys.state.Organizations {
+		if caller.admin || organizationRole(org, caller.user) == "org_admin" {
+			aliases[id] = org.Alias
+			if !caller.admin {
+				scope = append(scope, id)
+			}
+		}
+	}
+	if ids := r.URL.Query().Get("organization_ids"); ids != "" && scope != nil {
+		for _, id := range strings.Split(ids, ",") {
+			if _, allowed := aliases[id]; !allowed {
+				modelError(w, http.StatusForbidden, "You do not have access to this organization")
+				return nil, nil, false
+			}
+		}
+	}
+	return aliases, scope, true
 }
 
 func (log *SpendLog) agentActivity(w http.ResponseWriter, r *http.Request) {
 	token := runtime.ProxyCredential(r)
 	if token == log.keys.master && token != "" {
-		log.entityActivity(w, r, "agent", nil)
+		log.entityActivity(w, r, "agent", activityScope{})
 		return
 	}
 	if _, ok := log.keys.Authorize(token); !ok {
 		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
-	log.entityActivity(w, r, "agent", log.agentActivityScope(r))
+	log.entityActivity(w, r, "agent", activityScope{ids: log.agentActivityScope(r)})
 }
 
-func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, entity string, scope []string) {
+func (log *SpendLog) tagActivity(w http.ResponseWriter, r *http.Request) {
+	caller, valid := log.keys.identifyResourceCaller(r)
+	if !valid {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+		return
+	}
+	if caller.admin {
+		log.entityActivity(w, r, "tag", activityScope{})
+		return
+	}
+	if caller.user == "" {
+		modelError(w, http.StatusForbidden, "A user-bound key is required")
+		return
+	}
+	log.entityActivity(w, r, "tag", activityScope{user: caller.user})
+}
+
+func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, entity string, scope activityScope) {
 	query := r.URL.Query()
+	aggregate := r.URL.Path == "/user/daily/activity/aggregated"
+	defaultSize, maxSize := 10, 100
+	if entity == "user" {
+		defaultSize, maxSize = 50, 1000
+	}
 	page, pageErr := keyListInt(query, "page", 1)
-	size, sizeErr := keyListInt(query, "page_size", 10)
+	size, sizeErr := keyListInt(query, "page_size", defaultSize)
+	if aggregate {
+		page, size, pageErr, sizeErr = 1, defaultSize, nil, nil
+	}
 	start, startErr := time.Parse(time.DateOnly, query.Get("start_date"))
 	end, endErr := time.Parse(time.DateOnly, query.Get("end_date"))
+	if entity == "tag" {
+		if query.Get("end_date") == "" {
+			end, endErr = time.Parse(time.DateOnly, time.Now().UTC().Format(time.DateOnly))
+		}
+		if query.Get("start_date") == "" {
+			start, startErr = end.AddDate(0, 0, -30), nil
+		}
+	}
 	end = end.AddDate(0, 0, 1)
-	if pageErr != nil || sizeErr != nil || startErr != nil || endErr != nil || !start.Before(end) || size > 100 ||
+	if pageErr != nil || sizeErr != nil || startErr != nil || endErr != nil || !start.Before(end) || size > maxSize ||
 		page-1 > int(^uint(0)>>1)/size {
 		modelError(w, http.StatusBadRequest, "Invalid customer activity filters or pagination")
 		return
+	}
+	day := "(started_at AT TIME ZONE 'UTC')"
+	if raw := query.Get("timezone"); entity == "user" && raw != "" {
+		offset, err := strconv.Atoi(raw)
+		if err != nil || offset < -1440 || offset > 1440 {
+			modelError(w, http.StatusBadRequest, "Invalid timezone offset")
+			return
+		}
+		start = start.Add(time.Duration(offset) * time.Minute)
+		end = end.Add(time.Duration(offset) * time.Minute)
+		day = "(" + day + " - INTERVAL '1 minute' * " + strconv.Itoa(offset) + ")"
 	}
 	where, args, err := spendFilter(query, start, end)
 	if err != nil {
@@ -89,9 +178,25 @@ func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, enti
 	if entity == "agent" {
 		column, aliasJoin, aliasField = "COALESCE(NULLIF(agent_id,''),CASE WHEN provider='a2a_agent' THEN model_id ELSE '' END)", "", "NULL::text"
 	}
+	if entity == "organization" || entity == "team" || entity == "user" {
+		column, aliasJoin, aliasField = entity+"_id", "", "NULL::text"
+	}
+	if entity == "tag" {
+		column, aliasJoin, aliasField = "tag_name", "", "NULL::text"
+		where = strings.Replace(where, "FROM minato_proxy_spend WHERE",
+			"FROM minato_proxy_spend CROSS JOIN LATERAL unnest(tags) AS tag(tag_name) WHERE", 1)
+		if tags := query.Get("tags"); tags != "" {
+			args = append(args, pq.Array(strings.Split(tags, ",")))
+			where += " AND tag_name=ANY($" + strconv.Itoa(len(args)) + ")"
+		}
+	}
+	if scope.user != "" {
+		args = append(args, scope.user)
+		where += " AND user_id=$" + strconv.Itoa(len(args))
+	}
 	where += " AND " + column + " <> ''"
-	if scope != nil {
-		args = append(args, pq.Array(scope))
+	if scope.ids != nil {
+		args = append(args, pq.Array(scope.ids))
 		where += " AND " + column + " = ANY($" + strconv.Itoa(len(args)) + ")"
 	}
 	if ids := query.Get(entity + "_ids"); ids != "" {
@@ -111,21 +216,23 @@ func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, enti
 	}
 	defer tx.Rollback()
 	var count int
-	columns := `(started_at AT TIME ZONE 'UTC')::date AS day, ` + column + ` AS entity_id, model, model_group, provider,
+	columns := day + `::date AS day, ` + column + ` AS entity_id, model, model_group, provider,
 		call_type, api_key, key_alias, team_id, COALESCE(sum(spend),0) AS spend, sum(prompt_tokens) AS prompt,
 		sum(completion_tokens) AS completion, sum(total_tokens) AS tokens, count(*) AS requests,
 		count(*) FILTER (WHERE status = 'success') AS successes, count(*) FILTER (WHERE status = 'failure') AS failures,
 		sum(cache_read_input_tokens) AS cache_read, sum(cache_creation_input_tokens) AS cache_write`
 	filtered := "SELECT " + columns + where + " GROUP BY 1,2,3,4,5,6,7,8,9"
-	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM ("+filtered+") activity", args...).Scan(&count); err != nil {
-		modelError(w, http.StatusInternalServerError, "Could not count customer activity")
-		return
+	order := " ORDER BY day DESC, entity_id, model, model_group, provider, call_type, api_key, key_alias, team_id"
+	if !aggregate {
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM ("+filtered+") activity", args...).Scan(&count); err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not count customer activity")
+			return
+		}
+		order += " LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2)
+		args = append(args, size, (page-1)*size)
 	}
-	limit, offset := "$"+strconv.Itoa(len(args)+1), "$"+strconv.Itoa(len(args)+2)
-	rows, err := tx.QueryContext(ctx, "SELECT activity.*, "+aliasField+" FROM ("+filtered+
-		" ORDER BY day DESC, entity_id, model, model_group, provider, call_type, api_key, key_alias, team_id LIMIT "+limit+" OFFSET "+offset+
-		") activity"+aliasJoin+" ORDER BY activity.day DESC",
-		append(args, size, (page-1)*size)...)
+	rows, err := tx.QueryContext(ctx, "SELECT activity.*, "+aliasField+" FROM ("+filtered+order+
+		") activity"+aliasJoin+" ORDER BY activity.day DESC", args...)
 	if err != nil {
 		modelError(w, http.StatusInternalServerError, "Could not aggregate customer activity")
 		return
@@ -165,7 +272,11 @@ func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, enti
 				details.Metadata = make(map[string]any)
 			}
 			if dimension == "entities" {
-				details.Metadata["alias"] = alias
+				if entityAlias, ok := scope.aliases[id]; ok {
+					details.Metadata[entity+"_alias"] = entityAlias
+				} else if alias != nil || entity == "end_user" || entity == "agent" || entity == "tag" {
+					details.Metadata["alias"] = alias
+				}
 			}
 			if dimension == "api_keys" {
 				details.Metadata = keyMetadata
@@ -187,6 +298,9 @@ func (log *SpendLog) entityActivity(w http.ResponseWriter, r *http.Request, enti
 		return
 	}
 	totalPages := (count + size - 1) / size
+	if aggregate {
+		totalPages = 1
+	}
 	modelJSON(w, http.StatusOK, map[string]any{"results": result, "metadata": map[string]any{
 		"total_spend": totals.Spend, "total_prompt_tokens": totals.Prompt, "total_completion_tokens": totals.Completion, "total_tokens": totals.Total,
 		"total_api_requests": totals.Requests, "total_successful_requests": totals.Success, "total_failed_requests": totals.Failure,

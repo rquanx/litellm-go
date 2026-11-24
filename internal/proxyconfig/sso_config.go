@@ -67,11 +67,11 @@ func loadUISSOConfigFrom(getenv func(string) string) uiSSOConfig {
 		if roles := getenv("GENERIC_ROLE_MAPPINGS_ROLES"); roles != "" {
 			cfg.roleClaim = fields("GENERIC_ROLE_MAPPINGS_GROUP_CLAIM")
 			cfg.defaultRole = getenv("GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE")
-			if yaml.Unmarshal([]byte(roles), &cfg.roleGroups) != nil || (cfg.defaultRole != "" && !internalSSORole(cfg.defaultRole)) {
+			if yaml.Unmarshal([]byte(roles), &cfg.roleGroups) != nil || (cfg.defaultRole != "" && !dashboardUserRole(cfg.defaultRole)) {
 				cfg.missing = append(cfg.missing, "GENERIC_ROLE_MAPPINGS_ROLES")
 			}
 			for role := range cfg.roleGroups {
-				if !internalSSORole(role) {
+				if !dashboardUserRole(role) {
 					cfg.missing = append(cfg.missing, "GENERIC_ROLE_MAPPINGS_ROLES")
 					break
 				}
@@ -96,7 +96,7 @@ func (cfg uiSSOConfig) userRole(claims map[string]any) string {
 		return ""
 	}
 	groups := policyStringList(ssoClaim(claims, cfg.roleClaim))
-	for _, role := range []string{"internal_user", "internal_user_viewer"} {
+	for _, role := range []string{adminViewerRole, "internal_user", "internal_user_viewer"} {
 		if slices.ContainsFunc(cfg.roleGroups[role], func(group string) bool { return slices.Contains(groups, group) }) {
 			return role
 		}

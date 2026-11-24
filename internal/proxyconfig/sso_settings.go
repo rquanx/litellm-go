@@ -122,11 +122,11 @@ type storedSSOMappings struct {
 func (settings storedSSOMappings) validate() error {
 	role := settings.Roles
 	if role != nil {
-		if role.Provider == "" || role.Claim == "" || (role.Default != "" && !internalSSORole(role.Default)) {
+		if role.Provider == "" || role.Claim == "" || (role.Default != "" && !dashboardUserRole(role.Default)) {
 			return errors.New("invalid SSO internal role mapping")
 		}
 		for name := range role.Groups {
-			if !internalSSORole(name) {
+			if !dashboardUserRole(name) {
 				return errors.New("invalid SSO internal role mapping")
 			}
 		}

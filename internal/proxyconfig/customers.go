@@ -34,16 +34,26 @@ type customer struct {
 	Permission *string `json:"object_permission_id"`
 }
 
-func OpenCustomers(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*CustomerRegistry, error) {
+func openCustomerTable(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS `+customerTable+` (
 		user_id TEXT PRIMARY KEY, alias TEXT, spend DOUBLE PRECISION NOT NULL DEFAULT 0,
 		blocked BOOLEAN NOT NULL DEFAULT FALSE, allowed_model_region TEXT, default_model TEXT, budget_id TEXT,
 		object_permission_id TEXT
 	)`)
 	if err != nil {
-		return nil, errors.New("could not initialize end-user storage")
+		return errors.New("could not initialize end-user storage")
+	}
+	return nil
+}
+
+func OpenCustomers(ctx context.Context, db *sql.DB, keys *KeyRegistry) (*CustomerRegistry, error) {
+	if err := openCustomerTable(ctx, db); err != nil {
+		return nil, err
 	}
 	if err := openBudgetTable(ctx, db); err != nil {
+		return nil, err
+	}
+	if err := openTagTable(ctx, db); err != nil {
 		return nil, err
 	}
 	return &CustomerRegistry{db: db, keys: keys}, nil
@@ -55,17 +65,52 @@ func (registry *CustomerRegistry) Policy(ctx context.Context, id string) (runtim
 	var policy runtime.CustomerPolicy
 	var spent float64
 	var limit *float64
-	err := registry.db.QueryRowContext(ctx, `SELECT c.blocked,COALESCE(c.allowed_model_region,''),COALESCE(c.default_model,''),c.spend,b.max_budget
+	var modelBudgets []byte
+	err := registry.db.QueryRowContext(ctx, `SELECT c.blocked,COALESCE(c.allowed_model_region,''),COALESCE(c.default_model,''),c.spend,b.max_budget,b.model_max_budget
 		FROM `+customerTable+` c LEFT JOIN `+budgetTable+` b ON b.budget_id=c.budget_id WHERE c.user_id=$1`, id).
-		Scan(&policy.Blocked, &policy.Region, &policy.DefaultModel, &spent, &limit)
+		Scan(&policy.Blocked, &policy.Region, &policy.DefaultModel, &spent, &limit, &modelBudgets)
 	if errors.Is(err, sql.ErrNoRows) {
 		return runtime.CustomerPolicy{}, nil
 	}
-	if err != nil || limit == nil || policy.Blocked { return policy, err }
-	if spent > *limit {
+	if err != nil || policy.Blocked {
+		return policy, err
+	}
+	if limit != nil && spent > *limit {
 		policy.BudgetError = fmt.Sprintf("ExceededBudget: End User=%s over budget. Spend=%g, Budget=%g", id, spent, *limit)
+		return policy, nil
+	}
+	if len(modelBudgets) != 0 {
+		perModel, err := customerModelBudgets(modelBudgets)
+		if err != nil {
+			return policy, err
+		}
+		var spendDB *sql.DB
+		if registry.keys != nil && registry.keys.keySpend != nil {
+			spendDB = registry.db
+		}
+		policy.ModelPolicy = modelBudgetPolicy(perModel, spendDB, customerModelBudgetIdentity(id), "End User "+id)
 	}
 	return policy, nil
+}
+
+func customerModelBudgets(data []byte) (map[string]keyModelBudget, error) {
+	var records map[string]json.RawMessage
+	if err := json.Unmarshal(data, &records); err != nil {
+		return nil, err
+	}
+	budgets := make(map[string]keyModelBudget, len(records))
+	for model, raw := range records {
+		// Existing budget rows may store a bare amount without a duration.
+		if len(raw) == 0 || raw[0] != '{' {
+			continue
+		}
+		var budget keyModelBudget
+		if err := json.Unmarshal(raw, &budget); err != nil {
+			return nil, err
+		}
+		budgets[model] = budget
+	}
+	return budgets, nil
 }
 
 func (registry *CustomerRegistry) Handler(next http.Handler) http.Handler {

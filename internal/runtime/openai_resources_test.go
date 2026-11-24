@@ -47,7 +47,8 @@ func TestFilesAndBatchesShareUpstreamDeployment(t *testing.T) {
 			_, _ = io.WriteString(w, `{"id":"file-in","object":"file"}`)
 		case "/v1/batches":
 			var payload map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["input_file_id"] != "file-in" {
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload["input_file_id"] != "file-in" ||
+				payload["custom_llm_provider"] != nil {
 				t.Errorf("batch did not receive its upstream input file: %#v", payload)
 			}
 			_, _ = io.WriteString(w, `{"id":"batch-job","input_file_id":"file-in","output_file_id":"file-out"}`)
@@ -92,7 +93,7 @@ func TestFilesAndBatchesShareUpstreamDeployment(t *testing.T) {
 	_, _ = io.WriteString(file, "synthetic input")
 	_ = form.Close()
 	input := encodeResourceID("files", "dep", "file-in")
-	if body := send("POST", "/v1/files", form.FormDataContentType(), &buffer); !strings.Contains(body, input) {
+	if body := send("POST", "/openai/v1/files", form.FormDataContentType(), &buffer); !strings.Contains(body, input) {
 		t.Fatal("file upload did not return a managed ID")
 	}
 	output := encodeResourceID("files", "dep", "file-out")
@@ -100,13 +101,21 @@ func TestFilesAndBatchesShareUpstreamDeployment(t *testing.T) {
 		t.Fatal("file pagination did not return the next managed ID")
 	}
 	batch := encodeResourceID("batches", "dep", "batch-job")
-	body := send("POST", "/v1/batches", "application/json", strings.NewReader(`{"input_file_id":"`+input+`"}`))
+	body := send("POST", "/openai/v1/batches", "application/json",
+		strings.NewReader(`{"custom_llm_provider":"vertex_ai","input_file_id":"`+input+`"}`))
 	if !strings.Contains(body, batch) || !strings.Contains(body, output) {
 		t.Fatal("batch response lost the deployment IDs")
 	}
 	send("POST", "/v1/batches/"+batch+"/cancel", "", nil)
-	if body := send("GET", "/v1/files/"+output+"/content", "", nil); body != "\xff\x00\x02" {
+	if body := send("GET", "/openai/v1/files/"+output+"/content", "", nil); body != "\xff\x00\x02" {
 		t.Fatal("file content was modified")
+	}
+	mismatched := httptest.NewRequest("GET", "/azure/v1/files/"+output+"/content", nil)
+	mismatched.Header.Set("Authorization", "Bearer master")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, mismatched)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("provider path accepted a different provider's resource: %d %s", response.Code, response.Body)
 	}
 	liteLLMID := func(prefix, original string) string {
 		return prefix + base64.RawURLEncoding.EncodeToString([]byte("litellm:" + original + ";model,demo"))

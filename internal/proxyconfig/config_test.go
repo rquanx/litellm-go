@@ -1,6 +1,8 @@
 package proxyconfig
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,6 +11,58 @@ import (
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
+
+func TestAlwaysIncludeStreamUsage(t *testing.T) {
+	proxy, err := Load(strings.NewReader("general_settings:\n  always_include_stream_usage: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamRequests := make(chan map[string]any, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Error(err)
+		}
+		upstreamRequests <- input
+		if input["stream"] == true {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"fixture\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[]}`)
+	}))
+	defer upstream.Close()
+	server := runtime.NewServer(runtime.Config{
+		AlwaysIncludeStreamUsage: proxy.AlwaysIncludeStreamUsage,
+		Routes: []runtime.Route{{Alias: "demo", Candidates: []runtime.Candidate{
+			{Endpoint: "chat-completions", ModelID: "demo", APIBase: upstream.URL},
+		}}},
+	})
+	for _, test := range []struct {
+		extra string
+		want  any
+	}{
+		{`,"stream":true`, true},
+		{`,"stream":true,"stream_options":{}`, true},
+		{`,"stream":true,"stream_options":{"include_usage":false}`, false},
+		{`,"stream":true,"stream_options":null`, nil},
+		{"", nil},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]`+test.extra+`}`))
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		var options map[string]any
+		select {
+		case upstreamRequest := <-upstreamRequests:
+			options, _ = upstreamRequest["stream_options"].(map[string]any)
+		default:
+			t.Fatalf("upstream received no request: status=%d body=%s", response.Code, response.Body)
+		}
+		if response.Code != http.StatusOK || options["include_usage"] != test.want {
+			t.Fatalf("%q: status=%d, stream_options=%v, want include_usage=%v", test.extra, response.Code, options, test.want)
+		}
+	}
+}
 
 func TestConfiguredModelModeSetsInferenceEndpoint(t *testing.T) {
 	config, err := Load(strings.NewReader(`
@@ -27,6 +81,27 @@ model_list:
 		config.Routes[1].Candidates[0].Endpoint != "image-generation" ||
 		config.Routes[1].Candidates[1].Endpoint != "image-edit" {
 		t.Fatal("model mode did not select its inference endpoint")
+	}
+}
+
+func TestLoadAzureRealtimeDeploymentProtocol(t *testing.T) {
+	config, err := Load(strings.NewReader(`
+model_list:
+  - model_name: voice
+    litellm_params:
+      model: azure/fixture-realtime
+      api_base: https://fixture.example
+      api_key: fixture
+      realtime_protocol: GA
+    model_info:
+      mode: realtime
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := config.Routes[0].Candidates[0]
+	if candidate.Provider != "azure" || candidate.RealtimeProtocol != "GA" {
+		t.Fatalf("Azure Realtime configuration was lost: %s %s", candidate.Provider, candidate.RealtimeProtocol)
 	}
 }
 
@@ -49,6 +124,7 @@ general_settings:
   master_key: os.environ/TEST_LITELLM_KEY
 router_settings:
   num_retries: 0
+  retry_after: 3
   timeout: 20
   fallbacks:
     - summary: [reserve]
@@ -56,8 +132,8 @@ router_settings:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.MasterKey != "fixture-master" || config.Timeout != 20*time.Second || len(config.Routes) != 2 {
-		t.Fatal("expected routes, a master key and a timeout")
+	if config.MasterKey != "fixture-master" || config.Timeout != 20*time.Second || config.RetryAfter != 3*time.Second || len(config.Routes) != 2 {
+		t.Fatal("expected routes, a master key, a timeout and a minimum retry delay")
 	}
 	route := config.Routes[0]
 	if route.Alias != "summary" || len(route.Candidates) != 2 {
@@ -71,9 +147,16 @@ router_settings:
 }
 
 func TestLoadRejectsUnsupportedConfiguration(t *testing.T) {
-	_, err := Load(strings.NewReader("general_settings:\n  database_url: postgresql://example.invalid\n"))
+	_, err := Load(strings.NewReader("general_settings:\n  nonexistent_setting: true\n"))
 	if err == nil {
 		t.Fatal("unsupported fields must fail during startup")
+	}
+}
+
+func TestLoadDatabaseOnlyConfiguration(t *testing.T) {
+	config, err := Load(strings.NewReader("model_list: []\ngeneral_settings:\n  store_model_in_db: true\n  database_url: postgresql://example.invalid/proxy\n"))
+	if err != nil || config.DatabaseURL == "" || len(config.Routes) != 0 {
+		t.Fatalf("expected an empty proxy with database configuration, got %v", err)
 	}
 }
 

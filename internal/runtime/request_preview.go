@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
@@ -61,6 +62,11 @@ func (s *Server) transformPreview(w http.ResponseWriter, r *http.Request, scope 
 		ctx := context.WithValue(r.Context(), previewContextKey{}, &captured)
 		_, err := s.send(ctx, r, endpoint, candidate, requestPayload{fields: input.Body}, stream)
 		if err != nil {
+			var unsupported unsupportedProviderParams
+			if errors.As(err, &unsupported) {
+				writeError(w, http.StatusBadRequest, "invalid_request_error", "litellm.UnsupportedParamsError: "+unsupported.Error())
+				return
+			}
 			writeError(w, http.StatusBadRequest, "invalid_request", "Could not transform the request")
 			return
 		}

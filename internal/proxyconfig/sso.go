@@ -57,6 +57,11 @@ func (registry *KeyRegistry) registerUISSO(mux *http.ServeMux) {
 
 func (s *uiSSOServer) start(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.currentSSOConfig(r.Context())
+	if err == nil && cfg.provider == "" && r.URL.Query().Get("source") == "" &&
+		!strings.EqualFold(os.Getenv("DISABLE_ADMIN_UI"), "true") {
+		dashboardPasswordForm(w, r)
+		return
+	}
 	if err != nil || !cfg.ready() {
 		modelError(w, http.StatusServiceUnavailable, "SSO is unavailable")
 		return
@@ -244,21 +249,26 @@ func (s *uiSSOServer) resolveUserLocked(w http.ResponseWriter, identity ssoIdent
 			user = candidate
 		}
 	}
-	if user.ID == "" && verified && email != "" && s.keys.ssoDefaults.enabled() {
+	if defaults := s.keys.ssoUserDefaultsLocked(); user.ID == "" && verified && email != "" && defaults.enabled() {
 		for _, candidate := range s.keys.state.Users {
 			if strings.EqualFold(candidate.Email, email) {
 				modelError(w, http.StatusForbidden, "SSO email is already bound to another identity")
 				return internalUser{}, false, ""
 			}
 		}
-		user = internalUser{ID: "sso-" + keyDigest(binding+"\x00"+subject), Role: s.keys.ssoDefaults.Role,
-			Email: strings.ToLower(email), Models: s.keys.ssoDefaults.Models}
+		user = internalUser{ID: "sso-" + keyDigest(binding+"\x00"+subject), Role: defaults.Role,
+			Email: strings.ToLower(email), Models: defaults.Models, MaxBudget: defaults.MaxBudget, BudgetDuration: defaults.BudgetDuration}
+		if user.BudgetDuration != "" {
+			if reset, err := nextBudgetReset(time.Now().UTC(), user.BudgetDuration); err == nil {
+				user.BudgetResetAt = &reset
+			}
+		}
 	}
-	if user.ID == "" || !internalSSORole(user.Role) {
+	if user.ID == "" || !dashboardUserRole(user.Role) {
 		modelError(w, http.StatusForbidden, "SSO identity has no active internal user")
 		return internalUser{}, false, ""
 	}
-	if internalSSORole(identity.Role) {
+	if dashboardUserRole(identity.Role) {
 		user.Role = identity.Role
 	}
 	return user, bound, binding
@@ -279,36 +289,41 @@ func (s *uiSSOServer) issueSession(w http.ResponseWriter, identity ssoIdentity) 
 	if user.ID == "" {
 		return "", time.Time{}, false
 	}
+	next, ok := s.bindSSOUser(w, user, bound, binding, identity)
+	if !ok {
+		return "", time.Time{}, false
+	}
+	return s.keys.issueUserDashboardSession(w, next, user, "ui-sso:", "sso")
+}
+
+func (keys *KeyRegistry) issueUserDashboardSession(w http.ResponseWriter, next accessState, user internalUser, aliasPrefix, loginMethod string) (string, time.Time, bool) {
 	now := time.Now().UTC()
 	expires := now.Add(24 * time.Hour)
 	token := newKeyToken()
 	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"user_id": user.ID, "key": token, "user_email": user.Email, "user_role": user.Role,
-		"login_method": "sso", "premium_user": false, "auth_header_name": "Authorization",
+		"login_method": loginMethod, "premium_user": false, "auth_header_name": "Authorization",
 		"disabled_non_admin_personal_key_creation": true, "server_root_path": os.Getenv("SERVER_ROOT_PATH"),
 		"iat": now.Unix(), "exp": expires.Unix(),
-	}).SignedString([]byte(s.keys.master))
+	}).SignedString([]byte(keys.master))
 	if err != nil {
-		modelError(w, http.StatusInternalServerError, "Could not create SSO session")
+		modelError(w, http.StatusInternalServerError, "Could not create Dashboard session")
 		return "", time.Time{}, false
 	}
 
-	next, ok := s.bindSSOUser(w, user, bound, binding, identity)
-	if !ok {
-		return "", time.Time{}, false
-	}
 	next.Keys = maps.Clone(next.Keys)
+	alias := aliasPrefix + user.ID
 	for digest, key := range next.Keys {
-		if key.Alias == "ui-sso:"+user.ID && key.UserID == user.ID && key.Expires != nil && !key.Expires.After(now) {
+		if key.Alias == alias && key.UserID == user.ID && key.Expires != nil && !key.Expires.After(now) {
 			delete(next.Keys, digest)
 		}
 	}
-	key := virtualKey{Alias: "ui-sso:" + user.ID, UserID: user.ID, Models: []string{}, CreatedAt: &now, Expires: &expires}
-	if user.Role == "internal_user_viewer" {
+	key := virtualKey{Alias: alias, UserID: user.ID, OrgID: user.DefaultOrgID, Models: []string{}, CreatedAt: &now, Expires: &expires}
+	if user.Role == "internal_user_viewer" || user.Role == adminViewerRole {
 		key.Metadata = map[string]any{"_minato_sso_view_only": true}
 	}
 	next.Keys[keyDigest(token)] = key
-	if !s.keys.apply(w, next) {
+	if !keys.apply(w, next) {
 		return "", time.Time{}, false
 	}
 	return signed, expires, true
@@ -334,7 +349,13 @@ func (keys *KeyRegistry) ssoViewerLocked(r *http.Request, token string) (string,
 		return "", false
 	}
 	switch r.URL.Path {
-	case "/user/info", "/team/list", "/team/info", "/sso/readiness", "/sso/get/ui_settings":
+	case "/user/info", "/v2/user/info", "/user/available_roles", "/team/list", "/v2/team/list", "/team/info", "/sso/readiness", "/sso/get/ui_settings",
+		"/organization/info", "/organization/list", "/organization/daily/activity", "/team/daily/activity", "/team/available",
+		"/key/list",
+		"/user/daily/activity", "/user/daily/activity/aggregated",
+		"/global/spend/provider", "/global/spend/models", "/global/activity", "/global/activity/model",
+		"/key/aliases", "/model/settings", "/model/streaming_metrics", "/model/metrics", "/model/metrics/slow_responses",
+		"/model/metrics/exceptions", "/utils/supported_openai_params":
 	default:
 		return "", false
 	}
@@ -344,7 +365,8 @@ func (keys *KeyRegistry) ssoViewerLocked(r *http.Request, token string) (string,
 	}
 	readOnly, _ := key.Metadata["_minato_sso_view_only"].(bool)
 	user := keys.state.Users[key.UserID]
-	return user.ID, readOnly && user.Role == "internal_user_viewer" && key.Alias == "ui-sso:"+user.ID
+	return user.ID, readOnly && user.Role == "internal_user_viewer" &&
+		(key.Alias == "ui-sso:"+user.ID || key.Alias == "ui-password:"+user.ID)
 }
 
 func (s *uiSSOServer) readiness(w http.ResponseWriter, r *http.Request) {

@@ -18,10 +18,38 @@ func organizationMemberIndex(org organization, userID string) int {
 	return slices.IndexFunc(org.Members, func(member organizationMember) bool { return member.UserID == userID })
 }
 
-func (registry *KeyRegistry) writeOrganizationMember(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
-		return
+func organizationRole(org organization, userID string) string {
+	if userID != "" {
+		if index := organizationMemberIndex(org, userID); index >= 0 {
+			return org.Members[index].Role
+		}
 	}
+	return ""
+}
+
+func (registry *KeyRegistry) organizationCallerLocked(w http.ResponseWriter, r *http.Request) (memoryCaller, bool) {
+	caller, ok := registry.identifyResourceCallerLocked(r)
+	if !ok {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
+	}
+	return caller, ok
+}
+
+func (registry *KeyRegistry) requireOrganizationAdminLocked(w http.ResponseWriter, r *http.Request, org organization) (memoryCaller, bool) {
+	caller, ok := registry.organizationCallerLocked(w, r)
+	if !ok {
+		return caller, false
+	}
+	readOnly := registry.state.Users[caller.user].Role == "internal_user_viewer"
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/organization/info"
+	if caller.admin || (organizationRole(org, caller.user) == "org_admin" && (read || !readOnly)) {
+		return caller, true
+	}
+	modelError(w, http.StatusForbidden, "You do not have access to this organization")
+	return caller, false
+}
+
+func (registry *KeyRegistry) writeOrganizationMember(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		OrgID  string          `json:"organization_id"`
 		UserID string          `json:"user_id"`
@@ -47,6 +75,10 @@ func (registry *KeyRegistry) writeOrganizationMember(w http.ResponseWriter, r *h
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	org, exists := registry.state.Organizations[input.OrgID]
+	caller, allowed := registry.requireOrganizationAdminLocked(w, r, org)
+	if !allowed {
+		return
+	}
 	if !exists {
 		modelError(w, http.StatusNotFound, "Organization not found")
 		return
@@ -69,6 +101,10 @@ func (registry *KeyRegistry) writeOrganizationMember(w http.ResponseWriter, r *h
 		user, ok := membershipUser(next.Users, change.UserID, change.Email, add)
 		if !ok || (change.Role != "" && !slices.Contains([]string{"org_admin", "internal_user", "internal_user_viewer"}, change.Role)) {
 			modelError(w, http.StatusBadRequest, "Invalid organization member or role")
+			return
+		}
+		if !caller.admin && !add && (user.Role == "proxy_admin" || user.Role == "proxy_admin_viewer") {
+			modelError(w, http.StatusForbidden, "Only proxy admins may modify proxy admin memberships")
 			return
 		}
 		index := organizationMemberIndex(org, user.ID)
@@ -103,6 +139,13 @@ func (registry *KeyRegistry) writeOrganizationMember(w http.ResponseWriter, r *h
 		members = append(members, member)
 	}
 	next.Organizations[org.ID] = org
+	if remove {
+		actor := caller.user
+		if caller.admin {
+			actor = "default_user_id"
+		}
+		next.archiveRevokedKeys(registry.state, actor)
+	}
 	if !registry.apply(w, next) {
 		return
 	}

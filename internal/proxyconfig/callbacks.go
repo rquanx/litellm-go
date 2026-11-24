@@ -21,6 +21,16 @@ import (
 )
 
 type callbackSettings struct {
+	DisableUserAgentTags bool `yaml:"disable_add_user_agent_to_request_tags"`
+	CostDiscounts map[string]float64 `yaml:"cost_discount_config"`
+	CostMargins map[string]costMargin `yaml:"cost_margin_config"`
+	SSOTeamDefaults *ssoTeamDefaults `yaml:"default_team_params"`
+	StoreAuditLogs bool `yaml:"store_audit_logs"`
+	DashboardTheme dashboardTheme `yaml:"ui_theme_config"`
+	DropParams bool `yaml:"drop_params"`
+	MaxBudget float64 `yaml:"max_budget"`
+	BudgetDuration string `yaml:"budget_duration"`
+	Timezone string `yaml:"timezone"`
 	Guardrails []genericGuardrailSpec `yaml:"guardrails"`
 	SSOUserDefaults *SSOUserDefaults `yaml:"default_internal_user_params"`
 	AzureTokenRefresh bool                 `yaml:"enable_azure_ad_token_refresh"`
@@ -247,7 +257,7 @@ func (callback *GenericCallback) Start(ctx context.Context) func(runtime.Inferen
 	}
 }
 
-func (callback *GenericCallback) send(ctx context.Context, client *http.Client, batch []runtime.InferenceEvent) {
+func (callback *GenericCallback) send(ctx context.Context, client *http.Client, batch []runtime.InferenceEvent) bool {
 	payload := make([]map[string]any, 0, len(batch))
 	for _, event := range batch {
 		if callback.legacy {
@@ -258,32 +268,34 @@ func (callback *GenericCallback) send(ctx context.Context, client *http.Client, 
 	}
 	switch callback.format {
 	case "single":
+		delivered := true
 		for _, event := range payload {
-			if body, err := json.Marshal(event); err == nil {
-				callback.deliver(ctx, client, body)
+			body, err := json.Marshal(event)
+			if err != nil || !callback.deliver(ctx, client, body) {
+				delivered = false
 			}
 		}
+		return delivered
 	case "ndjson":
 		var body bytes.Buffer
 		encoder := json.NewEncoder(&body)
 		for _, event := range payload {
 			if encoder.Encode(event) != nil {
-				return
+				return false
 			}
 		}
-		callback.deliver(ctx, client, bytes.TrimSuffix(body.Bytes(), []byte("\n")))
+		return callback.deliver(ctx, client, bytes.TrimSuffix(body.Bytes(), []byte("\n")))
 	default:
-		if body, err := json.Marshal(payload); err == nil {
-			callback.deliver(ctx, client, body)
-		}
+		body, err := json.Marshal(payload)
+		return err == nil && callback.deliver(ctx, client, body)
 	}
 }
 
-func (callback *GenericCallback) deliver(ctx context.Context, client *http.Client, body []byte) {
+func (callback *GenericCallback) deliver(ctx context.Context, client *http.Client, body []byte) bool {
 	for attempt := 0; attempt <= callback.retries && ctx.Err() == nil; attempt++ {
 		request, err := http.NewRequestWithContext(ctx, http.MethodPost, callback.endpoint, bytes.NewReader(body))
 		if err != nil {
-			return
+			return false
 		}
 		request.Header.Set("Content-Type", "application/json")
 		for key, value := range callback.headers {
@@ -295,20 +307,21 @@ func (callback *GenericCallback) deliver(ctx context.Context, client *http.Clien
 			response.Body.Close()
 			status := response.StatusCode
 			if status != http.StatusTooManyRequests && status < 500 {
-				return
+				return status >= 200 && status < 300
 			}
 		}
 		if attempt == callback.retries {
-			return
+			return false
 		}
 		timer := time.NewTimer(min(30*time.Second, callback.delay<<attempt))
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return
+			return false
 		}
 	}
+	return false
 }
 
 func standardCallbackPayload(event runtime.InferenceEvent) map[string]any {
@@ -337,7 +350,7 @@ func standardCallbackPayload(event runtime.InferenceEvent) map[string]any {
 		"cache_hit": event.CacheHit, "cache_key": nil, "saved_cache_cost": 0,
 		"cache_read_input_tokens": event.CacheReadInputTokens, "cache_creation_input_tokens": event.CacheCreationInputTokens,
 		"model_map_information": map[string]any{}, "metadata": map[string]any{}, "model_parameters": map[string]any{},
-		"hidden_params": map[string]any{}, "request_tags": []string{}, "end_user": event.EndUser,
+		"hidden_params": map[string]any{}, "request_tags": append([]string{}, event.Tags...), "end_user": event.EndUser,
 		"requester_ip_address": nil, "user_agent": nil, "messages": event.Messages, "response": event.Response,
 		"error_str": message, "error_information": details, "guardrail_information": nil, "standard_built_in_tools_params": nil,
 	}
@@ -349,8 +362,7 @@ func (callbacks GenericCallbacks) Probe(ctx context.Context, service string, eve
 		if callback.name == service && callback.success {
 			probeCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 			defer cancel()
-			callback.send(probeCtx, client, []runtime.InferenceEvent{event})
-			return true
+			return callback.send(probeCtx, client, []runtime.InferenceEvent{event})
 		}
 	}
 	return false

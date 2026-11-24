@@ -7,7 +7,7 @@ import (
 )
 
 func (log *SpendLog) cacheActivity(w http.ResponseWriter, r *http.Request) {
-	if !log.keys.requireMaster(w, r) {
+	if !log.keys.requireAdminRead(w, r) {
 		return
 	}
 	query := r.URL.Query()

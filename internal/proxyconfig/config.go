@@ -33,8 +33,14 @@ type configFile struct {
 	General struct {
 		MasterKey string `yaml:"master_key"`
 		DatabaseURL string `yaml:"database_url"`
+		AllowedIPs []string `yaml:"allowed_ips"`
 		StoreModels bool `yaml:"store_model_in_db"`
 		DisableSpendLogs bool `yaml:"disable_spend_logs"`
+		StoreSpendPayloads bool `yaml:"store_prompts_in_spend_logs"`
+		AlwaysIncludeStreamUsage bool `yaml:"always_include_stream_usage"`
+		DisableResetBudget bool `yaml:"disable_reset_budget"`
+		BudgetResetMin int `yaml:"proxy_budget_rescheduler_min_time"`
+		BudgetResetMax int `yaml:"proxy_budget_rescheduler_max_time"`
 		PublicReadinessDetails bool `yaml:"allow_public_health_readiness_details"`
 		BackgroundHealthChecks bool `yaml:"background_health_checks"`
 		SharedHealthChecks bool `yaml:"use_shared_health_check"`
@@ -44,6 +50,7 @@ type configFile struct {
 		EnableHealthCheckRouting bool `yaml:"enable_health_check_routing"`
 		HealthCheckStaleness int `yaml:"health_check_staleness_threshold"`
 		IgnoreTransientHealthErrors bool `yaml:"health_check_ignore_transient_errors"`
+		EnableMCPRegistry bool `yaml:"enable_mcp_registry"`
 		PassThrough []passThroughConfig `yaml:"pass_through_endpoints"`
 		SearchTools []searchToolConfig `yaml:"search_tools"`
 		UIAccessMode struct {
@@ -51,6 +58,8 @@ type configFile struct {
 		} `yaml:"ui_access_mode"`
 	} `yaml:"general_settings"`
 	Router struct {
+		ProviderBudgets map[string]providerBudget `yaml:"provider_budget_config"`
+		DefaultLitellmParams routerRequestDefaults `yaml:"default_litellm_params"`
 		EnableTagFiltering bool `yaml:"enable_tag_filtering"`
 		TagFilteringMatchAny *bool `yaml:"tag_filtering_match_any"`
 		RedisURL string `yaml:"redis_url"`
@@ -69,8 +78,10 @@ type configFile struct {
 			Samples int `yaml:"max_latency_list_size"`
 		} `yaml:"routing_strategy_args"`
 		Timeout   int                  `yaml:"timeout"`
+		StreamTimeout float64 `yaml:"stream_timeout"`
 		MaxFallbacks *int `yaml:"max_fallbacks"`
 		Retries   int                  `yaml:"num_retries"`
+		RetryAfter int `yaml:"retry_after"`
 		AllowedFails *int `yaml:"allowed_fails"`
 		CooldownTime *float64 `yaml:"cooldown_time"`
 		DisableCooldowns bool `yaml:"disable_cooldowns"`
@@ -82,13 +93,23 @@ type configFile struct {
 type deployment struct {
 	Alias  string `yaml:"model_name" json:"model_name"`
 	Params struct {
+		deploymentRequestDefaults `yaml:",inline"`
+		DropParams *bool `yaml:"drop_params" json:"drop_params,omitempty"`
+		AllowedOpenAIParams []string `yaml:"allowed_openai_params" json:"allowed_openai_params,omitempty"`
+		AdditionalDropParams []string `yaml:"additional_drop_params" json:"additional_drop_params,omitempty"`
 		Model   string `yaml:"model" json:"model"`
+		Provider string `yaml:"custom_llm_provider" json:"custom_llm_provider,omitempty"`
 		APIBase string `yaml:"api_base" json:"api_base,omitempty"`
 		APIKey  string `yaml:"api_key" json:"api_key,omitempty"`
 		Region string `yaml:"region_name" json:"region_name,omitempty"`
+		Timeout float64 `yaml:"timeout" json:"timeout,omitempty"`
+		RequestTimeout float64 `yaml:"request_timeout" json:"request_timeout,omitempty"`
+		StreamTimeout float64 `yaml:"stream_timeout" json:"stream_timeout,omitempty"`
+		NumRetries *int `yaml:"num_retries" json:"num_retries,omitempty"`
 		UseInPassThrough bool `yaml:"use_in_pass_through" json:"use_in_pass_through,omitempty"`
 		CredentialName string `yaml:"litellm_credential_name" json:"litellm_credential_name,omitempty"`
 		APIVersion string `yaml:"api_version" json:"api_version,omitempty"`
+		RealtimeProtocol string `yaml:"realtime_protocol" json:"realtime_protocol,omitempty"`
 		AzureADToken string `yaml:"azure_ad_token" json:"azure_ad_token,omitempty"`
 		AzureTenant string `yaml:"tenant_id" json:"tenant_id,omitempty"`
 		AzureClient string `yaml:"client_id" json:"client_id,omitempty"`
@@ -103,11 +124,16 @@ type deployment struct {
 		TagRegex []string `yaml:"tag_regex" json:"tag_regex,omitempty"`
 		Weight *float64 `yaml:"weight" json:"weight,omitempty"`
 		InputPrice *float64 `yaml:"input_cost_per_token" json:"input_cost_per_token,omitempty"`
+		InputAudioPrice *float64 `yaml:"input_cost_per_audio_token" json:"input_cost_per_audio_token,omitempty"`
+		OutputAudioPrice *float64 `yaml:"output_cost_per_audio_token" json:"output_cost_per_audio_token,omitempty"`
+		CachedAudioPrice *float64 `yaml:"cache_read_input_audio_token_cost" json:"cache_read_input_audio_token_cost,omitempty"`
 		OutputPrice *float64 `yaml:"output_cost_per_token" json:"output_cost_per_token,omitempty"`
 		CacheReadPrice *float64 `yaml:"cache_read_input_token_cost" json:"cache_read_input_token_cost,omitempty"`
 		CacheCreationPrice *float64 `yaml:"cache_creation_input_token_cost" json:"cache_creation_input_token_cost,omitempty"`
 		RPM *int `yaml:"rpm" json:"rpm,omitempty"`
 		TPM *int `yaml:"tpm" json:"tpm,omitempty"`
+		DefaultKeyRPM *int `yaml:"default_api_key_rpm_limit" json:"default_api_key_rpm_limit,omitempty"`
+		DefaultKeyTPM *int `yaml:"default_api_key_tpm_limit" json:"default_api_key_tpm_limit,omitempty"`
 		AWSRegion string `yaml:"aws_region_name" json:"aws_region_name,omitempty"`
 		AWSAccessKey string `yaml:"aws_access_key_id" json:"aws_access_key_id,omitempty"`
 		AWSSecretKey string `yaml:"aws_secret_access_key" json:"aws_secret_access_key,omitempty"`
@@ -139,9 +165,13 @@ type deployment struct {
 		WatsonXSpace string `yaml:"space_id" json:"space_id,omitempty"`
 	} `yaml:"litellm_params" json:"litellm_params"`
 	Info struct {
+		AccessGroups []string `yaml:"access_groups" json:"access_groups,omitempty"`
 		ID        string   `yaml:"id" json:"id,omitempty"`
 		Endpoints []string `yaml:"supported_endpoints" json:"supported_endpoints,omitempty"`
 		Mode      string   `yaml:"mode" json:"mode,omitempty"`
+		CreatedAt *time.Time `yaml:"created_at" json:"created_at,omitempty"`
+		UpdatedAt *time.Time `yaml:"updated_at" json:"updated_at,omitempty"`
+		CreatedBy string `yaml:"-" json:"created_by,omitempty"`
 		DisableBackgroundHealthCheck bool `yaml:"disable_background_health_check" json:"disable_background_health_check,omitempty"`
 		HealthModel string `yaml:"health_check_model" json:"health_check_model,omitempty"`
 		HealthVoice string `yaml:"health_check_voice" json:"health_check_voice,omitempty"`
@@ -153,6 +183,13 @@ type deployment struct {
 }
 
 type Config struct {
+	DisableUserAgentTags bool
+	ProviderBudgets map[string]providerBudget
+	CostSettings costSettings
+	CostAdjustment *CostSettings
+	SSOTeamDefaults *ssoTeamDefaults
+	StoreAuditLogs bool
+	DashboardTheme dashboardTheme
 	azureTokenRefresh bool
 	Agents []runtime.Agent
 	staticAgents []agentConfig
@@ -165,7 +202,9 @@ type Config struct {
 	staticSearchTools []searchToolConfig
 	MasterKey string
 	Timeout   time.Duration
+	StreamTimeout time.Duration
 	NumRetries int
+	RetryAfter time.Duration
 	MaxFallbacks *int
 	RoutingStrategy string
 	EnableTagFiltering bool
@@ -177,8 +216,19 @@ type Config struct {
 	RetryPolicy runtime.RetryPolicy
 	ModelRetryPolicies map[string]runtime.RetryPolicy
 	DatabaseURL string
+	AllowedIPs []string
 	DisableSpendLogs bool
+	StoreSpendPayloads bool
+	DisableResetBudget bool
+	DropParams bool
+	RequestDefaults map[string]any
+	GlobalMaxBudget float64
+	GlobalBudgetDuration string
+	BudgetTimezone string
+	budgetResetMin int
+	budgetResetMax int
 	PublicReadinessDetails bool
+	AlwaysIncludeStreamUsage bool
 	BackgroundHealthInterval time.Duration
 	SharedHealthChecks bool
 	HealthCheckConcurrency int
@@ -204,10 +254,12 @@ type Config struct {
 	publicModelGroups []string
 	publicModelLinks map[string]any
 	publicMCPServers []string
+	enableMCPRegistry bool
 	ResponsePolling runtime.ResponsePollingConfig
 	PollingRedisURL string
 	InferenceCache runtime.InferenceCacheConfig
 	InferenceCacheRedis *redis.Options
+	inferenceCacheTopology *cacheConnectionSettings
 	RoutingRedis *redis.Options
 	RoutingRedisNamespace string
 }
@@ -238,8 +290,9 @@ func load(reader io.Reader, configDirectory string) (Config, error) {
 	if len(file.SearchTools) == 0 {
 		file.SearchTools = file.General.SearchTools
 	}
-	if len(file.Models)+len(file.SearchTools)+len(file.General.PassThrough)+len(file.MCPServers)+len(file.Agents) == 0 || file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 {
-		return Config{}, errors.New("configure a model, search tool, pass-through endpoint or MCP server and use valid router settings")
+	if file.Router.Timeout < 0 || file.Router.Timeout > 86400 || file.Router.Retries < 0 || file.Router.Retries > 8 ||
+		file.Router.RetryAfter < 0 || file.Router.StreamTimeout < 0 || file.Router.StreamTimeout > 86400 || math.IsNaN(file.Router.StreamTimeout) {
+		return Config{}, errors.New("invalid router timeout or retry count")
 	}
 	strategy := file.Router.Strategy
 	if strategy == "" {
@@ -279,13 +332,53 @@ func load(reader io.Reader, configDirectory string) (Config, error) {
 			return Config{}, errors.New("invalid model_group_retry_policy")
 		}
 	}
-	config := Config{Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries, MaxFallbacks: file.Router.MaxFallbacks,
+	budgetResetMin, budgetResetMax := file.General.BudgetResetMin, file.General.BudgetResetMax
+	if budgetResetMin == 0 {
+		budgetResetMin = 597
+	}
+	if budgetResetMax == 0 {
+		budgetResetMax = 605
+	}
+	if budgetResetMin < 1 || budgetResetMax < budgetResetMin || budgetResetMax > 86400 {
+		return Config{}, errors.New("invalid budget reset scheduler interval")
+	}
+	if file.Callbacks.MaxBudget < 0 || math.IsNaN(file.Callbacks.MaxBudget) || math.IsInf(file.Callbacks.MaxBudget, 0) {
+		return Config{}, errors.New("max_budget must be a finite non-negative amount")
+	}
+	if file.Callbacks.MaxBudget > 0 {
+		if _, err := nextBudgetReset(time.Now(), file.Callbacks.BudgetDuration); err != nil {
+			return Config{}, errors.New("max_budget requires a valid budget_duration")
+		}
+	}
+	if err := file.Callbacks.SSOTeamDefaults.validate(); err != nil {
+		return Config{}, err
+	}
+	if err := validateProviderBudgets(file.Router.ProviderBudgets); err != nil {
+		return Config{}, err
+	}
+	cost := costSettings{Discounts: file.Callbacks.CostDiscounts, Margins: file.Callbacks.CostMargins}
+	if err := cost.validate(); err != nil {
+		return Config{}, err
+	}
+	config := Config{DisableUserAgentTags: file.Callbacks.DisableUserAgentTags, ProviderBudgets: file.Router.ProviderBudgets, CostSettings: cost, SSOTeamDefaults: file.Callbacks.SSOTeamDefaults, StoreAuditLogs: file.Callbacks.StoreAuditLogs, DashboardTheme: file.Callbacks.DashboardTheme, Timeout: time.Duration(file.Router.Timeout) * time.Second, NumRetries: file.Router.Retries, MaxFallbacks: file.Router.MaxFallbacks,
 		RoutingStrategy: strategy, models: file.Models, fallbacks: file.Router.Fallbacks, defaultFallbacks: file.Router.DefaultFallbacks,
 		contextFallbacks: file.Router.ContextFallbacks, policyFallbacks: file.Router.PolicyFallbacks,
 		LatencyBuffer: args.Buffer, LatencySamples: args.Samples, modelGroupAliases: file.Router.ModelGroupAliases,
-		DisableSpendLogs: file.General.DisableSpendLogs, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedFails: allowedFails,
+		DisableSpendLogs: file.General.DisableSpendLogs, StoreSpendPayloads: file.General.StoreSpendPayloads, PublicReadinessDetails: file.General.PublicReadinessDetails, AllowedIPs: slices.Clone(file.General.AllowedIPs), AllowedFails: allowedFails,
+		AlwaysIncludeStreamUsage: file.General.AlwaysIncludeStreamUsage,
+		RetryAfter: time.Duration(min(file.Router.RetryAfter, 8)) * time.Second,
+		DisableResetBudget: file.General.DisableResetBudget, BudgetTimezone: file.Callbacks.Timezone,
+		DropParams: file.Callbacks.DropParams,
+		GlobalMaxBudget: file.Callbacks.MaxBudget, GlobalBudgetDuration: file.Callbacks.BudgetDuration,
+		budgetResetMin: budgetResetMin, budgetResetMax: budgetResetMax,
 		Cooldown: time.Duration(cooldownSeconds * float64(time.Second)), RetryPolicy: file.Router.RetryPolicy,
 		ModelRetryPolicies: file.Router.ModelRetryPolicies}
+	requestDefaults, err := requestDefaultFields(file.Router.DefaultLitellmParams)
+	if err != nil {
+		return Config{}, errors.New("invalid default_litellm_params")
+	}
+	config.RequestDefaults = requestDefaults
+	config.StreamTimeout = time.Duration(file.Router.StreamTimeout * float64(time.Second))
 	guardrails, err := prepareGenericGuardrails(file.Callbacks.Guardrails)
 	if err != nil {
 		return Config{}, err
@@ -330,6 +423,7 @@ func load(reader io.Reader, configDirectory string) (Config, error) {
 	config.publicModelGroups = slices.Clone(file.Callbacks.PublicModelGroups)
 	config.publicModelLinks = file.Callbacks.PublicModelLinks
 	config.publicMCPServers = slices.Clone(file.Callbacks.PublicMCPServers)
+	config.enableMCPRegistry = file.General.EnableMCPRegistry
 	polling := file.Callbacks.Responses.Background
 	config.ResponsePolling.Native = polling.Native
 	if polling.TTL < 0 || polling.TTL > 86400 {
@@ -666,7 +760,7 @@ func (entry deployment) candidates() ([]runtime.Candidate, error) {
 }
 
 func (entry deployment) candidate() (runtime.Candidate, error) {
-	provider, model, found := strings.Cut(entry.Params.Model, "/")
+	provider, model, found := deploymentIdentity(entry.Params.Model, entry.Params.Provider)
 	runway := provider == "runwayml"
 	runwaySpeech := runway && (entry.Info.Mode == "audio_speech" || strings.HasPrefix(model, "eleven_") || slices.Contains(entry.Info.Endpoints, "/v1/audio/speech"))
 	pgVector := provider == "pg_vector"
@@ -688,7 +782,7 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	documentIntelligence := provider == "azure_ai" && (strings.Contains(model, "doc-intelligence") || strings.Contains(model, "documentintelligence"))
 	if entry.Alias == "" || model == "" || !found || (!supportsOpenAITransport(provider) && provider != "anthropic" &&
 		provider != "gemini" && provider != "vertex_ai" && provider != "azure" && provider != "bedrock" && !rerankProvider(provider) && !nativeRerank && !nativeAudio && !mistralOCR && !mistralAudio && !otherMultipartAudio && !runway && !pgVector && !milvus && !minimaxSpeech) {
-		return runtime.Candidate{}, errors.New("model_name and a supported provider-prefixed model are required")
+		return runtime.Candidate{}, errors.New("model_name and a model with a supported provider are required")
 	}
 	if provider == "openai" {
 		model, _ = strings.CutPrefix(model, "chat_completions/")
@@ -705,6 +799,18 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if (entry.Params.Weight != nil && (*entry.Params.Weight < 0 || math.IsNaN(*entry.Params.Weight) || math.IsInf(*entry.Params.Weight, 0))) ||
 		(entry.Params.RPM != nil && *entry.Params.RPM < 0) || (entry.Params.TPM != nil && *entry.Params.TPM < 0) {
 		return runtime.Candidate{}, errors.New("weight, rpm and tpm must be finite non-negative values")
+	}
+	for _, timeout := range []float64{entry.Params.Timeout, entry.Params.RequestTimeout, entry.Params.StreamTimeout} {
+		if timeout < 0 || timeout > 86400 || math.IsNaN(timeout) {
+			return runtime.Candidate{}, errors.New("invalid deployment timeout")
+		}
+	}
+	if entry.Params.NumRetries != nil && (*entry.Params.NumRetries < 0 || *entry.Params.NumRetries > 8) {
+		return runtime.Candidate{}, errors.New("invalid deployment retry count")
+	}
+	if (entry.Params.DefaultKeyRPM != nil && *entry.Params.DefaultKeyRPM < 0) ||
+		(entry.Params.DefaultKeyTPM != nil && *entry.Params.DefaultKeyTPM < 0) {
+		return runtime.Candidate{}, errors.New("default API key limits must be non-negative")
 	}
 	if entry.Info.HealthTimeout < 0 || entry.Info.HealthTimeout >= float64(math.MaxInt64)/float64(time.Second) || math.IsNaN(entry.Info.HealthTimeout) ||
 		(entry.Info.HealthMaxTokens != nil && *entry.Info.HealthMaxTokens <= 0) {
@@ -989,7 +1095,8 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		}
 	}
 	azureSpeech := provider == "azure" && strings.HasPrefix(model, "speech/")
-	if provider == "azure" && !azureSpeech && version == "" && !strings.HasSuffix(strings.TrimRight(base, "/"), "/openai/v1") {
+	azureRealtime := provider == "azure" && (entry.Info.Mode == "realtime" || entry.Params.RealtimeProtocol != "")
+	if provider == "azure" && !azureSpeech && !azureRealtime && version == "" && !strings.HasSuffix(strings.TrimRight(base, "/"), "/openai/v1") {
 		return runtime.Candidate{}, errors.New("Azure deployment API requires api_version")
 	}
 	endpoint := "chat-completions"
@@ -1118,7 +1225,23 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 	if err != nil {
 		return runtime.Candidate{}, err
 	}
-	return runtime.Candidate{SourceID: provider, Provider: provider, ModelID: model, Region: region,
+	audioPrices, err := realtimeAudioPrices(entry.Params.Model, entry.Params.InputAudioPrice, entry.Params.OutputAudioPrice, entry.Params.CachedAudioPrice)
+	if err != nil {
+		return runtime.Candidate{}, err
+	}
+	requestDefaults, err := requestDefaultFields(entry.Params.deploymentRequestDefaults)
+	if err != nil {
+		return runtime.Candidate{}, errors.New("invalid deployment request defaults")
+	}
+	return runtime.Candidate{DropParams: entry.Params.DropParams, RequestDefaults: requestDefaults,
+		AllowedOpenAIParams: slices.Clone(entry.Params.AllowedOpenAIParams),
+		AdditionalDropParams: slices.Clone(entry.Params.AdditionalDropParams),
+		SupportedOpenAIParams: deploymentOpenAIParams(entry.Params.Model, provider, model),
+		ReasoningCapabilities: deploymentReasoningCapabilities(provider, model),
+		DefaultKeyRPM: entry.Params.DefaultKeyRPM, DefaultKeyTPM: entry.Params.DefaultKeyTPM,
+		Timeout: time.Duration(firstNonzeroTimeout(entry.Params.Timeout, entry.Params.RequestTimeout) * float64(time.Second)),
+		StreamTimeout: time.Duration(entry.Params.StreamTimeout * float64(time.Second)), NumRetries: entry.Params.NumRetries,
+		SourceID: provider, Provider: provider, ModelID: model, Region: region,
 		APIBase: base, APIKey: key, Endpoint: endpoint, APIVersion: version, DeploymentID: entry.Info.ID,
 		Headers: headers, ParamMappings: settings.ParamMappings, RelativeAPIBase: hasSettings, TextOnly: settings.Special.TextOnly,
 		Tags: slices.Clone(entry.Params.Tags), TagRegex: patterns, RoutingGroup: entry.Alias, Weight: entry.Params.Weight, RPM: entry.Params.RPM, TPM: entry.Params.TPM, Bedrock: bedrock,
@@ -1127,8 +1250,16 @@ func (entry deployment) candidate() (runtime.Candidate, error) {
 		HealthTimeout: time.Duration(entry.Info.HealthTimeout * float64(time.Second)), HealthMaxTokens: entry.Info.HealthMaxTokens,
 		HealthSupportsMaxTokens: entry.Info.HealthSupportsMaxTokens, HealthReasoningEffort: entry.Info.HealthReasoningEffort,
 		UseInPassThrough: entry.Params.UseInPassThrough,
-		TokenPrice: price, UsagePrice: usagePrice, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
+		TokenPrice: price, UsagePrice: usagePrice, RealtimeAudio: audioPrices, CacheReadPrice: cachePrices[0], CacheCreationPrice: cachePrices[1],
+		RealtimeProtocol: entry.Params.RealtimeProtocol,
 		Vertex: vertex, AzureADToken: azureADToken, AzureToken: azureToken, AzureIdentityKey: azureIdentityKey, WatsonX: watsonx}, nil
+}
+
+func firstNonzeroTimeout(timeout, fallback float64) float64 {
+	if timeout != 0 {
+		return timeout
+	}
+	return fallback
 }
 
 func (entry deployment) bedrockConfig() (*runtime.BedrockConfig, error) {

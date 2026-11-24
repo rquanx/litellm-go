@@ -57,6 +57,62 @@ func TestRedisRoutingCoordinatesTwoProxies(t *testing.T) {
 	}
 	first, writer := build()
 	second, observer := build()
+	if allowed, err := writer.AcquireKeyParallel(ctx, "fixture-key", "first", 1); err != nil || !allowed {
+		t.Fatalf("first concurrency lease failed: %v, %v", allowed, err)
+	}
+	if allowed, err := observer.AcquireKeyParallel(ctx, "fixture-key", "second", 1); err != nil || allowed {
+		t.Fatalf("concurrency denial across replicas failed: %v, %v", allowed, err)
+	}
+	leaseKey := writer.prefix("fixture-key") + "key-parallel"
+	score, err := writer.ZScore(ctx, leaseKey, "first").Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.ZAdd(ctx, leaseKey, redis.Z{Score: score - 300, Member: "first"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := observer.RenewKeyParallel(ctx, "fixture-key", "first"); !active || err != nil {
+		t.Fatalf("active concurrency lease was not renewed: %v %v", active, err)
+	}
+	if renewed, err := writer.ZScore(ctx, leaseKey, "first").Result(); err != nil || renewed < score {
+		t.Fatalf("renewed lease expires early: %v %v", renewed, err)
+	}
+	if err := writer.ReleaseKeyParallel(ctx, "fixture-key", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := writer.RenewKeyParallel(ctx, "fixture-key", "first"); active || err != nil {
+		t.Fatalf("released lease was retained: %v %v", active, err)
+	}
+	if allowed, err := observer.AcquireKeyParallel(ctx, "fixture-key", "second", 1); err != nil || !allowed {
+		t.Fatalf("released concurrency lease still counted: %v, %v", allowed, err)
+	}
+	scope := runtime.OwnerRateLimits{Identity: "fixture-key", RPM: &limit}
+	fresh := runtime.OwnerRateLimits{Identity: "fresh-team", RPM: &limit}
+	if retry, err := writer.ReserveRequestRates(ctx, []runtime.OwnerRateLimits{scope}); err != nil || retry != 0 {
+		t.Fatalf("first request should enter the key window: %d, %v", retry, err)
+	}
+	if retry, err := observer.ReserveRequestRates(ctx, []runtime.OwnerRateLimits{fresh, scope}); err != nil || retry < 1 || retry > 60 {
+		t.Fatalf("second replica should see the same window: %d, %v", retry, err)
+	}
+	if retry, err := observer.ReserveRequestRates(ctx, []runtime.OwnerRateLimits{fresh}); err != nil || retry != 0 {
+		t.Fatalf("a rejected request consumed another scope's allowance: %d, %v", retry, err)
+	}
+	window, retry, err := writer.ReserveKeyTokens(ctx, "fixture-key", 4, 2)
+	if err != nil || retry != 0 || window == "" {
+		t.Fatalf("first token reservation failed: %q %d %v", window, retry, err)
+	}
+	if err := writer.AdjustKeyTokens(ctx, "fixture-key", window, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, retry, err := observer.ReserveKeyTokens(ctx, "fixture-key", 4, 1); err != nil || retry < 1 || retry > 60 {
+		t.Fatalf("second replica should see settled usage: %d, %v", retry, err)
+	}
+	if err := writer.AdjustKeyTokens(ctx, "fixture-key", "stale", -4); err != nil {
+		t.Fatal(err)
+	}
+	if _, retry, err := observer.ReserveKeyTokens(ctx, "fixture-key", 4, 1); err != nil || retry < 1 {
+		t.Fatalf("stale settlement must not reduce the active window: %d, %v", retry, err)
+	}
 	call := func(server *runtime.Server, model string, status int) {
 		t.Helper()
 		request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"`+model+`","messages":[{"role":"user","content":"fixture"}]}`))

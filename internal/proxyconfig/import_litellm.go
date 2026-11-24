@@ -83,6 +83,7 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	snapshot := time.Now().UTC()
 	rows, err := db.QueryContext(ctx, `SELECT to_jsonb(key_row) FROM "LiteLLM_VerificationToken" AS key_row`)
 	if err != nil {
 		return 0, errors.New("could not read LiteLLM_VerificationToken")
@@ -94,7 +95,7 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 		if rows.Scan(&payload) != nil {
 			return 0, errors.New("could not read a LiteLLM virtual key")
 		}
-		token, key, blocked, err := decodeLiteLLMKey(payload)
+		token, key, blocked, err := decodeLiteLLMKeyForState(payload, nil, snapshot)
 		if err != nil {
 			return 0, err
 		}
@@ -104,6 +105,23 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 	}
 	if rows.Err() != nil {
 		return 0, errors.New("could not finish reading LiteLLM virtual keys")
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	tiers := make(map[string]bool)
+	for _, key := range keys {
+		if key.BudgetID == "" || tiers[key.BudgetID] {
+			continue
+		}
+		var payload []byte
+		if err := db.QueryRowContext(ctx, `SELECT to_jsonb(b) FROM `+budgetTable+` b WHERE budget_id=$1`, key.BudgetID).Scan(&payload); err != nil {
+			return 0, fmt.Errorf("could not read linked budget for virtual key %q: %w", key.Alias, err)
+		}
+		if err := validateImportedLinkedBudget(payload, snapshot, true); err != nil {
+			return 0, fmt.Errorf("virtual key %q: %w", key.Alias, err)
+		}
+		tiers[key.BudgetID] = true
 	}
 	if len(keys) == 0 {
 		return 0, nil
@@ -116,10 +134,10 @@ func ImportLiteLLMKeys(db *sql.DB) (int, error) {
 }
 
 func decodeLiteLLMKey(payload []byte) (string, virtualKey, bool, error) {
-	return decodeLiteLLMKeyForState(payload, nil)
+	return decodeLiteLLMKeyForState(payload, nil, time.Now().UTC())
 }
 
-func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtualKey, bool, error) {
+func decodeLiteLLMKeyForState(payload []byte, state *accessState, snapshot time.Time) (string, virtualKey, bool, error) {
 	var key virtualKey
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(payload, &fields) != nil || fields == nil {
@@ -129,30 +147,66 @@ func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtu
 		return "", key, true, nil
 	}
 	expires, created := fields["expires"], fields["created_at"]
+	reset := fields["budget_reset_at"]
 	delete(fields, "expires")
 	delete(fields, "created_at")
+	delete(fields, "budget_reset_at")
+	delete(fields, "imported_spend")
+	delete(fields, "spend_identity")
+	delete(fields, "restricted_access_group_ids")
+	settings, err := importRouterSettings(fields)
+	if err != nil {
+		return "", key, false, err
+	}
+	windows := fields["budget_limits"]
+	delete(fields, "budget_limits")
+	if key.BudgetLimits, err = decodeImportedBudgetWindows(windows, snapshot); err != nil {
+		return "", key, false, err
+	}
+	if state == nil && len(key.BudgetLimits) != 0 {
+		return "", key, false, errors.New("parallel budget windows require the LiteLLM access import")
+	}
 	keyFields, _ := json.Marshal(fields)
 	if json.Unmarshal(keyFields, &key) != nil {
 		return "", key, false, errors.New("invalid LiteLLM virtual key")
 	}
-	var err error
+	key.RouterSettings = settings
 	if key.Expires, err = liteLLMTimestamp(expires); err != nil {
 		return "", key, false, errors.New("invalid LiteLLM key expiration")
 	}
 	if key.CreatedAt, err = liteLLMTimestamp(created); err != nil {
 		return "", key, false, errors.New("invalid LiteLLM key creation time")
 	}
-	for _, field := range []string{"agent_id", "budget_id",
-		"max_budget", "max_parallel_requests", "tpm_limit", "rpm_limit", "object_permission_id", "allowed_routes",
-		"allowed_cache_controls", "access_group_ids", "permissions", "policies", "router_settings", "config", "aliases",
-		"model_max_budget", "budget_limits", "auto_rotate", "budget_duration"} {
+	key.BudgetResetAt, key.ImportedSpend, err = readImportedBudget(key.MaxBudget, key.BudgetDuration, reset, fields["spend"], snapshot)
+	if err != nil {
+		return "", key, false, fmt.Errorf("virtual key %q: %w", key.Alias, err)
+	}
+	if key.RPMLimit != nil && *key.RPMLimit < 0 {
+		return "", key, false, fmt.Errorf("virtual key %q has a negative rpm_limit", key.Alias)
+	}
+	if key.TPMLimit != nil && *key.TPMLimit < 0 {
+		return "", key, false, fmt.Errorf("virtual key %q has a negative tpm_limit", key.Alias)
+	}
+	if key.ParallelLimit != nil && *key.ParallelLimit < 0 {
+		return "", key, false, fmt.Errorf("virtual key %q has a negative max_parallel_requests", key.Alias)
+	}
+	for _, field := range []string{"agent_id",
+		"object_permission_id", "allowed_routes",
+		"allowed_cache_controls", "permissions", "policies", "config", "aliases",
+		"auto_rotate"} {
 		switch string(fields[field]) {
 		case "", "null", "[]", "{}", "\"\"", "false":
 		default:
 			return "", key, false, fmt.Errorf("virtual key %q uses unsupported field %s", key.Alias, field)
 		}
 	}
-	if slices.Contains(key.Models, "all-proxy-models") || (key.TeamID == "" && slices.Contains(key.Models, "all-team-models")) {
+	if err := validateKeyModelBudgets(key.ModelBudgets, true); err != nil {
+		return "", key, false, fmt.Errorf("virtual key %q: %w", key.Alias, err)
+	}
+	if len(key.AccessGroupIDs) != 0 && (state == nil || !state.validAccessGroupIDs(key.AccessGroupIDs)) {
+		return "", key, false, fmt.Errorf("virtual key %q refers to a missing access group", key.Alias)
+	}
+	if key.TeamID == "" && slices.Contains(key.Models, "all-team-models") && (state == nil || state.Projects[key.ProjectID].TeamID == "") {
 		return "", key, false, fmt.Errorf("virtual key %q uses an unsupported dynamic model scope", key.Alias)
 	}
 	if key.UserID != "" || key.TeamID != "" || key.OrgID != "" || key.ProjectID != "" {
@@ -171,6 +225,33 @@ func decodeLiteLLMKeyForState(payload []byte, state *accessState) (string, virtu
 	return hex.EncodeToString(digest), key, false, nil
 }
 
+func readImportedBudget(maximum *float64, duration string, rawReset, rawSpend json.RawMessage, snapshot time.Time) (*time.Time, *importedKeySpend, error) {
+	reset, err := liteLLMTimestamp(rawReset)
+	if err != nil {
+		return nil, nil, errors.New("invalid budget reset")
+	}
+	if duration != "" {
+		if _, err := nextBudgetReset(snapshot, duration); err != nil || reset == nil {
+			return nil, nil, errors.New("invalid budget schedule")
+		}
+	}
+	if maximum != nil && *maximum < 0 {
+		return nil, nil, errors.New("negative budget")
+	}
+	var spend *float64
+	if len(rawSpend) != 0 && (json.Unmarshal(rawSpend, &spend) != nil || (spend != nil && *spend < 0)) {
+		return nil, nil, errors.New("invalid recorded spend")
+	}
+	if spend == nil {
+		return reset, nil, nil
+	}
+	record := &importedKeySpend{Amount: *spend, AsOf: snapshot}
+	if duration != "" {
+		record.ResetAt = reset
+	}
+	return reset, record, nil
+}
+
 func liteLLMTimestamp(raw json.RawMessage) (*time.Time, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
@@ -187,7 +268,8 @@ func liteLLMTimestamp(raw json.RawMessage) (*time.Time, error) {
 }
 
 func readLiteLLMModels(ctx context.Context, tx *sql.Tx, salt string) ([]deployment, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT model_id, model_name, litellm_params, COALESCE(model_info, '{}'::jsonb)
+	rows, err := tx.QueryContext(ctx, `SELECT model_id, model_name, litellm_params,
+		COALESCE(model_info, '{}'::jsonb) - 'created_at' - 'updated_at' - 'created_by', created_at, updated_at, created_by
 		FROM "LiteLLM_ProxyModelTable" ORDER BY created_at, model_id`)
 	if err != nil {
 		return nil, errors.New("could not read LiteLLM_ProxyModelTable")
@@ -198,7 +280,7 @@ func readLiteLLMModels(ctx context.Context, tx *sql.Tx, salt string) ([]deployme
 		var model deployment
 		var id string
 		var params, info []byte
-		if err := rows.Scan(&id, &model.Alias, &params, &info); err != nil {
+		if err := rows.Scan(&id, &model.Alias, &params, &info, &model.Info.CreatedAt, &model.Info.UpdatedAt, &model.Info.CreatedBy); err != nil {
 			return nil, errors.New("could not read a LiteLLM deployment")
 		}
 		params, err = decryptLiteLLMParams(params, salt)

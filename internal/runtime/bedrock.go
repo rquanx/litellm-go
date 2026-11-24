@@ -53,21 +53,9 @@ func authorizeBedrock(ctx context.Context, request *http.Request, candidate Cand
 }
 
 func signAWSRequest(ctx context.Context, request *http.Request, config *BedrockConfig, body []byte, service string) error {
-	if config == nil || config.Region == "" {
-		return errors.New("AWS signing requires a region and credential")
-	}
-	credentials := aws.Credentials{
-		AccessKeyID: config.AccessKey, SecretAccessKey: config.SecretKey, SessionToken: config.SessionToken,
-	}
-	if !credentials.HasKeys() && config.Credentials != nil {
-		var err error
-		credentials, err = config.Credentials.Retrieve(ctx)
-		if err != nil {
-			return errors.New("could not retrieve AWS credentials")
-		}
-	}
-	if !credentials.HasKeys() {
-		return errors.New("AWS signing requires credentials")
+	credentials, err := bedrockSigningCredentials(ctx, config)
+	if err != nil {
+		return err
 	}
 	hash := sha256.Sum256(body)
 	encoded := hex.EncodeToString(hash[:])
@@ -84,6 +72,26 @@ func signAWSRequest(ctx context.Context, request *http.Request, config *BedrockC
 	return v4.NewSigner().SignHTTP(ctx, credentials, request, encoded, service, region, time.Now(), func(options *v4.SignerOptions) {
 		options.DisableURIPathEscaping = service == "s3"
 	})
+}
+
+func bedrockSigningCredentials(ctx context.Context, config *BedrockConfig) (aws.Credentials, error) {
+	if config == nil || config.Region == "" {
+		return aws.Credentials{}, errors.New("AWS signing requires a region and credential")
+	}
+	credentials := aws.Credentials{
+		AccessKeyID: config.AccessKey, SecretAccessKey: config.SecretKey, SessionToken: config.SessionToken,
+	}
+	if !credentials.HasKeys() && config.Credentials != nil {
+		var err error
+		credentials, err = config.Credentials.Retrieve(ctx)
+		if err != nil {
+			return aws.Credentials{}, errors.New("could not retrieve AWS credentials")
+		}
+	}
+	if !credentials.HasKeys() {
+		return aws.Credentials{}, errors.New("AWS signing requires credentials")
+	}
+	return credentials, nil
 }
 
 func chatToBedrock(chat map[string]any) map[string]any {

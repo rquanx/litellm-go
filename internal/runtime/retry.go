@@ -55,17 +55,33 @@ type attemptPlan struct {
 	fallbacks int
 	policy RetryPolicy
 	modelPolicy RetryPolicy
+	deploymentRetries *int
+	retryAfter time.Duration
 }
 
 func (s *Server) attemptPlan(alias string) attemptPlan {
 	return attemptPlan{retries: s.config.NumRetries, remaining: s.config.NumRetries, maxFallbacks: s.config.MaxFallbacks,
-		policy: s.config.RetryPolicy, modelPolicy: s.config.ModelRetryPolicies[alias]}
+		policy: s.config.RetryPolicy, modelPolicy: s.config.ModelRetryPolicies[alias], retryAfter: s.config.RetryAfter}
+}
+
+func (s *Server) routeAttemptPlan(route Route) attemptPlan {
+	plan := s.attemptPlan(route.Alias)
+	if route.RequestRetries != nil {
+		plan.retries = *route.RequestRetries
+		plan.remaining = plan.retries
+	}
+	if route.RequestRetryPolicy != nil {
+		plan.modelPolicy = route.RequestRetryPolicy
+	}
+	return plan
 }
 
 func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Header, retryable bool, body []byte, route *Route, admitted bool) bool {
+	plan.deploymentRetries = nil
 	if !admitted {
 		return plan.advance(ctx, status, headers, retryable, route.Candidates)
 	}
+	plan.deploymentRetries = route.Candidates[plan.index].NumRetries
 	kind := ""
 	if len(body) > 0 && !plan.specialized && route.Candidates[plan.index].RoutingGroup != "" {
 		kind = specializedFailure(status, body)
@@ -95,7 +111,7 @@ func (plan *attemptPlan) next(ctx context.Context, status int, headers http.Head
 			limit, set = plan.policy[name]
 		}
 		if set {
-			if plan.used < limit && ctx.Err() == nil && waitForRetry(ctx, headers, plan.used) {
+			if plan.used < limit && ctx.Err() == nil && plan.waitForRetry(ctx, headers) {
 				plan.used++
 				return true
 			}
@@ -170,11 +186,18 @@ func (plan *attemptPlan) advanceWithBackup(ctx context.Context, status int, head
 	if !retryable || ctx.Err() != nil {
 		return false
 	}
-	if plan.remaining > 0 && plan.used < plan.retries && (status == 0 || retryableStatus(status)) &&
+	remaining, limit := plan.remaining, plan.retries
+	if plan.deploymentRetries != nil {
+		limit = *plan.deploymentRetries
+		remaining = limit - plan.used
+	}
+	if remaining > 0 && plan.used < limit && (status == 0 || retryableStatus(status)) &&
 		(status != http.StatusTooManyRequests || !hasBackup) {
-		if waitForRetry(ctx, headers, plan.used) {
+		if plan.waitForRetry(ctx, headers) {
 			plan.used++
-			plan.remaining--
+			if plan.deploymentRetries == nil {
+				plan.remaining--
+			}
 			return true
 		}
 		if ctx.Err() != nil {
@@ -189,8 +212,8 @@ func (plan *attemptPlan) advanceWithBackup(ctx context.Context, status int, head
 	return true
 }
 
-func waitForRetry(ctx context.Context, headers http.Header, used int) bool {
-	wait := retryDelay(headers, used)
+func (plan *attemptPlan) waitForRetry(ctx context.Context, headers http.Header) bool {
+	wait := retryDelay(headers, plan.used, plan.retryAfter)
 	if wait > 8*time.Second {
 		return false
 	}
@@ -204,7 +227,7 @@ func waitForRetry(ctx context.Context, headers http.Header, used int) bool {
 	}
 }
 
-func retryDelay(headers http.Header, used int) time.Duration {
+func retryDelay(headers http.Header, used int, minimum time.Duration) time.Duration {
 	raw := headers.Get("Retry-After")
 	if seconds, err := strconv.Atoi(raw); err == nil && seconds >= 0 {
 		if seconds > 8 {
@@ -215,7 +238,7 @@ func retryDelay(headers http.Header, used int) time.Duration {
 	if when, err := http.ParseTime(raw); err == nil {
 		return time.Until(when)
 	}
-	return min(500*time.Millisecond<<used, 8*time.Second)
+	return min(max(500*time.Millisecond<<used, minimum), 8*time.Second)
 }
 
 func (plan *attemptPlan) canFallback() bool {

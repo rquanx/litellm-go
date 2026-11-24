@@ -14,6 +14,9 @@ type cooldownWindow struct {
 }
 
 func (s *Server) admitDeployment(ctx context.Context, candidate Candidate, payload requestPayload) (*capacityReservation, bool) {
+	if s.config.CheckProviderBudget != nil && !s.config.CheckProviderBudget(ctx, candidate.Provider) {
+		return nil, false
+	}
 	track := s.tracksCapacity(candidate)
 	if store := s.config.RoutingState; store != nil && candidate.DeploymentID != "" && (track || s.config.Cooldown > 0) {
 		var rpm, tpm, tokens int

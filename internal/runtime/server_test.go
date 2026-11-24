@@ -10,6 +10,44 @@ import (
 	"testing"
 )
 
+func TestRootHealthEndpoint(t *testing.T) {
+	server := NewServer(Config{})
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || result.Body.String() != `{"status":"ok"}` {
+		t.Fatalf("unexpected root health response: %d %q", result.Code, result.Body.String())
+	}
+}
+
+func TestAllowedIPFilter(t *testing.T) {
+	server := NewServer(Config{AllowedIPs: []string{"192.0.2.0/24"}})
+	allowed := httptest.NewRequest(http.MethodGet, "/", nil)
+	allowed.RemoteAddr = "192.0.2.7:1234"
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, allowed)
+	if result.Code != http.StatusOK {
+		t.Fatalf("allowed IP was rejected: %d %s", result.Code, result.Body.String())
+	}
+	denied := httptest.NewRequest(http.MethodGet, "/", nil)
+	denied.RemoteAddr = "198.51.100.7:1234"
+	result = httptest.NewRecorder()
+	server.ServeHTTP(result, denied)
+	if result.Code != http.StatusForbidden {
+		t.Fatalf("disallowed IP was accepted: %d %s", result.Code, result.Body.String())
+	}
+}
+
+func TestAnthropicEventLoggingBatchIsAccepted(t *testing.T) {
+	server := NewServer(Config{AuthorizeInference: true})
+	request := httptest.NewRequest(http.MethodPost, "/api/event_logging/batch", strings.NewReader(`{"events":[]}`))
+	result := httptest.NewRecorder()
+	server.ServeHTTP(result, request)
+	if result.Code != http.StatusOK || result.Body.String() != `{"status":"ok"}` {
+		t.Fatalf("unexpected telemetry response: %d %s", result.Code, result.Body.String())
+	}
+}
+
 func TestResponsesRouteAndFallback(t *testing.T) {
 	primary := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.WriteHeader(http.StatusTooManyRequests)
@@ -30,7 +68,7 @@ func TestResponsesRouteAndFallback(t *testing.T) {
 	}))
 	defer backup.Close()
 
-	server := NewServer(Config{Token: "runtime-token", HTTPClient: backup.Client()})
+	server := NewServer(Config{Token: "runtime-token", RoutePublicationToken: "runtime-token", HTTPClient: backup.Client()})
 	putRoute(t, server, Route{Alias: "demo.production.classify", Version: "1", Candidates: []Candidate{
 		{SourceID: "primary", ModelID: "primary-model", APIBase: primary.URL, APIKey: "one", Endpoint: "responses"},
 		{SourceID: "opencode", ModelID: "backup-model", APIBase: backup.URL, APIKey: "two", Endpoint: "chat-completions"},
@@ -69,7 +107,7 @@ func TestClientErrorDoesNotFallback(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"error":{"type":"invalid_request_error"}}`))
 	}))
 	defer upstream.Close()
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{
 		{ModelID: "model-a", APIBase: upstream.URL, Endpoint: "responses"},
 		{ModelID: "model-b", APIBase: upstream.URL, Endpoint: "responses"},
@@ -92,7 +130,7 @@ func TestModelNotFoundFallsBack(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"id":"ok","object":"response","model":"backup"}`))
 	}))
 	defer backup.Close()
-	server := NewServer(Config{HTTPClient: backup.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: backup.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{
 		{SourceID: "primary", ModelID: "missing", APIBase: primary.URL, Endpoint: "responses"},
 		{SourceID: "backup", ModelID: "backup", APIBase: backup.URL, Endpoint: "responses"},
@@ -119,7 +157,7 @@ func TestChatRequestConvertsToResponsesUpstream(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"id":"resp-1","object":"response","created_at":1,"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
 	}))
 	defer upstream.Close()
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "model-a", APIBase: upstream.URL, Endpoint: "responses"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"system","content":"Be concise"},{"role":"user","content":"hello"}]}`))
 	result := httptest.NewRecorder()
@@ -157,7 +195,7 @@ func TestToolCallJSONConversion(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"id":"resp-tool","object":"response","created_at":1,"output":[{"type":"message","content":[{"type":"output_text","text":"Checking."}]},{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{\"q\":\"hello\"}"}],"usage":{"total_tokens":3}}`))
 	}))
 	defer upstream.Close()
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "m", APIBase: upstream.URL, Endpoint: "responses"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"tool_choice":{"type":"function","function":{"name":"lookup"}}}`))
 	result := httptest.NewRecorder()
@@ -195,7 +233,7 @@ func TestEmbeddingsPassThrough(t *testing.T) {
 		_, _ = writer.Write([]byte(`{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"embed","usage":{"total_tokens":2}}`))
 	}))
 	defer upstream.Close()
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "embed", Version: "1", Candidates: []Candidate{{ModelID: "embed", APIBase: upstream.URL, Endpoint: "embeddings"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"embed","input":"hello"}`))
 	result := httptest.NewRecorder()
@@ -206,7 +244,7 @@ func TestEmbeddingsPassThrough(t *testing.T) {
 }
 
 func TestRouteAuthorizationAndModels(t *testing.T) {
-	server := NewServer(Config{Token: "token"})
+	server := NewServer(Config{Token: "token", RoutePublicationToken: "publisher", RequireInferenceAuth: true})
 	request := httptest.NewRequest(http.MethodPut, "/internal/v1/routes/demo", strings.NewReader(`{"alias":"demo","version":"1","candidates":[{"modelId":"a","apiBase":"http://localhost","endpoint":"responses"}]}`))
 	result := httptest.NewRecorder()
 	server.ServeHTTP(result, request)
@@ -216,15 +254,66 @@ func TestRouteAuthorizationAndModels(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer token")
 	result = httptest.NewRecorder()
 	server.ServeHTTP(result, request)
+	if result.Code != http.StatusUnauthorized {
+		t.Fatalf("master key unexpectedly authorized publication: %d", result.Code)
+	}
+	request.Header.Set("Authorization", "Bearer publisher")
+	result = httptest.NewRecorder()
+	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK {
 		t.Fatalf("expected route publication, got %d", result.Code)
 	}
+	discovery := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	discovery.Header.Set("Authorization", "Bearer publisher")
+	result = httptest.NewRecorder()
+	server.ServeHTTP(result, discovery)
+	if result.Code != http.StatusUnauthorized {
+		t.Fatalf("publisher unexpectedly authorized inference discovery: %d", result.Code)
+	}
 	models := httptest.NewRecorder()
-	server.ServeHTTP(models, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+	discovery.Header.Set("Authorization", "Bearer token")
+	server.ServeHTTP(models, discovery)
 	if !strings.Contains(models.Body.String(), "demo") {
 		t.Fatalf("route is missing from models: %s", models.Body.String())
 	}
 	_ = io.Discard
+}
+
+func TestDisablingProviderAPIsKeepsCoreChatCompatibility(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"fixture","choices":[{"index":8,"message":{"role":"assistant","refusal":null}}]}`)
+	}))
+	defer upstream.Close()
+	server := NewServer(Config{
+		Token: "inference", RoutePublicationToken: "publisher",
+		AuthorizeInference: true, DisableProviderAPIs: true, DisableManagementAPI: true,
+		HTTPClient: upstream.Client(),
+	})
+	call := func(method, path, token, body string, status int) string {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		res := httptest.NewRecorder()
+		server.ServeHTTP(res, req)
+		if res.Code != status {
+			t.Fatalf("%s %s returned %d, want %d: %s", method, path, res.Code, status, res.Body)
+		}
+		return res.Body.String()
+	}
+	route := `{"alias":"demo","version":"1","candidates":[{"modelId":"fixture","provider":"openai","apiBase":"` + upstream.URL + `","endpoint":"chat-completions"}]}`
+	call("PUT", "/internal/v1/routes/demo", "publisher", route, 200)
+	call("GET", "/v1/models", "publisher", "", 401)
+	list := call("GET", "/v1/models", "inference", "", 200)
+	if !strings.Contains(list, `"owned_by":"openai"`) {
+		t.Fatalf("core model discovery lost provider metadata: %s", list)
+	}
+	call("GET", "/v1/files", "inference", "", 404)
+	call("POST", "/chat/completions", "inference", `{"model":"demo","messages":[]}`, 404)
+	completion := call("POST", "/v1/chat/completions", "inference", `{"model":"demo","messages":[]}`, 200)
+	if !strings.Contains(completion, `"index":0`) || !strings.Contains(completion, `"provider_specific_fields":{"refusal":null}`) {
+		t.Fatalf("core chat normalization was disabled: %s", completion)
+	}
 }
 
 func TestSSEForwardsChunksAndFlushes(t *testing.T) {
@@ -241,7 +330,7 @@ func TestSSEForwardsChunksAndFlushes(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "model-a", APIBase: upstream.URL, Endpoint: "chat-completions"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","stream":true,"messages":[{"role":"user","content":"hello"}]}`))
 	request.Header.Set("Accept", "text/event-stream")
@@ -259,7 +348,7 @@ func TestSSEForwardsChunksAndFlushes(t *testing.T) {
 }
 
 func TestSSEUpstreamFailureReturnsError(t *testing.T) {
-	server := NewServer(Config{})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token"})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "model-a", APIBase: "http://127.0.0.1:1", Endpoint: "chat-completions"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","stream":true,"input":"hello"}`))
 	result := httptest.NewRecorder()
@@ -280,7 +369,7 @@ func TestSSEErrorEventFallsBackBeforeWriting(t *testing.T) {
 		_, _ = writer.Write([]byte("data: {\"id\":\"ok\"}\n\ndata: [DONE]\n\n"))
 	}))
 	defer backup.Close()
-	server := NewServer(Config{HTTPClient: backup.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: backup.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{
 		{SourceID: "primary", ModelID: "a", APIBase: primary.URL, Endpoint: "chat-completions"},
 		{SourceID: "backup", ModelID: "b", APIBase: backup.URL, Endpoint: "chat-completions"},
@@ -303,7 +392,7 @@ func TestResponsesSSEConvertsChatUpstream(t *testing.T) {
 		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":2}}\n\ndata: [DONE]\n\n"))
 	}))
 	defer upstream.Close()
-	server := NewServer(Config{HTTPClient: upstream.Client()})
+	server := NewServer(Config{RoutePublicationToken: "runtime-token", HTTPClient: upstream.Client()})
 	putRoute(t, server, Route{Alias: "demo", Version: "1", Candidates: []Candidate{{ModelID: "m", APIBase: upstream.URL, Endpoint: "chat-completions"}}})
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"demo","stream":true,"input":"hello"}`))
 	request.Header.Set("Accept", "text/event-stream")
@@ -329,5 +418,48 @@ func putRoute(t *testing.T, server *Server, route Route) {
 	server.ServeHTTP(result, request)
 	if result.Code != http.StatusOK {
 		t.Fatalf("route publication failed: %d %s", result.Code, result.Body.String())
+	}
+}
+
+func TestProviderAndManagementAPIsCanBeConfiguredIndependently(t *testing.T) {
+	for _, config := range []struct {
+		provider, management bool
+	}{
+		{provider: true, management: false},
+		{provider: false, management: true},
+	} {
+		server := NewServer(Config{Token: "key", RequireInferenceAuth: true, AuthorizeInference: config.provider,
+			DisableManagementAPI: !config.management})
+		check := func(method, path, body string, want int) {
+			t.Helper()
+			r := httptest.NewRequest(method, path, strings.NewReader(body))
+			r.Header.Set("Authorization", "Bearer key")
+			w := httptest.NewRecorder()
+			server.ServeHTTP(w, r)
+			if w.Code != want {
+				t.Fatalf("providers=%t management=%t, %s %s returned %d, expected %d: %s",
+					config.provider, config.management, method, path, w.Code, want, w.Body)
+			}
+		}
+		check("GET", "/v1/models", "", http.StatusOK)
+		check("POST", "/v1/chat/completions", `{"model":"missing","messages":[]}`, http.StatusNotFound)
+		managementStatus := http.StatusNotFound
+		if config.management {
+			managementStatus = http.StatusServiceUnavailable
+		}
+		check("GET", "/cache/ping", "", managementStatus)
+		providerStatus := http.StatusNotFound
+		if config.provider {
+			providerStatus = http.StatusBadRequest
+		}
+		check("POST", "/v1/vector_stores", `{}`, providerStatus)
+	}
+	server := NewServer(Config{Token: "key", RequireInferenceAuth: true})
+	request := httptest.NewRequest("POST", "/v1beta/models/fixture:generateContent", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer key")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"not_found"`) {
+		t.Fatalf("disabled Gemini endpoint was dispatched: %d %s", response.Code, response.Body)
 	}
 }

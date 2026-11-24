@@ -17,6 +17,40 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+func TestSSORoleMappingIssuesAdminViewerCredential(t *testing.T) {
+	keys := organizationFixture(t)
+	server := uiSSOServer{keys: keys}
+	cfg := uiSSOConfig{roleClaim: "groups",
+		roleGroups: map[string][]string{adminViewerRole: {"operators"}, "internal_user": {"employees"}}}
+	role := cfg.userRole(map[string]any{"groups": []any{"employees", "operators"}})
+	w := httptest.NewRecorder()
+	signed, _, ok := server.issueSession(w, ssoIdentity{Subject: "admin-viewer", Email: "viewer@example.test", Verified: true, Role: role})
+	if ok {
+		t.Fatal("SSO created an account without provisioning")
+	}
+	user := keys.state.Users["admin"]
+	user.Email = "viewer@example.test"
+	keys.state.Users[user.ID] = user
+	w = httptest.NewRecorder()
+	signed, _, ok = server.issueSession(w, ssoIdentity{Subject: "admin-viewer", Email: user.Email, Verified: true, Role: role})
+	if !ok {
+		t.Fatalf("SSO session failed: %s", w.Body)
+	}
+	token, err := jwt.Parse(signed, func(*jwt.Token) (any, error) { return []byte(keys.master), nil },
+		jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !token.Valid {
+		t.Fatalf("invalid SSO session: %v", err)
+	}
+	claims := token.Claims.(jwt.MapClaims)
+	key, _ := claims["key"].(string)
+	if key == "" || claims["user_role"] != adminViewerRole {
+		t.Fatal("SSO did not issue an administrator viewer credential")
+	}
+	handler := keys.Handler(http.NotFoundHandler())
+	organizationRequest(t, handler, "GET", "/organization/list", key, "", 200)
+	organizationRequest(t, handler, "POST", "/key/generate", key, `{}`, 401)
+}
+
 func TestPostgresBrowserSSOStateIsSingleUseAcrossReplicas(t *testing.T) {
 	dsn := os.Getenv("MINATO_TEST_POSTGRES_URL")
 	if dsn == "" {

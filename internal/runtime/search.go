@@ -128,6 +128,16 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		writeError(w, http.StatusBadRequest, "invalid_request", "Search tool not found")
 		return
 	}
+	budget, allowed := s.checkKeyBudget(w, r)
+	if !allowed {
+		return
+	}
+	admission, allowed := s.admitKeyLimits(w, r, budget, (len(input["query"])+3)/4)
+	if !allowed {
+		return
+	}
+	var recorder *callbackResponse
+	defer func() { admission.finish(recorder) }()
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -135,10 +145,10 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 		return
 	}
 	plan := s.attemptPlan(name)
-	var recorder *callbackResponse
 	var lastProvider string
-	if s.config.Callback != nil {
+	if s.config.Callback != nil || len(admission.settlements) != 0 {
 		recorder = &callbackResponse{ResponseWriter: w, event: newInferenceEvent("asearch", name, false), capture: s.config.LogMessages}
+		budget.apply(&recorder.event)
 		if key := ProxyCredential(r); key != "" && !s.authorized(r) {
 			recorder.event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 		}
@@ -151,7 +161,9 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request, name string, sco
 				recorder.finish()
 				recorder.event.Model = lastProvider + "/search"
 				recorder.event.Provider = lastProvider
-				s.config.Callback(recorder.event)
+				if s.config.Callback != nil {
+					s.config.Callback(recorder.event)
+				}
 			}
 		}()
 	}

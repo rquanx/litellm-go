@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -38,6 +41,15 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 		s.managedResponsesSocket(w, request, alias)
 		return
 	}
+	budget, allowed := s.readKeyBudget(w, request, ProxyCredential(request), false)
+	if !allowed {
+		return
+	}
+	session, allowed := s.admitKeyLimits(w, request, budget, -1)
+	if !allowed {
+		return
+	}
+	defer session.finish(nil)
 	ctx, cancel := context.WithCancel(request.Context())
 	defer cancel()
 	select {
@@ -64,7 +76,7 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 		return
 	}
 	defer upstream.CloseNow()
-	client, err := websocket.Accept(w, request, nil)
+	client, err := acceptInferenceSocket(w, request)
 	if err != nil {
 		return
 	}
@@ -72,11 +84,26 @@ func (s *Server) responsesSocket(w http.ResponseWriter, request *http.Request, s
 	upstream.SetReadLimit(s.config.MaxBodyBytes)
 	client.SetReadLimit(s.config.MaxBodyBytes)
 
+	var tokens responseSocketTokens
+	defer tokens.close()
 	runSocketRelay(ctx, func(ctx context.Context) {
-		s.socketClientToProvider(ctx, request, client, upstream, alias, candidate)
+		s.socketClientToProvider(ctx, request, client, upstream, alias, candidate, &tokens)
 	}, func(ctx context.Context) {
-		socketProviderToClient(ctx, upstream, client, alias, candidate, s.responseContainerEncoder(request.WithContext(ctx), candidate))
+		s.socketProviderToClient(ctx, request, upstream, client, alias, candidate,
+			s.responseContainerEncoder(request.WithContext(ctx), candidate), budget, &tokens)
 	})
+}
+
+func acceptInferenceSocket(w http.ResponseWriter, request *http.Request) (*websocket.Conn, error) {
+	for _, header := range request.Header.Values("Sec-WebSocket-Protocol") {
+		for _, value := range strings.Split(header, ",") {
+			protocol := strings.TrimSpace(value)
+			if protocol != "" && !strings.HasPrefix(protocol, "openai-insecure-api-key.") {
+				return websocket.Accept(w, request, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
+			}
+		}
+	}
+	return websocket.Accept(w, request, nil)
 }
 
 func nativeResponsesSocket(candidate Candidate) bool {
@@ -141,7 +168,7 @@ func (s *Server) socketStillAllowed(request *http.Request, alias string, candida
 	return allowed && modelAllowed(scope, alias) && candidateAllowed(scope, candidate)
 }
 
-func (s *Server) socketClientToProvider(ctx context.Context, request *http.Request, client, upstream *websocket.Conn, alias string, candidate Candidate) {
+func (s *Server) socketClientToProvider(ctx context.Context, request *http.Request, client, upstream *websocket.Conn, alias string, candidate Candidate, tokens *responseSocketTokens) {
 	for {
 		kind, data, err := client.Read(ctx)
 		if err != nil {
@@ -160,6 +187,33 @@ func (s *Server) socketClientToProvider(ctx context.Context, request *http.Reque
 		}
 		if status, message := s.checkResponseContainerOwners(request.WithContext(ctx), candidate.DeploymentID, ids); status != 0 {
 			if writeSocketError(ctx, client, status, message) != nil {
+				return
+			}
+			continue
+		}
+		budget, allowed := s.socketTurnBudget(ctx, request, client, alias)
+		if !allowed {
+			return
+		}
+		estimated := 0
+		if budget.hasTokenLimit() {
+			var fields map[string]any
+			_ = json.Unmarshal(event, &fields)
+			estimated = max(1, estimatedInputTokens(fields))
+		}
+		if estimated == 0 && s.config.Callback == nil {
+			if upstream.Write(ctx, websocket.MessageText, event) != nil {
+				return
+			}
+			continue
+		}
+		admitted, err := tokens.reserve(ctx, s, budget, estimated)
+		if err != nil {
+			_ = writeSocketError(ctx, client, http.StatusServiceUnavailable, "Could not read key token limit")
+			return
+		}
+		if !admitted {
+			if writeSocketError(ctx, client, http.StatusTooManyRequests, "Key token limit exceeded") != nil {
 				return
 			}
 			continue
@@ -216,7 +270,7 @@ func parseSocketEvent(kind websocket.MessageType, data []byte, alias string) (ma
 	return event, nil
 }
 
-func socketProviderToClient(ctx context.Context, upstream, client *websocket.Conn, alias string, candidate Candidate, encodeContainer func(string) string) {
+func (s *Server) socketProviderToClient(ctx context.Context, request *http.Request, upstream, client *websocket.Conn, alias string, candidate Candidate, encodeContainer func(string) string, budget KeyBudget, tokens *responseSocketTokens) {
 	for {
 		kind, data, err := upstream.Read(ctx)
 		if err != nil {
@@ -225,6 +279,18 @@ func socketProviderToClient(ctx context.Context, upstream, client *websocket.Con
 		if kind == websocket.MessageText {
 			var event map[string]json.RawMessage
 			if json.Unmarshal(data, &event) == nil {
+				var eventType string
+				_ = json.Unmarshal(event["type"], &eventType)
+				turn := budget
+				switch eventType {
+				case "response.completed", "response.failed", "response.incomplete", "response.cancelled", "error":
+					if admitted, ok := tokens.settle(usageFromJSON(data)); ok {
+						turn = admitted
+					}
+				}
+				if eventType == "response.completed" {
+					s.recordSocketUsage(request, candidate, alias, "responses", data, turn)
+				}
 				changed := false
 				if raw := event["response"]; len(raw) != 0 && string(raw) != "null" {
 					response := rewriteModel(raw, alias)
@@ -248,4 +314,104 @@ func socketProviderToClient(ctx context.Context, upstream, client *websocket.Con
 			return
 		}
 	}
+}
+
+func (s *Server) socketTurnBudget(ctx context.Context, r *http.Request, client *websocket.Conn, model string) (KeyBudget, bool) {
+	if s.config.CheckGlobalBudget != nil {
+		message, err := s.config.CheckGlobalBudget(ctx)
+		if err != nil {
+			_ = writeSocketError(ctx, client, http.StatusServiceUnavailable, "Could not read proxy budget")
+			return KeyBudget{}, false
+		}
+		if message != "" {
+			_ = writeSocketError(ctx, client, http.StatusTooManyRequests, message)
+			return KeyBudget{}, false
+		}
+	}
+	if s.config.CheckKeyBudget == nil || s.authorized(r) {
+		return KeyBudget{Tracked: s.config.CheckGlobalBudget != nil}, true
+	}
+	budget, err := s.config.CheckKeyBudget(ctx, ProxyCredential(r))
+	if err != nil {
+		_ = writeSocketError(ctx, client, http.StatusServiceUnavailable, "Could not read key budget")
+		return KeyBudget{}, false
+	}
+	if budget.ErrorMessage != "" {
+		_ = writeSocketError(ctx, client, http.StatusTooManyRequests, budget.ErrorMessage)
+		return KeyBudget{}, false
+	}
+	budget.Tracked = budget.Tracked || s.config.CheckGlobalBudget != nil
+	if budget.ModelPolicy != nil {
+		policy, err := budget.ModelPolicy(ctx, model)
+		if err != nil {
+			_ = writeSocketError(ctx, client, http.StatusServiceUnavailable, "Could not read key model budget")
+			return KeyBudget{}, false
+		}
+		if policy.BudgetError != "" {
+			_ = writeSocketError(ctx, client, http.StatusTooManyRequests, policy.BudgetError)
+			return KeyBudget{}, false
+		}
+		budget.ModelSpendDuration = policy.SpendDuration
+		budget.Tracked = budget.Tracked || policy.SpendDuration != ""
+	}
+	if budget.ModelRates != nil {
+		budget.OwnerLimits = append(budget.OwnerLimits, budget.ModelRates(model, s.deploymentModelRateDefaults(model))...)
+	}
+	if budget.RPMLimit != nil || len(budget.OwnerLimits) != 0 {
+		retryAfter, err := s.reserveRequestRates(ctx, budget)
+		if err != nil {
+			_ = writeSocketError(ctx, client, http.StatusServiceUnavailable, "Could not read key rate limit")
+			return KeyBudget{}, false
+		}
+		if retryAfter > 0 {
+			_ = writeSocketError(ctx, client, http.StatusTooManyRequests, "Key request limit exceeded")
+			return KeyBudget{}, false
+		}
+	}
+	return budget, true
+}
+
+func (s *Server) recordSocketUsage(r *http.Request, candidate Candidate, alias, endpoint string, data []byte, budget KeyBudget) {
+	if s.config.Callback == nil {
+		return
+	}
+	var terminal struct {
+		Response struct {
+			ID        string  `json:"id"`
+			CreatedAt float64 `json:"created_at"`
+			Status    string  `json:"status"`
+			Usage     struct {
+				InputDetails realtimeTokenDetails `json:"input_token_details"`
+				OutputDetails realtimeTokenDetails `json:"output_token_details"`
+			} `json:"usage"`
+		} `json:"response"`
+	}
+	if json.Unmarshal(data, &terminal) != nil || terminal.Response.ID == "" {
+		return
+	}
+	event := newInferenceEvent(endpoint, alias, true)
+	// A reconnect may replay the same terminal event.
+	event.ID = fmt.Sprintf("socket-%x", sha256.Sum256([]byte(candidate.DeploymentID+"\x00"+candidate.APIBase+"\x00"+terminal.Response.ID)))
+	if created := terminal.Response.CreatedAt; created > 0 && created <= float64(time.Now().Unix()) {
+		event.StartTime = created
+	}
+	budget.apply(&event)
+	if key := ProxyCredential(r); key != "" && !s.authorized(r) {
+		event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
+	}
+	status := http.StatusOK
+	if terminal.Response.Status == "failed" {
+		status = http.StatusBadGateway
+	}
+	recorder := callbackResponse{
+		ResponseWriter: &socketStreamWriter{headers: make(http.Header)},
+		event: event, status: status, capture: s.config.LogMessages,
+	}
+	writeRuntimeMeta(&recorder, candidate, 1, nil)
+	recorder.recordJSON(data)
+	recorder.finish()
+	if endpoint == "realtime" {
+		recorder.event.Spend = realtimeResponseCost(recorder.event, terminal.Response.Usage.InputDetails, terminal.Response.Usage.OutputDetails, candidate)
+	}
+	s.config.Callback(recorder.event)
 }

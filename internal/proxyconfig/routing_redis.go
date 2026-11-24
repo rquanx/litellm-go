@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type redisRoutingState struct {
@@ -58,6 +59,108 @@ func (store *redisRoutingState) Reserve(ctx context.Context, deployment string, 
 		prefix + strconv.FormatInt(minute, 10), prefix + "cooldown",
 	}, rpm, tpm, tokens, trackArg, checkArg).Int()
 	return result == 1, err
+}
+
+var reserveKeyRPM = redis.NewScript(`
+local retry = 0
+for i, key in ipairs(KEYS) do
+    local limit = tonumber(ARGV[i])
+    if limit <= 0 then return 60 end
+    local count = tonumber(redis.call('GET', key) or '0')
+    if count >= limit then retry = math.max(retry, 1, redis.call('TTL', key)) end
+end
+if retry > 0 then return retry end
+for _, key in ipairs(KEYS) do
+    if redis.call('INCR', key) == 1 then redis.call('EXPIRE', key, 60) end
+end
+return 0
+`)
+
+func (store *redisRoutingState) ReserveRequestRates(ctx context.Context, scopes []runtime.OwnerRateLimits) (int64, error) {
+	keys := make([]string, 0, len(scopes))
+	limits := make([]any, 0, len(scopes))
+	for _, scope := range scopes {
+		keys = append(keys, store.prefix(scope.Identity)+"key-rpm")
+		limits = append(limits, *scope.RPM)
+	}
+	return reserveKeyRPM.Run(ctx, store.Client, keys, limits...).Int64()
+}
+
+var reserveKeyTokens = redis.NewScript(`
+local window = redis.call('HGET', KEYS[1], 'window')
+local tokens = tonumber(redis.call('HGET', KEYS[1], 'tokens') or '0')
+if tokens + tonumber(ARGV[2]) > tonumber(ARGV[1]) then
+    return {'', math.max(1, redis.call('TTL', KEYS[1]))}
+end
+if not window then
+    window = ARGV[3]
+    redis.call('HSET', KEYS[1], 'window', window, 'tokens', ARGV[2])
+    redis.call('EXPIRE', KEYS[1], 60)
+else
+    redis.call('HINCRBY', KEYS[1], 'tokens', ARGV[2])
+end
+return {window, 0}
+`)
+
+func (store *redisRoutingState) ReserveKeyTokens(ctx context.Context, identity string, limit, estimated int) (string, int64, error) {
+	window := newEntityID()
+	values, err := reserveKeyTokens.Run(ctx, store.Client, []string{store.prefix(identity) + "key-tpm"}, limit, estimated, window).Slice()
+	if err != nil {
+		return "", 0, err
+	}
+	if len(values) != 2 {
+		return "", 0, errors.New("invalid key token reservation")
+	}
+	window, windowOK := values[0].(string)
+	retry, retryOK := values[1].(int64)
+	if !windowOK || !retryOK {
+		return "", 0, errors.New("invalid key token reservation")
+	}
+	return window, retry, nil
+}
+
+var adjustKeyTokens = redis.NewScript(`
+if redis.call('HGET', KEYS[1], 'window') == ARGV[1] then
+    local tokens = tonumber(redis.call('HGET', KEYS[1], 'tokens'))
+    redis.call('HSET', KEYS[1], 'tokens', math.max(0, tokens + tonumber(ARGV[2])))
+end
+return 0
+`)
+
+func (store *redisRoutingState) AdjustKeyTokens(ctx context.Context, identity, window string, delta int) error {
+	return adjustKeyTokens.Run(ctx, store.Client, []string{store.prefix(identity) + "key-tpm"}, window, delta).Err()
+}
+
+var acquireKeyParallel = redis.NewScript(`
+local now = tonumber(redis.call('TIME')[1])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then return 0 end
+redis.call('ZADD', KEYS[1], now + 600, ARGV[1])
+redis.call('EXPIRE', KEYS[1], 600)
+return 1
+`)
+
+func (store *redisRoutingState) AcquireKeyParallel(ctx context.Context, identity, lease string, limit int) (bool, error) {
+	result, err := acquireKeyParallel.Run(ctx, store.Client, []string{store.prefix(identity) + "key-parallel"}, lease, limit).Int()
+	return result == 1, err
+}
+
+var renewKeyParallel = redis.NewScript(`
+local now = tonumber(redis.call('TIME')[1])
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) <= now then return 0 end
+redis.call('ZADD', KEYS[1], 'XX', now + 600, ARGV[1])
+redis.call('EXPIRE', KEYS[1], 600)
+return 1
+`)
+
+func (store *redisRoutingState) RenewKeyParallel(ctx context.Context, identity, lease string) (bool, error) {
+	result, err := renewKeyParallel.Run(ctx, store.Client, []string{store.prefix(identity) + "key-parallel"}, lease).Int()
+	return result == 1, err
+}
+
+func (store *redisRoutingState) ReleaseKeyParallel(ctx context.Context, identity, lease string) error {
+	return store.ZRem(ctx, store.prefix(identity)+"key-parallel", lease).Err()
 }
 
 var adjustRouting = redis.NewScript(`

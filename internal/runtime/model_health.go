@@ -280,9 +280,7 @@ func (s *Server) probeDeployment(ctx context.Context, r *http.Request, candidate
 
 // A Realtime health check only opens the provider WebSocket.
 func (s *Server) probeRealtime(ctx context.Context, candidate Candidate) int {
-	switch candidate.Provider {
-	case "openai", "azure", "xai":
-	default:
+	if !supportsNativeRealtimeSocket(candidate.Provider) && !geminiLiveProvider(candidate) && !bedrockRealtimeDeployment(candidate) {
 		return http.StatusNotImplemented
 	}
 
@@ -293,7 +291,36 @@ func (s *Server) probeRealtime(ctx context.Context, candidate Candidate) int {
 	}
 	defer func() { <-s.sem }()
 
-	conn, err := s.dialProviderSocket(ctx, candidate, realtimeAddress(candidate, ""), make(http.Header))
+	if bedrockRealtimeDeployment(candidate) {
+		stream, err := s.openBedrockRealtime(ctx, candidate)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return http.StatusRequestTimeout
+			}
+			return http.StatusBadGateway
+		}
+		defer stream.close()
+		var input bedrockRealtimeInput
+		for _, event := range input.setup(nil) {
+			data, _ := json.Marshal(event)
+			if stream.send(data) != nil {
+				if ctx.Err() == context.DeadlineExceeded {
+					return http.StatusRequestTimeout
+				}
+				return http.StatusBadGateway
+			}
+		}
+		response, err := stream.response(ctx)
+		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				return http.StatusRequestTimeout
+			}
+			return http.StatusBadGateway
+		}
+		response.Body.Close()
+		return response.StatusCode
+	}
+	conn, err := s.dialRealtimeSocket(ctx, candidate, "", "")
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return http.StatusRequestTimeout

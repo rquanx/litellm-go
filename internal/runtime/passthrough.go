@@ -24,6 +24,7 @@ type PassThroughRoute struct {
 	Methods []string
 	Public, IncludeSubpath, ForwardHeaders, MergeQuery bool
 	Cost *float64
+	proxyToken string
 	authorize func(*http.Request, []byte) error
 }
 
@@ -39,7 +40,7 @@ func IsBuiltInProxyPath(path string) bool {
 	}
 	for _, root := range []string{"/health", "/healthz", "/internal", "/v1/models", "/v1/responses", "/v1/files", "/v1/batches", "/v1/messages",
 		"/v1/search", "/search", "/v1/realtime", "/realtime", "/v1/vector_stores", "/v1/indexes", "/milvus", "/v1/videos", "/openai", "/anthropic",
-		"/cache", "/public", "/a2a", "/v1/a2a", "/v1/agents", "/v1/memory", "/claude-code", "/v1/skills", "/v1/evals", "/interactions", "/v1beta/interactions",
+		"/cache", "/callbacks", "/langfuse", "/cursor/chat/completions", "/public", "/a2a", "/v1/a2a", "/v1/agents", "/v1/memory", "/claude-code", "/v1/skills", "/v1/evals", "/interactions", "/v1beta/interactions",
 		"/model", "/v1/model", "/key", "/team", "/user", "/organization", "/project", "/credential", "/router", "/config",
 		"/spend", "/search_tools", "/model_group", "/utils", "/mcp", "/v1/mcp", "/mcp-rest", "/sse"} {
 		if path == root || strings.HasPrefix(path, root+"/") {
@@ -85,12 +86,28 @@ func (s *Server) servePassThrough(w http.ResponseWriter, r *http.Request) bool {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
 			return true
 		}
+		if s.config.AuthorizePassThrough != nil && !s.config.AuthorizePassThrough(ProxyCredential(r), r.URL.Path) {
+			writeError(w, http.StatusForbidden, "forbidden", "This key cannot use the configured pass-through route")
+			return true
+		}
 	}
 	s.forwardPassThrough(w, r, *selected)
 	return true
 }
 
 func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, route PassThroughRoute) {
+	var budget KeyBudget
+	if !route.Public {
+		token := route.proxyToken
+		if token == "" {
+			token = ProxyCredential(r)
+		}
+		var allowed bool
+		budget, allowed = s.checkKeyBudgetForToken(w, r, token)
+		if !allowed {
+			return
+		}
+	}
 	target := route.Target
 	if suffix := strings.TrimPrefix(r.URL.Path, route.Path); suffix != "" {
 		escapedPrefix := (&url.URL{Path: route.Path}).EscapedPath()
@@ -129,7 +146,12 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 			writeError(w, http.StatusBadRequest, "invalid_request", "Expected a WebSocket upgrade")
 			return
 		}
-		s.passThroughSocket(w, r, route, target.String())
+		admission, allowed := s.admitKeyLimits(w, r, budget, -1)
+		if !allowed {
+			return
+		}
+		defer admission.finish(nil)
+		s.passThroughSocket(w, r, route, target.String(), budget)
 		return
 	}
 	body, err := readBody(r, s.config.MaxBodyBytes)
@@ -147,6 +169,16 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		writeError(w, http.StatusBadGateway, "upstream_error", "Could not authenticate pass-through request")
 		return
 	}
+	estimated := -1
+	if budget.hasTokenLimit() && strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		estimated = (len(body) + 3) / 4
+	}
+	admission, allowed := s.admitKeyLimits(w, r, budget, estimated)
+	if !allowed {
+		return
+	}
+	var recorder *callbackResponse
+	defer func() { admission.finish(recorder) }()
 	select {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
@@ -154,6 +186,7 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 		return
 	}
 	event := newInferenceEvent("pass_through_endpoint", route.Path, false)
+	budget.apply(&event)
 	client := *s.config.HTTPClient
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := client.Do(upstream)
@@ -170,6 +203,11 @@ func (s *Server) forwardPassThrough(w http.ResponseWriter, r *http.Request, rout
 	}
 	contentType := response.Header.Get("Content-Type")
 	stream := strings.HasPrefix(contentType, "text/event-stream") || strings.HasPrefix(contentType, "application/vnd.amazon.eventstream")
+	if len(admission.settlements) != 0 {
+		recorder = &callbackResponse{ResponseWriter: w, event: event}
+		recorder.event.Stream = stream
+		w = recorder
+	}
 	w.WriteHeader(response.StatusCode)
 	if stream {
 		_, _ = io.Copy(passThroughStream{w}, response.Body)
@@ -202,7 +240,7 @@ func passThroughHeaders(r *http.Request, route PassThroughRoute) http.Header {
 	return headers
 }
 
-func (s *Server) passThroughSocket(w http.ResponseWriter, r *http.Request, route PassThroughRoute, target string) {
+func (s *Server) passThroughSocket(w http.ResponseWriter, r *http.Request, route PassThroughRoute, target string, budget KeyBudget) {
 	ctx := r.Context()
 	select {
 	case s.sem <- struct{}{}:
@@ -211,6 +249,7 @@ func (s *Server) passThroughSocket(w http.ResponseWriter, r *http.Request, route
 		return
 	}
 	event := newInferenceEvent("pass_through_endpoint", route.Path, true)
+	budget.apply(&event)
 	headers := passThroughHeaders(r, route)
 	var protocols []string
 	for _, header := range r.Header.Values("Sec-WebSocket-Protocol") {
@@ -252,7 +291,11 @@ func (s *Server) passThroughSocket(w http.ResponseWriter, r *http.Request, route
 				if s.config.AuthorizeKey == nil {
 					return
 				}
-				if _, valid := s.config.AuthorizeKey(ProxyCredential(r)); !valid {
+				token := ProxyCredential(r)
+				if _, valid := s.config.AuthorizeKey(token); !valid {
+					return
+				}
+				if s.config.AuthorizePassThrough != nil && !s.config.AuthorizePassThrough(token, r.URL.Path) {
 					return
 				}
 			}

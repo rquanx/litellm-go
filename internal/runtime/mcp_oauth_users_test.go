@@ -105,6 +105,8 @@ func TestMCPUserCredentialManagementKeepsTokensPrivate(t *testing.T) {
 	call("POST", path, `{"access_token":"private-token","refresh_token":"private-refresh","expires_in":3600}`, `"has_credential":true`)
 	call("GET", path+"/status", "", `"has_credential":true`)
 	call("GET", "/mcp/user-credentials", "", `"server_name":"fixture"`)
+	call("GET", "/v1/mcp/user-credentials", "", `"credential_type":"oauth2"`)
+	call("GET", "/v1"+path+"/status", "", `"has_credential":true`)
 	call("DELETE", path, "", `"has_credential":false`)
 	call("GET", path+"/status", "", `"has_credential":false`)
 }

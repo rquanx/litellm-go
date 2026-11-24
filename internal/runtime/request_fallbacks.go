@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -68,8 +69,9 @@ func (s *Server) requestFallbacks(route Route, input map[string]any, scope []str
 		value, found := input[field.name]
 		delete(input, field.name)
 		if item, ok := settings[field.name]; ok {
-			value, found = item, true
-			delete(settings, field.name)
+			if !found {
+				value, found = item, true
+			}
 		}
 		if !found || value == nil {
 			continue
@@ -116,8 +118,40 @@ func (s *Server) requestFallbacks(route Route, input map[string]any, scope []str
 		s.mu.RUnlock()
 		*field.destination = candidates
 	}
-	if len(settings) != 0 {
-		return Route{}, errors.New("unsupported router settings override")
+	for _, name := range []string{"timeout", "num_retries", "model_group_retry_policy"} {
+		if value, found := settings[name]; found {
+			if _, supplied := input[name]; !supplied {
+				input[name] = value
+			}
+		}
+	}
+	if raw, found := input["num_retries"]; found {
+		delete(input, "num_retries")
+		if raw != nil {
+			value, ok := raw.(float64)
+			if !ok || value < 0 || value > 8 || value != float64(int(value)) {
+				return Route{}, errors.New("num_retries must be an integer between 0 and 8")
+			}
+			count := int(value)
+			route.RequestRetries = &count
+		}
+	}
+	if raw, found := input["model_group_retry_policy"]; found {
+		delete(input, "model_group_retry_policy")
+		encoded, err := json.Marshal(raw)
+		var policies map[string]RetryPolicy
+		if err != nil || json.Unmarshal(encoded, &policies) != nil {
+			return Route{}, errors.New("invalid model_group_retry_policy")
+		}
+		for _, policy := range policies {
+			if !policy.Valid() {
+				return Route{}, errors.New("invalid model_group_retry_policy")
+			}
+		}
+		route.RequestRetryPolicy = policies[route.Alias]
+		if route.RequestRetryPolicy == nil {
+			route.RequestRetryPolicy = RetryPolicy{}
+		}
 	}
 	return route, nil
 }

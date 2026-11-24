@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
@@ -32,12 +34,20 @@ type modelRegistry struct {
 	searchTools []managedSearchTool
 	passThrough []passThroughConfig
 	mcpServers  map[string]mcpServerConfig
+	temporaryMCP map[string]temporaryMCPServer
 	mcpToolsets []runtime.MCPToolset
+	toolPolicies map[string]toolPolicy
+	mcpSemanticFilter map[string]any
+	allowedIPs []string
 	publicHub   publicModelHubState
 }
 
-func WithModelManagement(server *runtime.Server, config Config, token, statePath string) (http.Handler, error) {
-	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"), nil)
+func WithModelManagement(server *runtime.Server, config Config, token, statePath string, registries ...*KeyRegistry) (http.Handler, error) {
+	var keys *KeyRegistry
+	if len(registries) != 0 {
+		keys = registries[0]
+	}
+	return withModelManagement(server, config, token, chooseStateStore(statePath, nil, "models"), keys)
 }
 
 func WithPostgresModelManagement(ctx context.Context, server *runtime.Server, config Config, token string, db *sql.DB, keys *KeyRegistry) (http.Handler, error) {
@@ -51,6 +61,8 @@ func WithPostgresModelManagement(ctx context.Context, server *runtime.Server, co
 
 func withModelManagement(server *runtime.Server, config Config, token string, store stateStore, keys *KeyRegistry) (*modelRegistry, error) {
 	registry := &modelRegistry{server: server, base: config, token: token, store: store, keys: keys}
+	registry.allowedIPs = slices.Clone(config.AllowedIPs)
+	server.ReplaceAllowedIPs(registry.allowedIPs)
 	registry.base.models = slices.Clone(config.models)
 	if store != nil {
 		if token == "" {
@@ -67,6 +79,7 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 		return nil, err
 	}
 	server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
+	keys.setModelAccessGroups(registry.base.models, registry.models)
 	if err := registry.loadPassThrough(); err != nil {
 		return nil, err
 	}
@@ -81,90 +94,52 @@ func withModelManagement(server *runtime.Server, config Config, token string, st
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /model/info", registry.info)
 	mux.HandleFunc("GET /v1/model/info", registry.info)
+	mux.HandleFunc("GET /v2/model/info", registry.infoV2)
 	mux.HandleFunc("POST /model/new", registry.add)
 	mux.HandleFunc("POST /health/test_connection", registry.testModelConnection)
 	mux.HandleFunc("POST /model/delete", registry.remove)
 	mux.HandleFunc("POST /model/update", registry.update)
 	mux.HandleFunc("PATCH /model/{model_id}/update", registry.update)
 	registry.registerCredentialRoutes(mux)
+	registry.registerModelAccessGroups(mux)
 	registry.registerSearchToolRoutes(mux)
 	registry.registerPassThroughRoutes(mux)
 	registry.registerMCPRoutes(mux)
+	registry.registerGuardrailCatalogRoutes(mux)
 	registry.registerMCPToolsetRoutes(mux)
+	registry.registerToolPolicyRoutes(mux)
+	registry.registerAllowedIPRoutes(mux)
+	mux.HandleFunc("GET /adaptive_router/state", func(w http.ResponseWriter, r *http.Request) {
+		if registry.keys.requireAdminRead(w, r) {
+			modelError(w, http.StatusNotFound, "No adaptive_router is configured on this proxy.")
+		}
+	})
+	registry.registerMCPSemanticFilterRoutes(mux)
 	registerPublicCatalogs(mux)
 	mux.HandleFunc("GET /.well-known/litellm-ui-config", publicUIConfig)
 	mux.HandleFunc("GET /litellm/.well-known/litellm-ui-config", publicUIConfig)
 	registry.registerPublicModelHub(mux)
 	mux.HandleFunc("POST /cost/estimate", registry.estimateCost)
-	mux.HandleFunc("POST /spend/calculate", registry.estimateCost)
+	mux.HandleFunc("POST /spend/calculate", registry.calculateSpend)
 	mux.HandleFunc("GET /model/cost_map/source", registry.costMapSource)
+	mux.HandleFunc("GET /utils/supported_openai_params", registry.supportedOpenAIParams)
+	modelSettings := servePublicCatalog(providerModelSettings)
+	mux.HandleFunc("GET /model/settings", func(w http.ResponseWriter, r *http.Request) {
+		if registry.allowModelMetadata(w, r) {
+			modelSettings(w, r)
+		}
+	})
 	server.ReplaceMCPToolsets(registry.mcpToolsets)
+	registry.syncRuntimeToolPolicies()
 	mux.HandleFunc("GET /router/settings", registry.routerSettings)
 	mux.HandleFunc("GET /router/fields", registry.routerSettings)
 	mux.HandleFunc("POST /config/update", registry.updateRouter)
+	mux.HandleFunc("POST /fallback", registry.manageFallback)
+	mux.HandleFunc("GET /fallback/{model}", registry.manageFallback)
+	mux.HandleFunc("DELETE /fallback/{model}", registry.manageFallback)
 	mux.Handle("/", server)
 	registry.handler = mux
 	return registry, nil
-}
-
-func (registry *modelRegistry) costMapSource(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
-		return
-	}
-	modelJSON(w, http.StatusOK, map[string]any{"source": "LiteLLM v1.85.0 embedded model price snapshot"})
-}
-
-func (registry *modelRegistry) estimateCost(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
-		return
-	}
-	var input struct {
-		Model            string `json:"model"`
-		ModelName        string `json:"model_name"`
-		PromptTokens     int    `json:"prompt_tokens"`
-		InputTokens      int    `json:"input_tokens"`
-		CompletionTokens int    `json:"completion_tokens"`
-		OutputTokens     int    `json:"output_tokens"`
-	}
-	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
-		modelError(w, http.StatusBadRequest, "Invalid cost estimate request")
-		return
-	}
-	model := input.Model
-	if model == "" {
-		model = input.ModelName
-	}
-	if model == "" {
-		modelError(w, http.StatusBadRequest, "model is required")
-		return
-	}
-	in := input.PromptTokens
-	if in == 0 {
-		in = input.InputTokens
-	}
-	out := input.CompletionTokens
-	if out == 0 {
-		out = input.OutputTokens
-	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	var inputPrice, outputPrice *float64
-	for _, deployment := range append(slices.Clone(registry.base.models), registry.models...) {
-		if deployment.Alias != model && deployment.Params.Model != model {
-			continue
-		}
-		_, prices, err := tokenPrice(deployment.Params.Model, deployment.Params.InputPrice, deployment.Params.OutputPrice)
-		if err == nil {
-			inputPrice, outputPrice = prices[0], prices[1]
-			break
-		}
-	}
-	if inputPrice == nil || outputPrice == nil {
-		modelError(w, http.StatusNotFound, "Model pricing is unavailable")
-		return
-	}
-	cost := float64(in)*(*inputPrice) + float64(out)*(*outputPrice)
-	modelJSON(w, http.StatusOK, map[string]any{"model": model, "prompt_tokens": in, "completion_tokens": out, "cost": cost, "currency": "USD"})
 }
 
 func (registry *modelRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -172,9 +147,16 @@ func (registry *modelRegistry) ServeHTTP(w http.ResponseWriter, r *http.Request)
 }
 
 func (registry *modelRegistry) setManagedState(state modelState) {
+	registry.allowedIPs = slices.Clone(state.AllowedIPs)
+	if len(registry.allowedIPs) == 0 {
+		registry.allowedIPs = slices.Clone(registry.base.AllowedIPs)
+	}
+	registry.server.ReplaceAllowedIPs(registry.allowedIPs)
 	registry.models, registry.credentials, registry.router = state.Models, state.Credentials, state.Router
 	registry.searchTools, registry.passThrough = state.SearchTools, state.PassThrough
 	registry.mcpServers, registry.mcpToolsets, registry.publicHub = state.MCPServers, state.MCPToolsets, state.PublicHub
+	registry.toolPolicies = state.ToolPolicies
+	registry.mcpSemanticFilter = state.MCPSemanticFilter
 }
 
 func (registry *modelRegistry) refreshManagedState(ctx context.Context) error {
@@ -201,6 +183,7 @@ func (registry *modelRegistry) refreshManagedState(ctx context.Context) error {
 	}
 	registry.server.ReplaceManagedConfiguration(cfg.Routes, cfg.SearchTools, cfg.searchFallbacks(), passThrough, servers, state.MCPToolsets)
 	registry.setManagedState(state)
+	registry.keys.setModelAccessGroups(registry.base.models, registry.models)
 	store.revision = next.revision
 	return nil
 }
@@ -246,7 +229,7 @@ func (registry *modelRegistry) allowed(w http.ResponseWriter, r *http.Request) b
 }
 
 func (registry *modelRegistry) info(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -274,8 +257,9 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 	if !registry.allowed(w, r) {
 		return
 	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	var model deployment
-	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &model); err != nil {
+	if err != nil || bytes.Equal(bytes.TrimSpace(body), []byte("null")) || decodeModelJSON(bytes.NewReader(body), &model) != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported model configuration")
 		return
 	}
@@ -294,175 +278,39 @@ func (registry *modelRegistry) writeModel(w http.ResponseWriter, r *http.Request
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	next := slices.Clone(registry.models)
+	now := time.Now().UTC()
 	if update {
 		index := modelIndex(next, model.Info.ID)
 		if index < 0 {
 			modelError(w, http.StatusBadRequest, "Dynamic model ID not found")
 			return
 		}
-		existing := next[index]
-		if model.Alias == "" {
-			model.Alias = existing.Alias
+		// Decode into an independent copy so omitted fields retain their value
+		// and a rejected update cannot mutate the current deployment.
+		existing, err := json.Marshal(next[index])
+		if err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not copy current deployment")
+			return
 		}
-		if model.Params.Model == "" {
-			model.Params.Model = existing.Params.Model
+		var updated deployment
+		if json.Unmarshal(existing, &updated) != nil {
+			modelError(w, http.StatusInternalServerError, "Could not copy current deployment")
+			return
 		}
-		if model.Params.APIBase == "" {
-			model.Params.APIBase = existing.Params.APIBase
+		if json.Unmarshal(body, &updated) != nil {
+			modelError(w, http.StatusBadRequest, "Invalid model update")
+			return
 		}
-		if model.Params.APIKey == "" {
-			model.Params.APIKey = existing.Params.APIKey
-		}
-		if model.Params.CredentialName == "" {
-			model.Params.CredentialName = existing.Params.CredentialName
-		}
-		if model.Params.APIVersion == "" {
-			model.Params.APIVersion = existing.Params.APIVersion
-		}
-		if model.Params.AzureADToken == "" {
-			model.Params.AzureADToken = existing.Params.AzureADToken
-		}
-		for _, setting := range []struct {
-			current  *string
-			previous string
-		}{
-			{&model.Params.AzureTenant, existing.Params.AzureTenant},
-			{&model.Params.AzureClient, existing.Params.AzureClient},
-			{&model.Params.AzureClientSecret, existing.Params.AzureClientSecret},
-			{&model.Params.AzureUsername, existing.Params.AzureUsername},
-			{&model.Params.AzurePassword, existing.Params.AzurePassword},
-			{&model.Params.AzureScope, existing.Params.AzureScope},
-			{&model.Params.AzureCredential, existing.Params.AzureCredential},
-			{&model.Params.AzureAuthority, existing.Params.AzureAuthority},
-		} {
-			if *setting.current == "" {
-				*setting.current = setting.previous
-			}
-		}
-		model.Params.AzureTokenRefresh = model.Params.AzureTokenRefresh || existing.Params.AzureTokenRefresh
-		if model.Params.Weight == nil {
-			model.Params.Weight = existing.Params.Weight
-		}
-		if model.Params.InputPrice == nil {
-			model.Params.InputPrice = existing.Params.InputPrice
-		}
-		if model.Params.OutputPrice == nil {
-			model.Params.OutputPrice = existing.Params.OutputPrice
-		}
-		if model.Params.RPM == nil {
-			model.Params.RPM = existing.Params.RPM
-		}
-		if model.Params.TPM == nil {
-			model.Params.TPM = existing.Params.TPM
-		}
-		if model.Params.AWSRegion == "" {
-			model.Params.AWSRegion = existing.Params.AWSRegion
-		}
-		if model.Params.Region == "" {
-			model.Params.Region = existing.Params.Region
-		}
-		if model.Params.AWSAccessKey == "" {
-			model.Params.AWSAccessKey = existing.Params.AWSAccessKey
-		}
-		if model.Params.AWSSecretKey == "" {
-			model.Params.AWSSecretKey = existing.Params.AWSSecretKey
-		}
-		if model.Params.AWSSessionToken == "" {
-			model.Params.AWSSessionToken = existing.Params.AWSSessionToken
-		}
-		if model.Params.AWSProfile == "" {
-			model.Params.AWSProfile = existing.Params.AWSProfile
-		}
-		if model.Params.AWSRole == "" {
-			model.Params.AWSRole = existing.Params.AWSRole
-		}
-		if model.Params.AWSRoleSession == "" {
-			model.Params.AWSRoleSession = existing.Params.AWSRoleSession
-		}
-		if model.Params.AWSWebIdentity == "" {
-			model.Params.AWSWebIdentity = existing.Params.AWSWebIdentity
-		}
-		if model.Params.AWSSTSEndpoint == "" {
-			model.Params.AWSSTSEndpoint = existing.Params.AWSSTSEndpoint
-		}
-		if model.Params.AWSExternalID == "" {
-			model.Params.AWSExternalID = existing.Params.AWSExternalID
-		}
-		if model.Params.AWSBedrockControlEndpoint == "" {
-			model.Params.AWSBedrockControlEndpoint = existing.Params.AWSBedrockControlEndpoint
-		}
-		if model.Params.AWSS3VectorsEndpoint == "" {
-			model.Params.AWSS3VectorsEndpoint = existing.Params.AWSS3VectorsEndpoint
-		}
-		if model.Params.AWSBedrockAgentEndpoint == "" {
-			model.Params.AWSBedrockAgentEndpoint = existing.Params.AWSBedrockAgentEndpoint
-		}
-		if model.Params.AWSBedrockAgentRuntimeEndpoint == "" {
-			model.Params.AWSBedrockAgentRuntimeEndpoint = existing.Params.AWSBedrockAgentRuntimeEndpoint
-		}
-		if model.Params.AWSBatchRoleARN == "" {
-			model.Params.AWSBatchRoleARN = existing.Params.AWSBatchRoleARN
-		}
-		if model.Params.S3OutputBucket == "" {
-			model.Params.S3OutputBucket = existing.Params.S3OutputBucket
-		}
-		if model.Params.S3Bucket == "" {
-			model.Params.S3Bucket = existing.Params.S3Bucket
-		}
-		if model.Params.S3Endpoint == "" {
-			model.Params.S3Endpoint = existing.Params.S3Endpoint
-		}
-		if model.Params.S3Region == "" {
-			model.Params.S3Region = existing.Params.S3Region
-		}
-		if model.Params.S3EncryptionKey == "" {
-			model.Params.S3EncryptionKey = existing.Params.S3EncryptionKey
-		}
-		if model.Params.VertexProject == "" {
-			model.Params.VertexProject = existing.Params.VertexProject
-		}
-		if model.Params.VertexLocation == "" {
-			model.Params.VertexLocation = existing.Params.VertexLocation
-		}
-		if model.Params.VertexCredentials == nil && model.Params.VertexAICredentials == nil {
-			model.Params.VertexCredentials = existing.Params.VertexCredentials
-			model.Params.VertexAICredentials = existing.Params.VertexAICredentials
-		}
-		if model.Params.GCSBucket == "" {
-			model.Params.GCSBucket = existing.Params.GCSBucket
-		}
-		if model.Params.GCSEndpoint == "" {
-			model.Params.GCSEndpoint = existing.Params.GCSEndpoint
-		}
-		if model.Params.VertexDiscoveryEndpoint == "" {
-			model.Params.VertexDiscoveryEndpoint = existing.Params.VertexDiscoveryEndpoint
-		}
-		if model.Info.Endpoints == nil {
-			model.Info.Endpoints = existing.Info.Endpoints
-		}
-		if model.Info.Mode == "" {
-			model.Info.Mode = existing.Info.Mode
-		}
-		if model.Info.HealthModel == "" {
-			model.Info.HealthModel = existing.Info.HealthModel
-		}
-		if model.Info.HealthVoice == "" {
-			model.Info.HealthVoice = existing.Info.HealthVoice
-		}
-		if model.Info.HealthTimeout == 0 {
-			model.Info.HealthTimeout = existing.Info.HealthTimeout
-		}
-		if model.Info.HealthMaxTokens == nil {
-			model.Info.HealthMaxTokens = existing.Info.HealthMaxTokens
-		}
-		if model.Info.HealthSupportsMaxTokens == nil {
-			model.Info.HealthSupportsMaxTokens = existing.Info.HealthSupportsMaxTokens
-		}
-		if model.Info.HealthReasoningEffort == "" {
-			model.Info.HealthReasoningEffort = existing.Info.HealthReasoningEffort
-		}
+		updated.Info.ID = model.Info.ID
+		updated.Info.CreatedAt = next[index].Info.CreatedAt
+		updated.Info.CreatedBy = next[index].Info.CreatedBy
+		updated.Info.UpdatedAt = &now
+		model = updated
 		next[index] = model
 	} else {
+		model.Info.CreatedAt = &now
+		model.Info.UpdatedAt = &now
+		model.Info.CreatedBy = "default_user_id"
 		next = append(next, model)
 	}
 	if registry.apply(w, next) {
@@ -513,8 +361,8 @@ func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, model
 		return false
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: models, Credentials: credentials, Router: router, SearchTools: searchTools,
-			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub}); err != nil {
+		if err := registry.store.save(modelState{AllowedIPs: registry.allowedIPs, Models: models, Credentials: credentials, Router: router, SearchTools: searchTools,
+			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, ToolPolicies: registry.toolPolicies, MCPSemanticFilter: registry.mcpSemanticFilter, PublicHub: registry.publicHub}); err != nil {
 			stateWriteError(w, err)
 			return false
 		}
@@ -522,6 +370,7 @@ func (registry *modelRegistry) publishConfiguration(w http.ResponseWriter, model
 	registry.models, registry.credentials, registry.router = models, credentials, router
 	registry.searchTools = searchTools
 	registry.server.ReplaceConfiguredRouting(config.Routes, config.SearchTools, config.searchFallbacks())
+	registry.keys.setModelAccessGroups(registry.base.models, models)
 	return true
 }
 

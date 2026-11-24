@@ -25,13 +25,14 @@ func (s *Server) serveInferenceCacheAdmin(w http.ResponseWriter, r *http.Request
 		status(http.StatusUnauthorized, "Runtime token required")
 		return true
 	}
-	if !s.config.InferenceCache.Enabled {
+	cache := s.inferenceCache.Load()
+	if !cache.Enabled {
 		status(http.StatusServiceUnavailable, "Cache not initialized. litellm.cache is None")
 		return true
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	redis, shared := s.config.InferenceCacheStore.(RedisCacheAdmin)
+	redis, shared := cache.store.(RedisCacheAdmin)
 	if r.URL.Path == "/cache/ping" {
 		result := map[string]any{"status": "healthy", "cache_type": "local", "litellm_cache_params": "{}"}
 		if shared {

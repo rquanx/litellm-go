@@ -48,7 +48,7 @@ litellm_settings:
 	request(handler, "POST", "/model_group/make_public", `{"model_groups":[]}`, "wrong", 401)
 	request(handler, "POST", "/model_group/make_public", `{"model_groups":[]}`, config.MasterKey, 200)
 	request(handler, "POST", "/model_hub/update_useful_links", `{"useful_links":{"Managed":{"url":"https://example.invalid/managed","index":0}}}`, config.MasterKey, 200)
-	model := `{"model_name":"dynamic-model","litellm_params":{"model":"openai/dynamic","api_base":"http://example.invalid","api_key":"fixture-credential"},"model_info":{"id":"managed-1"}}`
+	model := `{"model_name":"dynamic-model","litellm_params":{"model":"openai/dynamic","api_base":"http://example.invalid","api_key":"fixture-credential","tags":["fixture"],"use_in_pass_through":true},"model_info":{"id":"managed-1","disable_background_health_check":true}}`
 	request(handler, "POST", "/model/new", model, config.MasterKey, 200)
 	request(handler, "POST", "/model/new", model, config.MasterKey, 400)
 	list := request(handler, "GET", "/v1/models", "", config.MasterKey, 200)
@@ -68,6 +68,15 @@ litellm_settings:
 		t.Fatal("model info did not restore or redacted fields were exposed")
 	}
 	request(handler, "PATCH", "/model/managed-1/update", `{"model_name":"renamed-model"}`, config.MasterKey, 200)
+	record := handler.(*modelRegistry).models[0]
+	if len(record.Params.Tags) != 1 || !record.Params.UseInPassThrough || !record.Info.DisableBackgroundHealthCheck {
+		t.Fatal("renaming a model erased omitted routing or health settings")
+	}
+	request(handler, "PATCH", "/model/managed-1/update", `{"litellm_params":{"use_in_pass_through":false},"model_info":{"disable_background_health_check":false}}`, config.MasterKey, 200)
+	record = handler.(*modelRegistry).models[0]
+	if record.Params.UseInPassThrough || record.Info.DisableBackgroundHealthCheck || len(record.Params.Tags) != 1 {
+		t.Fatal("patch did not apply explicit false values or erased omitted fields")
+	}
 	list = request(handler, "GET", "/v1/models", "", config.MasterKey, 200)
 	if strings.Contains(list, "dynamic-model") || !strings.Contains(list, "renamed-model") {
 		t.Fatal("model update was not published atomically")

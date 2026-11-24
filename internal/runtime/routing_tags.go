@@ -1,23 +1,62 @@
 package runtime
 
 import (
+	"encoding/json"
 	"regexp"
 	"slices"
+	"strings"
 )
 
-func filterTaggedDeployments(candidates []Candidate, input map[string]any, userAgent string, matchAll bool) []Candidate {
+func inferenceTags(fields map[string]any) []string {
 	var tags []string
-	for _, key := range []string{"metadata", "litellm_metadata"} {
-		if metadata, ok := input[key].(map[string]any); ok {
-			if raw, ok := metadata["tags"].([]any); ok {
-				for _, value := range raw {
-					if tag, ok := value.(string); ok && tag != "" && !slices.Contains(tags, tag) {
-						tags = append(tags, tag)
-					}
+	seen := make(map[string]struct{})
+	value := fields["metadata"]
+	if alternate, exists := fields["litellm_metadata"]; exists {
+		value = alternate
+	}
+	metadata, _ := value.(map[string]any)
+	if text, ok := value.(string); ok {
+		_ = json.Unmarshal([]byte(text), &metadata)
+	}
+	for _, list := range []any{metadata["tags"], fields["tags"]} {
+		items, _ := list.([]any)
+		for _, item := range items {
+			if tag, ok := item.(string); ok && tag != "" {
+				if _, exists := seen[tag]; !exists {
+					tags = append(tags, tag)
+					seen[tag] = struct{}{}
 				}
 			}
 		}
 	}
+	return tags
+}
+
+func withDeploymentTags(candidates []Candidate, managed map[string][]string) []Candidate {
+	if len(managed) == 0 {
+		return candidates
+	}
+	candidates = slices.Clone(candidates)
+	for index := range candidates {
+		candidate := &candidates[index]
+		for _, target := range []string{candidate.RoutingGroup, candidate.DeploymentID} {
+			added := managed[target]
+			if len(added) == 0 {
+				continue
+			}
+			candidate.Tags = slices.Clone(candidate.Tags)
+			for _, tag := range added {
+				if !slices.Contains(candidate.Tags, tag) {
+					candidate.Tags = append(candidate.Tags, tag)
+				}
+			}
+		}
+	}
+	return candidates
+}
+
+func filterTaggedDeployments(candidates []Candidate, input map[string]any, userAgent string, matchAll bool) []Candidate {
+	tags := inferenceTags(input)
 	result := make([]Candidate, 0, len(candidates))
 	for start := 0; start < len(candidates); {
 		end := start + 1
@@ -63,4 +102,19 @@ func matchDeploymentTags(group []Candidate, requestTags []string, userAgent stri
 		return defaults
 	}
 	return group
+}
+
+func appendAnalyticsUserAgent(tags []string, agent string) []string {
+	if agent == "" || len(agent) > 1024 {
+		return tags
+	}
+	result := slices.Clone(tags)
+	short, _, separated := strings.Cut(agent, "/")
+	if separated && short != "" && !slices.Contains(result, "User-Agent: "+short) {
+		result = append(result, "User-Agent: "+short)
+	}
+	if !slices.Contains(result, "User-Agent: "+agent) {
+		result = append(result, "User-Agent: "+agent)
+	}
+	return result
 }

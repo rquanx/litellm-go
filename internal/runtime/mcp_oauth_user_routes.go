@@ -8,12 +8,15 @@ import (
 )
 
 func (s *Server) serveMCPUserCredentials(w http.ResponseWriter, r *http.Request) bool {
-	path := r.URL.Path
+	path := strings.TrimPrefix(r.URL.Path, "/v1/mcp/")
+	if path != r.URL.Path {
+		path = "/mcp/" + path
+	}
 	list := path == "/mcp/user-credentials" && r.Method == http.MethodGet
 	id, operation, valid := strings.Cut(strings.TrimPrefix(path, "/mcp/server/"), "/")
 	if !list && !(strings.HasPrefix(path, "/mcp/server/") && validResourceSegment(id) && valid &&
-		(operation == "oauth-user-credential/status" && r.Method == http.MethodGet ||
-			operation == "oauth-user-credential" && (r.Method == http.MethodPost || r.Method == http.MethodDelete))) {
+		((operation == "oauth-user-credential/status" || operation == "user-credential/status") && r.Method == http.MethodGet ||
+			(operation == "oauth-user-credential" || operation == "user-credential") && (r.Method == http.MethodPost || r.Method == http.MethodDelete))) {
 		return false
 	}
 	access, ok := s.mcpAccess(r)
@@ -40,9 +43,11 @@ func (s *Server) serveMCPUserCredentials(w http.ResponseWriter, r *http.Request)
 		}
 		items := []map[string]any{}
 		for _, server := range s.currentMCPServers() {
-			if token, found := records[server.ID]; found && access(server, "") {
+			if token, found := records[server.ID]; found && token.AccessToken != "" && access(server, "") {
 				item := mcpUserTokenStatus(server.ID, token)
 				item["server_name"] = server.Name
+				item["credential_type"] = "oauth2"
+				item["alias"] = server.Alias
 				items = append(items, item)
 			}
 		}

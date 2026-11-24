@@ -161,12 +161,23 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 		writeMCPError(w, http.StatusOK, message.ID, -32601, "Method not found")
 		return
 	}
-	if s.config.Callback != nil {
+	budget, allowed := s.checkKeyBudget(w, r)
+	if !allowed {
+		return
+	}
+	admission, allowed := s.admitKeyLimits(w, r, budget, (len(message.Params)+3)/4)
+	if !allowed {
+		return
+	}
+	var recorder *callbackResponse
+	defer func() { admission.finish(recorder) }()
+	if s.config.Callback != nil || len(admission.settlements) != 0 {
 		call := "asend_message"
 		if message.Method == "message/stream" {
 			call = "asend_message_streaming"
 		}
 		event := newInferenceEvent(call, agent.Name, message.Method == "message/stream")
+		budget.apply(&event)
 		event.Model, event.ModelID, event.Provider = "a2a_agent/"+agent.Name, agent.ID, "a2a_agent"
 		if trace := strings.TrimSpace(r.Header.Get("X-LiteLLM-Trace-Id")); trace != "" {
 			event.TraceID = trace
@@ -177,7 +188,7 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 		if target, err := url.Parse(agent.URL); err == nil {
 			event.APISource = target.Scheme + "://" + target.Host
 		}
-		recorder := &callbackResponse{ResponseWriter: w, event: event, capture: s.config.LogMessages}
+		recorder = &callbackResponse{ResponseWriter: w, event: event, capture: s.config.LogMessages}
 		if recorder.capture {
 			recorder.event.Messages = boundedCallbackJSON(message.Params)
 		}
@@ -185,7 +196,9 @@ func (s *Server) relayAgentMessage(w http.ResponseWriter, r *http.Request, agent
 		defer func() {
 			if recorder.status != 0 {
 				recorder.finish()
-				s.config.Callback(recorder.event)
+				if s.config.Callback != nil {
+					s.config.Callback(recorder.event)
+				}
 			}
 		}()
 	}

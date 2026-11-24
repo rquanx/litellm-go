@@ -49,11 +49,13 @@ func (params inferenceCacheParams) apply(config *Config) error {
 		if ttl == nil {
 			ttl = params.RedisTTL
 		}
-		options, err := params.redisOptions()
-		if err != nil {
-			return err
+		if config.InferenceCacheRedis == nil && config.inferenceCacheTopology == nil {
+			options, err := params.redisOptions()
+			if err != nil {
+				return err
+			}
+			config.InferenceCacheRedis = options
 		}
-		config.InferenceCacheRedis = options
 	default:
 		return errors.New("unsupported inference cache type")
 	}
@@ -128,23 +130,26 @@ func (params inferenceCacheParams) redisOptions() (*redis.Options, error) {
 }
 
 type redisInferenceCache struct {
-	*redis.Client
+	redis.UniversalClient
 	prefix string
 }
 
 func OpenRedisInferenceCache(ctx context.Context, options *redis.Options, namespace string) (*redisInferenceCache, error) {
 	configured := *options
 	configured.ContextTimeoutEnabled = true
-	client := redis.NewClient(&configured)
+	return openInferenceCacheClient(ctx, redis.NewClient(&configured), namespace)
+}
+
+func openInferenceCacheClient(ctx context.Context, client redis.UniversalClient, namespace string) (*redisInferenceCache, error) {
 	if client.Ping(ctx).Err() != nil {
 		client.Close()
 		return nil, errors.New("could not connect to inference cache Redis")
 	}
-	return &redisInferenceCache{Client: client, prefix: fmt.Sprintf("minato:inference:%x:", sha256.Sum256([]byte(namespace)))}, nil
+	return &redisInferenceCache{UniversalClient: client, prefix: fmt.Sprintf("minato:inference:%x:", sha256.Sum256([]byte(namespace)))}, nil
 }
 
 func (store *redisInferenceCache) Get(ctx context.Context, key string) ([]byte, error) {
-	data, err := store.Client.Get(ctx, store.prefix+key).Bytes()
+	data, err := store.UniversalClient.Get(ctx, store.prefix+key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
@@ -152,14 +157,14 @@ func (store *redisInferenceCache) Get(ctx context.Context, key string) ([]byte, 
 }
 
 func (store *redisInferenceCache) Set(ctx context.Context, key string, data []byte, ttl time.Duration) error {
-	return store.Client.Set(ctx, store.prefix+key, data, max(ttl, time.Millisecond)).Err()
+	return store.UniversalClient.Set(ctx, store.prefix+key, data, max(ttl, time.Millisecond)).Err()
 }
 
 func (store *redisInferenceCache) PingCache(ctx context.Context) error {
 	if err := store.Ping(ctx).Err(); err != nil {
 		return err
 	}
-	return store.Client.Set(ctx, store.prefix+"health", "ok", time.Second).Err()
+	return store.UniversalClient.Set(ctx, store.prefix+"health", "ok", time.Second).Err()
 }
 
 func (store *redisInferenceCache) DeleteCache(ctx context.Context, keys []string) error {
@@ -167,18 +172,45 @@ func (store *redisInferenceCache) DeleteCache(ctx context.Context, keys []string
 	for i, key := range keys {
 		names[i] = store.prefix + key
 	}
+	if _, cluster := store.UniversalClient.(*redis.ClusterClient); cluster {
+		return deleteClusterCacheKeys(ctx, store.UniversalClient, names)
+	}
 	return store.Del(ctx, names...).Err()
 }
 
+func deleteClusterCacheKeys(ctx context.Context, client redis.Cmdable, keys []string) error {
+	_, err := client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, key := range keys {
+			pipe.Del(ctx, key)
+		}
+		return nil
+	})
+	return err
+}
+
 func (store *redisInferenceCache) FlushCache(ctx context.Context) error {
+	if cluster, ok := store.UniversalClient.(*redis.ClusterClient); ok {
+		return cluster.ForEachMaster(ctx, func(ctx context.Context, client *redis.Client) error {
+			return store.flushCache(ctx, client, true)
+		})
+	}
+	return store.flushCache(ctx, store.UniversalClient, false)
+}
+
+func (store *redisInferenceCache) flushCache(ctx context.Context, client redis.Cmdable, cluster bool) error {
 	var cursor uint64
 	for {
-		keys, next, err := store.Scan(ctx, cursor, store.prefix+"*", 256).Result()
+		keys, next, err := client.Scan(ctx, cursor, store.prefix+"*", 256).Result()
 		if err != nil {
 			return err
 		}
 		if len(keys) > 0 {
-			if err := store.Del(ctx, keys...).Err(); err != nil {
+			if cluster {
+				err = deleteClusterCacheKeys(ctx, client, keys)
+			} else {
+				err = client.Del(ctx, keys...).Err()
+			}
+			if err != nil {
 				return err
 			}
 		}

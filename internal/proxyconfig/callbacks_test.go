@@ -187,3 +187,27 @@ func TestCallbackHealthUsesSyntheticEventAndRequiresMaster(t *testing.T) {
 		t.Fatal("fixture callback did not receive the probe")
 	}
 }
+func TestKeyHealthReportsRejectedCallbackDelivery(t *testing.T) {
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer sink.Close()
+	keys, err := LoadKeys("master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys.state.Keys[keyDigest("with-logging")] = virtualKey{Metadata: map[string]any{
+		"logging": []map[string]string{{"callback_name": "generic_api"}},
+	}}
+	callbacks := GenericCallbacks{&GenericCallback{name: "generic_api", endpoint: sink.URL, success: true}}
+	handler := callbacks.ManagementHandler(http.NotFoundHandler(), keys)
+	for token, expected := range map[string]string{"master": `"key":"healthy"`, "with-logging": `"key":"unhealthy"`} {
+		r := httptest.NewRequest(http.MethodPost, "/key/health", nil)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), expected) {
+			t.Fatalf("unexpected key health response: %d %s", w.Code, w.Body)
+		}
+	}
+}

@@ -17,6 +17,8 @@ type project struct {
 	Blocked bool `json:"blocked"`
 	Metadata map[string]any `json:"metadata"`
 	ObjectPermission *objectPermission `json:"object_permission,omitempty"`
+	BudgetID string `json:"budget_id,omitempty"`
+	ImportedSpend *importedKeySpend `json:"imported_spend,omitempty"`
 }
 
 func (registry *KeyRegistry) registerProjectRoutes(mux *http.ServeMux) {
@@ -42,6 +44,7 @@ func (registry *KeyRegistry) writeProject(w http.ResponseWriter, r *http.Request
 		Blocked *bool `json:"blocked"`
 		Metadata *map[string]any `json:"metadata"`
 		Permission json.RawMessage `json:"object_permission"`
+		BudgetID json.RawMessage `json:"budget_id"`
 	}
 	update := r.URL.Path == "/project/update"
 	if decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input) != nil ||
@@ -104,6 +107,14 @@ func (registry *KeyRegistry) writeProject(w http.ResponseWriter, r *http.Request
 		}
 		record.ObjectPermission = permission
 	}
+	if input.BudgetID != nil {
+		id, err := registry.validateBudgetID(r.Context(), input.BudgetID)
+		if err != nil {
+			modelError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		record.BudgetID = id
+	}
 	next := registry.state
 	next.Projects = maps.Clone(next.Projects)
 	if next.Projects == nil {
@@ -111,6 +122,7 @@ func (registry *KeyRegistry) writeProject(w http.ResponseWriter, r *http.Request
 	}
 	next.Projects[record.ID] = record
 	if registry.apply(w, next) {
+		record.ImportedSpend = nil
 		modelJSON(w, http.StatusOK, record)
 	}
 }
@@ -127,6 +139,7 @@ func (registry *KeyRegistry) readProjects(w http.ResponseWriter, r *http.Request
 			modelError(w, http.StatusNotFound, "Project not found")
 			return
 		}
+		record.ImportedSpend = nil
 		modelJSON(w, http.StatusOK, record)
 		return
 	}
@@ -135,6 +148,7 @@ func (registry *KeyRegistry) readProjects(w http.ResponseWriter, r *http.Request
 	for _, id := range slices.Sorted(maps.Keys(registry.state.Projects)) {
 		record := registry.state.Projects[id]
 		if filter == "" || filter == record.TeamID {
+			record.ImportedSpend = nil
 			result = append(result, record)
 		}
 	}
@@ -164,6 +178,7 @@ func (registry *KeyRegistry) deleteProjects(w http.ResponseWriter, r *http.Reque
 			delete(next.Keys, digest)
 		}
 	}
+	next.archiveRevokedKeys(registry.state, "default_user_id")
 	if registry.apply(w, next) {
 		modelJSON(w, http.StatusOK, map[string]int{"count": len(registry.state.Projects)})
 	}

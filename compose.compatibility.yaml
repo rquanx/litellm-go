@@ -1,0 +1,18 @@
+services:
+  litellm-go:
+    build:
+      target: runtime
+    environment:
+      LITELLM_GO_COMPATIBILITY_UPSTREAM: http://litellm:4000
+      LITELLM_GO_NATIVE_PATHS: ${LITELLM_GO_NATIVE_PATHS:-}
+    depends_on:
+      - litellm
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.85.0@sha256:2e8517e2bed423c50ab7e40fb1ac0a9cbe62a764e9d65161d871fb6a9bf75a2d
+    command: ["--config", "/config/proxy.yaml", "--host", "0.0.0.0", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
+      DATABASE_URL: ${LITELLM_COMPAT_DATABASE_URL:-}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - ${LITELLM_COMPAT_CONFIG:?set LITELLM_COMPAT_CONFIG}:/config/proxy.yaml:ro

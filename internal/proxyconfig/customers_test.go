@@ -107,6 +107,19 @@ func TestCustomerCRUDAndBlockedInference(t *testing.T) {
 	if event.Model != "fixture-eu" || calls.Load() != 2 {
 		t.Fatalf("regional fallback reached an unexpected deployment: %+v", event)
 	}
+	charge := 0.5
+	usage := runtime.InferenceEvent{ID: newEntityID(), Model: "fixture", EndUser: id,
+		StartTime: float64(time.Now().Unix()), Spend: &charge}
+	spend.Record(usage)
+	spend.Record(usage)
+	body := call("GET", "/customer/info?end_user_id="+id, "", "", key, 200)
+	if err := json.Unmarshal([]byte(body), &result); err != nil || result.Spend != 2.5 {
+		t.Fatalf("expected one customer charge, got spend %g: %v", result.Spend, err)
+	}
+	var recorded float64
+	if err := db.QueryRow(`SELECT spend FROM minato_proxy_spend WHERE request_id=$1`, usage.ID).Scan(&recorded); err != nil || recorded != charge {
+		t.Fatalf("unexpected recorded spend %g: %v", recorded, err)
+	}
 	call("POST", "/customer/delete", `{"user_ids":["fixture-customer","missing-fixture"]}`, "", key, 404)
 	call("GET", "/end_user/info?end_user_id="+id, "", "", key, 200)
 	call("POST", "/customer/delete", `{"user_ids":["fixture-customer"]}`, "", key, 200)

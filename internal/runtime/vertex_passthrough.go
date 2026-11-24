@@ -9,6 +9,9 @@ import (
 )
 
 func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, suffix string) bool {
+	if suffix == "live" {
+		return s.serveVertexLive(w, r)
+	}
 	if suffix == "" || !slices.Contains([]string{"GET", "POST", "PUT", "DELETE", "PATCH"}, r.Method) {
 		return false
 	}
@@ -151,5 +154,69 @@ func (s *Server) serveVertexPassThrough(w http.ResponseWriter, r *http.Request, 
 		route.UpstreamQuery = url.Values{"alt": {"sse"}}
 	}
 	s.forwardPassThrough(w, r, route)
+	return true
+}
+
+func (s *Server) serveVertexLive(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Vertex AI Live requires a WebSocket upgrade")
+		return true
+	}
+	var scope []string
+	if !s.authorized(r) {
+		var valid bool
+		if s.config.AuthorizeKey != nil {
+			scope, valid = s.config.AuthorizeKey(ProxyCredential(r))
+		}
+		if !valid {
+			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+			return true
+		}
+	}
+	model := r.URL.Query().Get("model")
+	candidate, ok := s.selectGoogleResourceCandidate(model, "", "vertex_ai", scope, false)
+	if !ok || candidate.Vertex == nil {
+		writeError(w, http.StatusNotFound, "model_not_found", "No authorized Vertex AI Live deployment")
+		return true
+	}
+	if model != "" && !modelAllowed(scope, model) {
+		writeError(w, http.StatusForbidden, "model_not_allowed", "The key does not allow this model")
+		return true
+	}
+	project := r.URL.Query().Get("vertex_project")
+	if project == "" {
+		project = candidate.Vertex.Project
+	}
+	location := r.URL.Query().Get("vertex_location")
+	if location == "" {
+		location = candidate.Vertex.Location
+	}
+	if project == "" || location == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "Vertex project and location are required")
+		return true
+	}
+	base := strings.TrimRight(candidate.APIBase, "/")
+	if base == "" {
+		base = "https://" + location + "-aiplatform.googleapis.com"
+	}
+	target, err := url.Parse(base)
+	if err != nil || target.Hostname() == "" {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Vertex provider base")
+		return true
+	}
+	target.Scheme = "wss"
+	target.Path = "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+	key := candidate.APIKey
+	if key == "" {
+		key = os.Getenv(candidate.CredentialRef)
+	}
+	authRequest, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, target.String(), nil)
+	if err := applyGeminiCredential(authRequest, candidate, key); err != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		return true
+	}
+	authRequest.Header.Set("Content-Type", "application/json")
+	authRequest.Header.Set("x-goog-user-project", project)
+	s.forwardPassThrough(w, r, PassThroughRoute{Path: r.URL.Path, Target: *target, Headers: authRequest.Header})
 	return true
 }

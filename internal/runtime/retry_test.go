@@ -8,7 +8,26 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestRetryDelayUsesConfiguredMinimumForBackoff(t *testing.T) {
+	for _, test := range []struct {
+		header  http.Header
+		retries int
+		minimum time.Duration
+		want    time.Duration
+	}{
+		{nil, 0, 3 * time.Second, 3 * time.Second},
+		{nil, 3, 3 * time.Second, 4 * time.Second},
+		{nil, 0, 9 * time.Second, 8 * time.Second},
+		{http.Header{"Retry-After": {"1"}}, 0, 5 * time.Second, time.Second},
+	} {
+		if got := retryDelay(test.header, test.retries, test.minimum); got != test.want {
+			t.Errorf("retryDelay(%v, %d, %s) = %s, want %s", test.header, test.retries, test.minimum, got, test.want)
+		}
+	}
+}
 
 func TestRetrySameDeploymentBeforeFallback(t *testing.T) {
 	var calls atomic.Int32

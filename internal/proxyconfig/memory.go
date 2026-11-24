@@ -75,12 +75,16 @@ func (api *memoryAPI) identify(r *http.Request) (memoryCaller, bool) {
 }
 
 func (keys *KeyRegistry) identifyResourceCaller(r *http.Request) (memoryCaller, bool) {
+	keys.mu.RLock()
+	defer keys.mu.RUnlock()
+	return keys.identifyResourceCallerLocked(r)
+}
+
+func (keys *KeyRegistry) identifyResourceCallerLocked(r *http.Request) (memoryCaller, bool) {
 	token := runtime.ProxyCredential(r)
 	if keys.master != "" && token == keys.master {
 		return memoryCaller{admin: true}, true
 	}
-	keys.mu.RLock()
-	defer keys.mu.RUnlock()
 	if _, _, ok := keys.authorizeLocked(token); !ok {
 		if user,ok:=keys.ssoViewerLocked(r,token);ok {
 			return memoryCaller{user:user},true

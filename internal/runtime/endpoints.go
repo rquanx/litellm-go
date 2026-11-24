@@ -46,14 +46,19 @@ func EndpointFromPath(path string) string {
 	return ""
 }
 
+func extendedResourceEndpoint(endpoint string) bool {
+	return endpoint == "responses-compact" || endpoint == "vector-stores" || endpoint == "videos"
+}
+
 func proxyAlias(path string) bool {
 	switch path {
 	case "/models", "/chat/completions", "/completions", "/embeddings", "/moderations",
-		"/audio/speech", "/audio/transcriptions", "/images/generations", "/images/edits", "/rerank", "/ocr", "/responses", "/rag/query", "/rag/ingest":
+		"/audio/speech", "/audio/transcriptions", "/images/generations", "/images/edits", "/rerank", "/ocr", "/responses", "/rag/query", "/rag/ingest",
+		"/messages/count_tokens":
 		return true
 	}
 	return strings.HasPrefix(path, "/responses/") || strings.HasPrefix(path, "/models/") ||
-		isFineTuningPath("/v1"+path) || isVectorStorePath("/v1"+path) || isVideoPath("/v1"+path) || isContainerPath("/v1"+path) || resourceFamily("/v1"+path) != ""
+		assistantFamily("/v1"+path) != "" || isFineTuningPath("/v1"+path) || isVectorStorePath("/v1"+path) || isVideoPath("/v1"+path) || isContainerPath("/v1"+path) || resourceFamily("/v1"+path) != ""
 }
 
 func deploymentEndpoint(path string) (string, string) {

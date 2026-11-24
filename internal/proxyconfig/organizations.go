@@ -1,10 +1,13 @@
 package proxyconfig
 
 import (
+	"encoding/json"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type organization struct {
@@ -13,6 +16,8 @@ type organization struct {
 	Models   []string       `json:"models"`
 	Metadata map[string]any `json:"metadata"`
 	Members []organizationMember `json:"members"`
+	BudgetID string `json:"budget_id,omitempty"`
+	ImportedSpend *importedKeySpend `json:"imported_spend,omitempty"`
 }
 
 type organizationView struct {
@@ -24,6 +29,7 @@ func (registry *KeyRegistry) registerOrganizationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /organization/new", registry.writeOrganization)
 	mux.HandleFunc("PATCH /organization/update", registry.writeOrganization)
 	mux.HandleFunc("GET /organization/info", registry.organizationInfo)
+	mux.HandleFunc("POST /organization/info", registry.organizationInfoBatch)
 	mux.HandleFunc("GET /organization/list", registry.listOrganizations)
 	mux.HandleFunc("DELETE /organization/delete", registry.deleteOrganizations)
 	mux.HandleFunc("POST /organization/member_add", registry.writeOrganizationMember)
@@ -32,7 +38,8 @@ func (registry *KeyRegistry) registerOrganizationRoutes(mux *http.ServeMux) {
 }
 
 func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
+	update := r.Method == http.MethodPatch
+	if !update && !registry.requireMaster(w, r) {
 		return
 	}
 	var input struct {
@@ -40,8 +47,8 @@ func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Re
 		Alias    *string         `json:"organization_alias"`
 		Models   *[]string       `json:"models"`
 		Metadata *map[string]any `json:"metadata"`
+		BudgetID json.RawMessage `json:"budget_id"`
 	}
-	update := r.Method == http.MethodPatch
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil ||
 		(update && input.ID == "") || (!update && input.Alias == nil) ||
 		(input.Alias != nil && strings.TrimSpace(*input.Alias) == "") ||
@@ -55,6 +62,11 @@ func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Re
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	current, exists := registry.state.Organizations[input.ID]
+	if update {
+		if _, ok := registry.requireOrganizationAdminLocked(w, r, current); !ok {
+			return
+		}
+	}
 	if update && !exists {
 		modelError(w, http.StatusNotFound, "Organization not found")
 		return
@@ -73,7 +85,18 @@ func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Re
 		current.Models = *input.Models
 	}
 	if input.Metadata != nil {
-		current.Metadata = *input.Metadata
+		metadata := make(map[string]any, len(current.Metadata)+len(*input.Metadata))
+		maps.Copy(metadata, current.Metadata)
+		maps.Copy(metadata, *input.Metadata)
+		current.Metadata = metadata
+	}
+	if input.BudgetID != nil {
+		id, err := registry.validateBudgetID(r.Context(), input.BudgetID)
+		if err != nil {
+			modelError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		current.BudgetID = id
 	}
 	next := registry.state
 	next.Organizations = maps.Clone(next.Organizations)
@@ -87,10 +110,11 @@ func (registry *KeyRegistry) writeOrganization(w http.ResponseWriter, r *http.Re
 }
 
 func (registry *KeyRegistry) organizationView(org organization) organizationView {
+	org.ImportedSpend = nil
 	teams := make([]team, 0)
 	for _, entry := range registry.state.Teams {
 		if entry.OrgID == org.ID {
-			teams = append(teams, entry)
+			teams = append(teams, entry.public())
 		}
 	}
 	slices.SortFunc(teams, func(a, b team) int { return strings.Compare(a.ID, b.ID) })
@@ -99,40 +123,75 @@ func (registry *KeyRegistry) organizationView(org organization) organizationView
 }
 
 func (registry *KeyRegistry) organizationInfo(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
-		return
-	}
 	id := r.URL.Query().Get("organization_id")
 	if id == "" {
 		modelError(w, http.StatusUnprocessableEntity, "Supply an organization ID")
 		return
 	}
 	registry.mu.RLock()
+	defer registry.mu.RUnlock()
 	org, exists := registry.state.Organizations[id]
+	if !registry.adminViewerLocked(runtime.ProxyCredential(r)) {
+		if _, ok := registry.requireOrganizationAdminLocked(w, r, org); !ok {
+			return
+		}
+	}
 	if !exists {
-		registry.mu.RUnlock()
 		modelError(w, http.StatusNotFound, "Organization not found")
 		return
 	}
-	view := registry.organizationView(org)
-	registry.mu.RUnlock()
-	modelJSON(w, http.StatusOK, view)
+	modelJSON(w, http.StatusOK, registry.organizationView(org))
+}
+
+func (registry *KeyRegistry) organizationInfoBatch(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		IDs []string `json:"organizations"`
+	}
+	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil || len(input.IDs) == 0 {
+		modelError(w, http.StatusBadRequest, "Supply organization IDs to query")
+		return
+	}
+	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	results := make([]organization, 0, len(input.IDs))
+	seen := make(map[string]bool, len(input.IDs))
+	for _, id := range input.IDs {
+		org, exists := registry.state.Organizations[id]
+		if !registry.adminViewerLocked(runtime.ProxyCredential(r)) {
+			if _, ok := registry.requireOrganizationAdminLocked(w, r, org); !ok {
+				return
+			}
+		}
+		if exists && !seen[id] {
+			org.ImportedSpend = nil
+			org.Members = nil
+			results = append(results, org)
+			seen[id] = true
+		}
+	}
+	modelJSON(w, http.StatusOK, results)
 }
 
 func (registry *KeyRegistry) listOrganizations(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
-		return
-	}
 	id, alias := r.URL.Query().Get("org_id"), strings.ToLower(r.URL.Query().Get("org_alias"))
 	registry.mu.RLock()
+	defer registry.mu.RUnlock()
+	caller := memoryCaller{admin: true}
+	if !registry.adminViewerLocked(runtime.ProxyCredential(r)) {
+		var ok bool
+		caller, ok = registry.organizationCallerLocked(w, r)
+		if !ok {
+			return
+		}
+	}
 	organizations := make([]organizationView, 0, len(registry.state.Organizations))
 	for _, currentID := range slices.Sorted(maps.Keys(registry.state.Organizations)) {
 		org := registry.state.Organizations[currentID]
-		if (id == "" || org.ID == id) && strings.Contains(strings.ToLower(org.Alias), alias) {
+		if (caller.admin || organizationRole(org, caller.user) != "") &&
+			(id == "" || org.ID == id) && strings.Contains(strings.ToLower(org.Alias), alias) {
 			organizations = append(organizations, registry.organizationView(org))
 		}
 	}
-	registry.mu.RUnlock()
 	modelJSON(w, http.StatusOK, organizations)
 }
 
@@ -169,12 +228,14 @@ func (registry *KeyRegistry) deleteOrganizations(w http.ResponseWriter, r *http.
 			delete(next.Teams, id)
 		}
 	}
+	next.pruneAccessGroupTeamOverrides()
 	for digest, key := range next.Keys {
 		_, teamExists := next.Teams[key.TeamID]
 		if slices.Contains(input.IDs, key.OrgID) || (key.TeamID != "" && !teamExists) {
 			delete(next.Keys, digest)
 		}
 	}
+	next.archiveRevokedKeys(registry.state, "default_user_id")
 	if registry.apply(w, next) {
 		modelJSON(w, http.StatusOK, deleted)
 	}

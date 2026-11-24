@@ -17,7 +17,7 @@ var routingStrategies = map[string]string{
 }
 
 func (registry *modelRegistry) routerSettings(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -27,6 +27,7 @@ func (registry *modelRegistry) routerSettings(w http.ResponseWriter, r *http.Req
 		"routing_strategy": config.RoutingStrategy,
 		"timeout": config.Timeout.Seconds(),
 		"num_retries": config.NumRetries,
+		"retry_after": config.RetryAfter.Seconds(),
 		"allowed_fails": config.AllowedFails,
 		"cooldown_time": config.Cooldown.Seconds(),
 		"disable_cooldowns": config.Cooldown == 0,
@@ -39,16 +40,17 @@ func (registry *modelRegistry) routerSettings(w http.ResponseWriter, r *http.Req
 		name, kind, label, description string
 		fallback any
 	}{
-		{"routing_strategy", "str", "Routing Strategy", "Deployment selection logic", "simple-shuffle"},
-		{"timeout", "float", "Timeout", "Upstream request timeout in seconds", 120},
-		{"num_retries", "int", "Retries", "Retry budget per inference request", 0},
-		{"allowed_fails", "int", "Allowed Failures", "Failure count before cooling down a deployment", 0},
-		{"cooldown_time", "float", "Cooldown Time", "Deployment cooldown in seconds", 60},
-		{"disable_cooldowns", "bool", "Disable Cooldowns", "Whether deployment cooldown is disabled", true},
-		{"fallbacks", "list", "Fallbacks", "Ordered fallback model groups", nil},
-		{"default_fallbacks", "list", "Default Fallbacks", "Fallback model groups shared by configured models", nil},
-		{"context_window_fallbacks", "list", "Context Window Fallbacks", "Targets for context length failures", nil},
-		{"content_policy_fallbacks", "list", "Content Policy Fallbacks", "Targets for recognized content policy errors", nil},
+		{"routing_strategy", "String", "Routing Strategy", "Deployment selection logic", "simple-shuffle"},
+		{"timeout", "Float", "Timeout", "Upstream request timeout in seconds", 120},
+		{"num_retries", "Integer", "Retries", "Retry budget per inference request", 0},
+		{"retry_after", "Integer", "Retry After", "Minimum computed retry delay in seconds", 0},
+		{"allowed_fails", "Integer", "Allowed Failures", "Failure count before cooling down a deployment", 0},
+		{"cooldown_time", "Float", "Cooldown Time", "Deployment cooldown in seconds", 60},
+		{"disable_cooldowns", "Boolean", "Disable Cooldowns", "Whether deployment cooldown is disabled", true},
+		{"fallbacks", "List", "Fallbacks", "Ordered fallback model groups", nil},
+		{"default_fallbacks", "List", "Default Fallbacks", "Fallback model groups shared by configured models", nil},
+		{"context_window_fallbacks", "List", "Context Window Fallbacks", "Targets for context length failures", nil},
+		{"content_policy_fallbacks", "List", "Content Policy Fallbacks", "Targets for recognized content policy errors", nil},
 	}
 	if config.Timeout == 0 {
 		values["timeout"] = (120 * time.Second).Seconds()

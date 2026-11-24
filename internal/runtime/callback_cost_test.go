@@ -3,6 +3,7 @@ package runtime
 import (
 	"math"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -42,5 +43,27 @@ func TestCallbackAccountsForNativeGeminiUsage(t *testing.T) {
 	recorder.recordJSON([]byte(`{"usageMetadata":{"promptTokenCount":12,"cachedContentTokenCount":7,"candidatesTokenCount":3,"thoughtsTokenCount":2,"totalTokenCount":17}}`))
 	if recorder.event.Prompt != 12 || recorder.event.Completion != 5 || recorder.event.Total != 17 || recorder.cachedTokens != 7 {
 		t.Fatalf("unexpected Gemini accounting: %+v", recorder.event)
+	}
+}
+
+func TestSpendStreamCaptureDoesNotChangeCallbackPayload(t *testing.T) {
+	recorder := &callbackResponse{ResponseWriter: httptest.NewRecorder(),
+		event: newInferenceEvent("chat-completions", "fixture", true), capture: true, captureSpendStream: true}
+	recorder.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"fixture\"}}]}\n\ndata: [DONE]\n\n"))
+	recorder.finish()
+	if got := string(recorder.event.SpendStreamResponse); got != `[{"choices":[{"delta":{"content":"fixture"}}]}]` {
+		t.Fatalf("unexpected spend stream capture: %s", got)
+	}
+	if recorder.event.Response != nil {
+		t.Fatalf("unexpected change to callback response: %s", recorder.event.Response)
+	}
+
+	oversized := &callbackResponse{ResponseWriter: httptest.NewRecorder(),
+		event: newInferenceEvent("chat-completions", "fixture", true), captureSpendStream: true}
+	oversized.Write([]byte("data: {\"content\":\"" + strings.Repeat("a", maxCallbackMessageBytes) + "\"}\n\n"))
+	oversized.Write([]byte("data: {\"content\":\"last\"}\n\n"))
+	oversized.finish()
+	if oversized.event.SpendStreamResponse != nil {
+		t.Fatal("oversized stream was partially captured")
 	}
 }

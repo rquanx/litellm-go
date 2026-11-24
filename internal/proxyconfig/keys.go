@@ -13,12 +13,15 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type virtualKey struct {
+	AccessGroupIDs []string `json:"access_group_ids,omitempty"`
+	RestrictedGroupIDs []string `json:"restricted_access_group_ids,omitempty"`
 	Alias     string         `json:"key_alias,omitempty"`
 	Models    []string       `json:"models"`
 	Expires   *time.Time     `json:"expires,omitempty"`
@@ -28,16 +31,36 @@ type virtualKey struct {
 	UserID    string         `json:"user_id,omitempty"`
 	Blocked   bool           `json:"blocked"`
 	Metadata  map[string]any `json:"metadata,omitempty"`
+	RouterSettings map[string]any `json:"router_settings,omitempty"`
 	ObjectPermission *objectPermission `json:"object_permission,omitempty"`
 	CreatedAt *time.Time     `json:"created_at,omitempty"`
+	CreatedBy string        `json:"created_by,omitempty"`
 	RotationTarget string     `json:"rotation_target,omitempty"`
+	MaxBudget *float64 `json:"max_budget,omitempty"`
+	BudgetDuration string `json:"budget_duration,omitempty"`
+	BudgetResetAt *time.Time `json:"budget_reset_at,omitempty"`
+	BudgetLimits []keyBudgetLimit `json:"budget_limits,omitempty"`
+	ModelBudgets map[string]keyModelBudget `json:"model_max_budget,omitempty"`
+	SpendIdentity string `json:"spend_identity,omitempty"`
+	ImportedSpend *importedKeySpend `json:"imported_spend,omitempty"`
+	BudgetID string `json:"budget_id,omitempty"`
+	RPMLimit *int `json:"rpm_limit,omitempty"`
+	TPMLimit *int `json:"tpm_limit,omitempty"`
+	ParallelLimit *int `json:"max_parallel_requests,omitempty"`
 }
 
 type accessState struct {
+	SSOTeamDefaults *ssoTeamDefaults `json:"sso_team_defaults,omitempty"`
+	SSOUserDefaults *SSOUserDefaults `json:"sso_user_defaults,omitempty"`
+	DeletedKeys map[string]deletedVirtualKey `json:"deleted_keys,omitempty"`
+	AccessGroups map[string]accessGroup `json:"access_groups,omitempty"`
+	AccessGroupTeamOverrides map[string][]string `json:"access_group_team_overrides,omitempty"`
 	Keys  map[string]virtualKey `json:"keys"`
 	Teams map[string]team       `json:"teams"`
 	Organizations map[string]organization `json:"organizations,omitempty"`
 	Users map[string]internalUser `json:"users,omitempty"`
+	Passwords map[string]string `json:"password_hashes,omitempty"`
+	Invitations map[string]dashboardInvitation `json:"invitations,omitempty"`
 	Projects map[string]project `json:"projects,omitempty"`
 }
 
@@ -54,14 +77,24 @@ func (state *accessState) UnmarshalJSON(payload []byte) error {
 }
 
 type KeyRegistry struct {
+	storeAuditLogs bool
+	modelAccessGroups atomic.Pointer[map[string][]string]
+	passwordSlots chan struct{}
 	master string
 	store  stateStore
 	mu     sync.RWMutex
 	state  accessState
 	ssoDefaults *SSOUserDefaults
+	ssoTeamDefaults *ssoTeamDefaults
 	ssoTeamClaim string
 	browserSSO *postgresBrowserSSO
-	teamMemberSpend func(context.Context, string, string) (float64, error)
+	teamMemberSpend func(context.Context, string, string, time.Time) (float64, error)
+	userSpend func(context.Context, string, time.Time) (float64, error)
+	teamSpend func(context.Context, string, time.Time) (float64, error)
+	budgetMaximum func(context.Context, string) (*float64, error)
+	budgetPeriod func(context.Context, string) (budgetPeriod, error)
+	keySpend func(context.Context, string, time.Time) (float64, error)
+	budgetZone *time.Location
 }
 
 func LoadKeys(master, path string) (*KeyRegistry, error) {
@@ -93,7 +126,7 @@ func loadKeys(master string, store stateStore) (*KeyRegistry, error) {
 	if master == "" {
 		return nil, errors.New("virtual keys require a proxy master key")
 	}
-	registry := &KeyRegistry{master: master, store: store, state: emptyAccessState()}
+	registry := &KeyRegistry{master: master, store: store, state: emptyAccessState(), passwordSlots: make(chan struct{}, 2)}
 	if store == nil {
 		return registry, nil
 	}
@@ -170,6 +203,7 @@ type objectPermission struct {
 	MCPTools map[string][]string `json:"mcp_tool_permissions,omitempty"`
 	MCPAccessGroups []string `json:"mcp_access_groups,omitempty"`
 	MCPToolsets []string `json:"mcp_toolsets,omitempty"`
+	BlockedTools []string `json:"blocked_tools,omitempty"`
 }
 
 func (registry *KeyRegistry) AuthorizeMCPToolset(token string) ([]string, runtime.MCPAccess, bool) {
@@ -220,6 +254,9 @@ func (permission *objectPermission) allowsMCPTool(server runtime.MCPServer, tool
 	if permission == nil || tool == "" {
 		return true
 	}
+	if runtime.MCPToolMatches(permission.BlockedTools, tool) {
+		return false
+	}
 	for _, id := range []string{server.ID, server.Name, server.Alias} {
 		if id != "" && len(permission.MCPTools[id]) != 0 && !runtime.MCPToolMatches(permission.MCPTools[id], tool) {
 			return false
@@ -260,7 +297,8 @@ func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectP
 			return nil, permissions, false
 		}
 	}
-	permissions.key = key.ObjectPermission
+	keyGrants := registry.state.groupGrants(key.AccessGroupIDs)
+	permissions.key = addGroupObjectPermissions(key.ObjectPermission, keyGrants)
 	if readOnly,_:=key.Metadata["_minato_sso_view_only"].(bool);readOnly {
 		return nil,permissions,false
 	}
@@ -276,15 +314,23 @@ func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectP
 		permissions.project = project.ObjectPermission
 		projectModels = unrestrictedScope(project.Models)
 	}
-	scope := unrestrictedScope(key.Models)
+	scope := registry.modelScope(key.Models)
 	if key.TeamID != "" && slices.Contains(scope, "all-team-models") {
 		scope = nil
 	}
+	scope = addGroupModels(scope, keyGrants.Models)
 	scope = intersectScopes(scope, projectModels)
 	if key.UserID != "" {
 		user, exists := registry.state.Users[key.UserID]
 		if !exists || user.Role != "internal_user" {
 			return nil, permissions, false
+		}
+		if user.DefaultOrgID != "" {
+			if (key.OrgID != "" && key.OrgID != user.DefaultOrgID) ||
+				organizationRole(registry.state.Organizations[user.DefaultOrgID], user.ID) == "" {
+				return nil, permissions, false
+			}
+			key.OrgID = user.DefaultOrgID
 		}
 		scope = intersectScopes(scope, unrestrictedScope(user.Models))
 	}
@@ -294,8 +340,15 @@ func (registry *KeyRegistry) authorizeLocked(token string) ([]string, keyObjectP
 		if !exists || owner.Blocked || (orgID != "" && orgID != owner.OrgID) {
 			return nil, permissions, false
 		}
-		scope = intersectScopes(scope, unrestrictedScope(owner.Models))
-		permissions.team = owner.ObjectPermission
+		teamGrants := registry.state.groupGrants(owner.AccessGroupIDs)
+		teamModels := addGroupModels(registry.modelScope(owner.Models), teamGrants.Models)
+		keyTeamGrants := keyGrants.Models
+		if len(key.RestrictedGroupIDs) > 0 {
+			keyTeamGrants = registry.state.keyGroupTeamModels(key)
+		}
+		teamModels = addGroupModels(teamModels, keyTeamGrants)
+		scope = intersectScopes(scope, teamModels)
+		permissions.team = addGroupObjectPermissions(owner.ObjectPermission, teamGrants)
 		index := memberIndex(owner, key.UserID)
 		if session, _ := key.Metadata["_minato_cli_session"].(bool); session &&
 			(index < 0 || owner.Members[index].Role == "internal_user_viewer") {
@@ -337,7 +390,7 @@ func intersectScopes(key, team []string) []string {
 }
 
 func unrestrictedScope(models []string) []string {
-	if len(models) == 0 || slices.Contains(models, "*") {
+	if len(models) == 0 || slices.Contains(models, "*") || slices.Contains(models, "all-proxy-models") {
 		return nil
 	}
 	return models
@@ -346,10 +399,17 @@ func unrestrictedScope(models []string) []string {
 func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /key/generate", registry.generate)
+	mux.HandleFunc("POST /key/service-account/generate", registry.generate)
 	mux.HandleFunc("GET /key/info", registry.info)
+	mux.HandleFunc("POST /v2/key/info", registry.keyInfoBatch)
+	mux.HandleFunc("GET /key/aliases", registry.keyAliases)
 	mux.HandleFunc("POST /key/delete", registry.remove)
 	mux.HandleFunc("POST /key/update", registry.updateKey)
 	mux.HandleFunc("POST /key/regenerate", registry.regenerateKey)
+	mux.HandleFunc("POST /key/{key}/regenerate", registry.regenerateKey)
+	mux.HandleFunc("POST /key/{key}/reset_spend", registry.resetKeySpend)
+	mux.HandleFunc("POST /key/bulk_update", registry.bulkUpdateKeys)
+	mux.HandleFunc("POST /team/key/bulk_update", registry.bulkUpdateTeamKeys)
 	mux.HandleFunc("POST /key/block", func(w http.ResponseWriter, r *http.Request) {
 		registry.setKeyBlocked(w, r, true)
 	})
@@ -359,7 +419,11 @@ func (registry *KeyRegistry) Handler(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /key/list", registry.listKeys)
 	registry.registerTeamRoutes(mux)
 	registry.registerOrganizationRoutes(mux)
+	registry.registerAccessGroupRoutes(mux)
 	registry.registerUserRoutes(mux)
+	registry.registerSCIMRoutes(mux)
+	registry.registerSSOProvisionSettings(mux)
+	registry.registerDashboardInvitationRoutes(mux)
 	registry.registerProjectRoutes(mux)
 	registry.registerUISSO(mux)
 	mux.Handle("/", next)
@@ -379,7 +443,9 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
+		Key string `json:"key"`
 		Alias    string         `json:"key_alias"`
+		AccessGroupIDs []string `json:"access_group_ids"`
 		Duration string         `json:"duration"`
 		Models   []string       `json:"models"`
 		TeamID   string         `json:"team_id"`
@@ -388,11 +454,28 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		UserID   string         `json:"user_id"`
 		Blocked  bool           `json:"blocked"`
 		Metadata map[string]any `json:"metadata"`
+		AllowedPassThroughRoutes *[]string `json:"allowed_passthrough_routes"`
+		RouterSettings map[string]any `json:"router_settings"`
 		ObjectPermission *objectPermission `json:"object_permission"`
+		MaxBudget *float64 `json:"max_budget"`
+		BudgetDuration string `json:"budget_duration"`
+		BudgetLimits []keyBudgetLimit `json:"budget_limits"`
+		ModelBudgets map[string]keyModelBudget `json:"model_max_budget"`
+		BudgetID json.RawMessage `json:"budget_id"`
+		RPMLimit *int `json:"rpm_limit"`
+		TPMLimit *int `json:"tpm_limit"`
+		ParallelLimit *int `json:"max_parallel_requests"`
 	}
 	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key configuration")
 		return
+	}
+	if r.URL.Path == "/key/service-account/generate" {
+		if input.TeamID == "" {
+			modelError(w, http.StatusBadRequest, "team_id is required for service account keys")
+			return
+		}
+		input.UserID = ""
 	}
 	now := time.Now().UTC()
 	expiry, err := keyExpiry(now, input.Duration)
@@ -401,36 +484,112 @@ func (registry *KeyRegistry) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := virtualKey{Alias: input.Alias, Models: append([]string{}, input.Models...), TeamID: input.TeamID, ProjectID: input.ProjectID, OrgID: input.OrgID, UserID: input.UserID,
-		Blocked: input.Blocked, Metadata: input.Metadata, ObjectPermission: input.ObjectPermission, Expires: expiry, CreatedAt: &now}
-	token := newKeyToken()
+		Blocked: input.Blocked, Metadata: input.Metadata, ObjectPermission: input.ObjectPermission, Expires: expiry, CreatedAt: &now, MaxBudget: input.MaxBudget}
+	if input.AllowedPassThroughRoutes != nil {
+		key.Metadata = withPassThroughRoutes(key.Metadata, *input.AllowedPassThroughRoutes)
+	}
+	key.ModelBudgets = input.ModelBudgets
+	key.CreatedBy = "default_user_id"
+	key.AccessGroupIDs = input.AccessGroupIDs
+	key.RouterSettings = input.RouterSettings
+	key.RPMLimit = input.RPMLimit
+	key.TPMLimit = input.TPMLimit
+	key.ParallelLimit = input.ParallelLimit
+	if !customKeyAllowed(w, r, input.Key) {
+		return
+	}
+	token := input.Key
+	if token == "" {
+		token = newKeyToken()
+	} else if !validCustomAPIKey(token, registry.master) {
+		modelError(w, http.StatusBadRequest, "Invalid custom API key")
+		return
+	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if !registry.validKey(w, key) {
+	if input.BudgetID != nil {
+		id, err := registry.validateBudgetID(r.Context(), input.BudgetID)
+		if err != nil {
+			modelError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		key.BudgetID = id
+	}
+	if err := registry.setKeyBudgetDuration(&key, input.BudgetDuration, now); err != nil {
+		modelError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := registry.setBudgetLimits(&key.BudgetLimits, input.BudgetLimits, now); err != nil {
+		modelError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := registry.validateKey(key); err != nil {
+		modelError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	next := registry.state
 	next.Keys = maps.Clone(next.Keys)
 	digest := keyDigest(token)
+	if _, exists := next.Keys[digest]; exists {
+		modelError(w, http.StatusConflict, "Key already exists")
+		return
+	}
 	next.Keys[digest] = key
-	if registry.apply(w, next) {
+	if registry.apply(w, next, registry.keyAudit(r, digest, "created", nil, &key)) {
 		modelJSON(w, http.StatusOK, map[string]any{"key": token, "token_id": digest, "expires": key.Expires, "key_alias": key.Alias})
 	}
 }
 
 func (registry *KeyRegistry) info(w http.ResponseWriter, r *http.Request) {
-	if !registry.requireMaster(w, r) {
+	caller, valid := registry.identifyReadCaller(r)
+	if !valid {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
 	token := r.URL.Query().Get("key")
+	callerToken := runtime.ProxyCredential(r)
+	if token == "" {
+		token = callerToken
+	}
 	registry.mu.RLock()
 	digest := registry.resolveKey(token)
 	key, exists := registry.state.Keys[digest]
+	allowed := exists && registry.canReadKeyLocked(caller, keyDigest(callerToken), digest, key)
 	registry.mu.RUnlock()
-	if !exists {
+	if !allowed {
 		modelError(w, http.StatusNotFound, "Virtual key not found")
 		return
 	}
-	modelJSON(w, http.StatusOK, map[string]any{"key": digest, "info": key})
+	now := time.Now()
+	start, reset, baseline, err := registry.keySpendWindowWithTier(r.Context(), key, now)
+	if err != nil {
+		modelError(w, http.StatusInternalServerError, "Could not read linked key budget")
+		return
+	}
+	spend := baseline
+	key.BudgetResetAt = reset
+	key.ImportedSpend = nil
+	key.BudgetLimits = slices.Clone(key.BudgetLimits)
+	for i, limit := range key.BudgetLimits {
+		_, key.BudgetLimits[i].ResetAt = registry.budgetWindow(limit.Duration, limit.ResetAt, now)
+		key.BudgetLimits[i].ImportedSpend = nil
+	}
+	if registry.keySpend != nil {
+		identity := key.SpendIdentity
+		if identity == "" {
+			identity = digest
+		}
+		recorded, err := registry.keySpend(r.Context(), identity, start)
+		if err != nil {
+			modelError(w, http.StatusInternalServerError, "Could not read key spend")
+			return
+		}
+		spend += recorded
+	}
+	modelJSON(w, http.StatusOK, map[string]any{"key": digest, "info": struct {
+		virtualKey
+		Spend float64 `json:"spend"`
+	}{key, spend}})
 }
 
 func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
@@ -473,20 +632,65 @@ func (registry *KeyRegistry) remove(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if registry.apply(w, next) {
+	next.archiveRevokedKeys(registry.state, "default_user_id")
+	var events []*managementAuditEvent
+	if registry.storeAuditLogs {
+		for digest, key := range registry.state.Keys {
+			if _, kept := next.Keys[digest]; !kept && key.RotationTarget == "" {
+				events = append(events, registry.keyAudit(r, digest, "deleted", &key, nil))
+			}
+		}
+	}
+	if registry.apply(w, next, events...) {
 		modelJSON(w, http.StatusOK, map[string]int{"deleted_keys": removed})
 	}
 }
 
-func (registry *KeyRegistry) apply(w http.ResponseWriter, next accessState) bool {
+func (registry *KeyRegistry) apply(w http.ResponseWriter, next accessState, events ...*managementAuditEvent) bool {
+	if err := registry.commitState(next, events...); err != nil {
+		stateWriteError(w, err)
+		return false
+	}
+	return true
+}
+
+func (registry *KeyRegistry) commitState(next accessState, events ...*managementAuditEvent) error {
 	if registry.store != nil {
-		if err := registry.store.save(next); err != nil {
-			stateWriteError(w, err)
-			return false
+		var err error
+		if store, ok := registry.store.(*postgresState); ok {
+			err = store.saveWithAudit(next, events...)
+		} else {
+			err = registry.store.save(next)
+		}
+		if err != nil {
+			return err
 		}
 	}
 	registry.state = next
-	return true
+	return nil
+}
+
+func (registry *KeyRegistry) resetImportedSpend() error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	next := registry.state
+	next.Keys = maps.Clone(registry.state.Keys)
+	for digest, key := range next.Keys {
+		key.ImportedSpend = nil
+		for index := range key.BudgetLimits {
+			key.BudgetLimits[index].ImportedSpend = nil
+		}
+		next.Keys[digest] = key
+	}
+	next.Teams = maps.Clone(registry.state.Teams)
+	for id, entry := range next.Teams {
+		entry.ImportedSpend = nil
+		for index := range entry.BudgetLimits {
+			entry.BudgetLimits[index].ImportedSpend = nil
+		}
+		next.Teams[id] = entry
+	}
+	return registry.commitState(next)
 }
 
 func keyDigest(token string) string {

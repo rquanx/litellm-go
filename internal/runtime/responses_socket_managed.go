@@ -11,7 +11,7 @@ import (
 )
 
 func (s *Server) managedResponsesSocket(w http.ResponseWriter, request *http.Request, alias string) {
-	conn, err := websocket.Accept(w, request, nil)
+	conn, err := acceptInferenceSocket(w, request)
 	if err != nil {
 		return
 	}

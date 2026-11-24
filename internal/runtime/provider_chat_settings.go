@@ -2,6 +2,21 @@ package runtime
 
 import "strings"
 
+func applyChatExtraBody(payload map[string]any) {
+	extra, ok := payload["extra_body"].(map[string]any)
+	if !ok {
+		return
+	}
+	delete(payload, "extra_body")
+	for key, value := range extra {
+		switch key {
+		case "model", "stream", "drop_params", "allowed_openai_params", "additional_drop_params":
+			continue
+		}
+		payload[key] = value
+	}
+}
+
 func applyProviderChatSettings(payload map[string]any, provider Candidate) {
 	for from, to := range provider.ParamMappings {
 		if from != to {

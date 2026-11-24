@@ -17,7 +17,7 @@ import (
 func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" || r.URL.Query().Get("model") != "native" ||
-			r.Header.Get("Authorization") != "Bearer fixture-provider" {
+			r.Header.Get("Authorization") != "Bearer fixture-provider" || r.Header.Get("Sec-WebSocket-Protocol") != "" {
 			t.Errorf("unexpected provider handshake: %s", r.URL)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -40,7 +40,7 @@ func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 				t.Errorf("unexpected provider event: %s", body)
 			}
 			if err := conn.Write(r.Context(), websocket.MessageText,
-				[]byte(`{"type":"response.completed","response":{"id":"resp_real","model":"native"}}`)); err != nil {
+				[]byte(`{"type":"response.completed","response":{"id":"resp_real","model":"native","usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`)); err != nil {
 				t.Error(err)
 				return
 			}
@@ -48,9 +48,13 @@ func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}))
 	defer upstream.Close()
+	inputPrice, outputPrice := 0.01, 0.02
+	recorded := make(chan InferenceEvent, 2)
 	candidate := Candidate{Provider: "openai", Endpoint: "responses", DeploymentID: "chosen", ModelID: "native",
+		UsagePrice: [2]*float64{&inputPrice, &outputPrice},
 		APIBase: upstream.URL + "/v1", APIKey: "fixture-provider"}
 	proxy := httptest.NewServer(NewServer(Config{AuthorizeInference: true, Token: "master",
+		Callback: func(event InferenceEvent) { recorded <- event },
 		AuthorizeKey: func(token string) ([]string, bool) { return []string{"other"}, token == "restricted" },
 		Routes: []Route{{Alias: "demo", Candidates: []Candidate{candidate}}}}))
 	defer proxy.Close()
@@ -65,11 +69,16 @@ func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 			t.Fatalf("unauthorized handshake: response=%v, err=%v", response, err)
 		}
 	}
-	client, _, err := dial("master")
+	client, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+		Subprotocols: []string{"openai-insecure-api-key.master", "responses.v1"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.CloseNow()
+	if client.Subprotocol() != "responses.v1" {
+		t.Fatalf("unexpected client protocol: %q", client.Subprotocol())
+	}
 	exchange := func(payload string) string {
 		t.Helper()
 		if err := client.Write(ctx, websocket.MessageText, []byte(payload)); err != nil {
@@ -90,6 +99,11 @@ func TestResponsesWebSocketPinsAndRewritesSessionModel(t *testing.T) {
 		t.Fatalf("completion did not retain the route alias and deployment: %s", first)
 	}
 	exchange(`{"type":"response.create","previous_response_id":"` + id + `","input":"follow-up"}`)
+	firstEvent, replayed := <-recorded, <-recorded
+	if firstEvent.Total != 3 || firstEvent.Spend == nil || *firstEvent.Spend != 0.04 ||
+		firstEvent.Model != "native" || firstEvent.ID != replayed.ID {
+		t.Fatalf("unexpected socket usage accounting: %+v %+v", firstEvent, replayed)
+	}
 }
 
 func TestManagedResponsesWebSocketReplaysConversation(t *testing.T) {
@@ -152,4 +166,80 @@ func TestManagedResponsesWebSocketReplaysConversation(t *testing.T) {
 		t.Fatal("missing first response ID")
 	}
 	send(`{"type":"response.create","response":{"previous_response_id":"` + first + `","input":"follow-up"}}`)
+}
+
+func TestNativeResponsesSocketSharesKeyConcurrencyAndTokenLimits(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		socket, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer socket.CloseNow()
+		for {
+			_, _, err := socket.Read(r.Context())
+			if err != nil {
+				return
+			}
+			if err := socket.Write(r.Context(), websocket.MessageText,
+				[]byte(`{"type":"response.completed","response":{"id":"resp_limit","usage":{"total_tokens":8}}}`)); err != nil {
+				return
+			}
+		}
+	}))
+	defer upstream.Close()
+	parallel, tpm := 1, 8
+	recorded := make(chan InferenceEvent, 1)
+	server := NewServer(Config{AuthorizeInference: true, Token: "master",
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"demo"}, token == "scoped" },
+		CheckKeyBudget: func(context.Context, string) (KeyBudget, error) {
+			return KeyBudget{SpendIdentity: "scoped", ParallelLimit: &parallel,
+				ModelPolicy: func(_ context.Context, model string) (KeyModelPolicy, error) {
+					if model != "demo" {
+						t.Errorf("unexpected budget model %q", model)
+					}
+					return KeyModelPolicy{SpendDuration: "1d"}, nil
+				},
+				ModelRates: func(model string, _ OwnerRateLimits) []OwnerRateLimits {
+					return []OwnerRateLimits{{Identity: "scoped:" + model, TPM: &tpm}}
+				}}, nil
+		},
+		Callback: func(event InferenceEvent) { recorded <- event },
+		Routes: []Route{{Alias: "demo", Candidates: []Candidate{{Provider: "openai", Endpoint: "responses",
+			ModelID: "native", APIBase: upstream.URL}}}},
+	})
+	proxy := httptest.NewServer(server)
+	defer proxy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	dial := func() (*websocket.Conn, *http.Response, error) {
+		return websocket.Dial(ctx, proxy.URL+"/v1/responses?model=demo",
+			&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer scoped"}}})
+	}
+	conn, _, err := dial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	another, response, err := dial()
+	if another != nil || err == nil || response == nil || response.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected concurrency rejection, response %v, error %v", response, err)
+	}
+	for _, expected := range []string{"response.completed", "Key token limit exceeded"} {
+		if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"response.create","input":"a"}`)); err != nil {
+			t.Fatal(err)
+		}
+		_, data, err := conn.Read(ctx)
+		if err != nil || !strings.Contains(string(data), expected) {
+			t.Fatalf("expected %s, received %s: %v", expected, data, err)
+		}
+	}
+	select {
+	case event := <-recorded:
+		if event.KeyModelBudgetDuration != "1d" || !event.KeyBudgetTracked || event.ModelGroup != "demo" || event.Total != 8 {
+			t.Fatalf("unexpected scoped usage %+v", event)
+		}
+	default:
+		t.Fatal("missing model usage callback")
+	}
 }

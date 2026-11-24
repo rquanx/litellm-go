@@ -13,6 +13,8 @@ type Route struct {
 	Candidates []Candidate `json:"candidates"`
 	ContextFallback []Candidate `json:"-"`
 	PolicyFallback []Candidate `json:"-"`
+	RequestRetries *int `json:"-"`
+	RequestRetryPolicy RetryPolicy `json:"-"`
 }
 
 type Candidate struct {
@@ -29,6 +31,12 @@ type Candidate struct {
 	Provider         string            `json:"provider,omitempty"`
 	Region           string            `json:"region,omitempty"`
 	DeploymentID     string            `json:"deploymentId,omitempty"`
+	DropParams *bool `json:"dropParams,omitempty"`
+	RequestDefaults map[string]any `json:"-"`
+	AllowedOpenAIParams []string `json:"allowedOpenAIParams,omitempty"`
+	AdditionalDropParams []string `json:"additionalDropParams,omitempty"`
+	SupportedOpenAIParams []string `json:"-"`
+	ReasoningCapabilities OpenAIReasoningCapabilities `json:"-"`
 	ParamMappings    map[string]string `json:"paramMappings,omitempty"`
 	RelativeAPIBase  bool              `json:"relativeApiBase,omitempty"`
 	TextOnly         bool              `json:"textOnly,omitempty"`
@@ -37,6 +45,8 @@ type Candidate struct {
 	RoutingGroup     string            `json:"routingGroup,omitempty"`
 	TokenPrice       float64           `json:"-"`
 	UsagePrice       [2]*float64       `json:"-"`
+	RealtimeAudio RealtimeAudioPrices `json:"-"`
+	RealtimeProtocol string `json:"-"`
 	CacheReadPrice   *float64          `json:"-"`
 	CacheCreationPrice *float64        `json:"-"`
 	Vertex           *VertexConfig     `json:"-"`
@@ -44,6 +54,11 @@ type Candidate struct {
 	Weight           *float64          `json:"weight,omitempty"`
 	RPM              *int              `json:"rpm,omitempty"`
 	TPM              *int              `json:"tpm,omitempty"`
+	DefaultKeyRPM *int `json:"defaultKeyRPM,omitempty"`
+	DefaultKeyTPM *int `json:"defaultKeyTPM,omitempty"`
+	Timeout time.Duration `json:"-"`
+	StreamTimeout time.Duration `json:"-"`
+	NumRetries *int `json:"-"`
 	Bedrock          *BedrockConfig    `json:"bedrock,omitempty"`
 	Headers          map[string]string `json:"headers,omitempty"`
 	HealthMode string `json:"-"`

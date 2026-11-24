@@ -10,7 +10,7 @@ import (
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
-func (registry *PolicyRegistry) Handler(next http.Handler, master string, keys *KeyRegistry) http.Handler {
+func (registry *PolicyRegistry) Handler(next http.Handler, master string, keys *KeyRegistry, server *runtime.Server) http.Handler {
 	mux := http.NewServeMux()
 	protected := func(target *http.ServeMux, pattern string, handler func(*PolicyEngine, http.ResponseWriter, *http.Request)) {
 		target.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +30,29 @@ func (registry *PolicyRegistry) Handler(next http.Handler, master string, keys *
 		})
 	}
 	protected(mux, "POST /policies/resolve", (*PolicyEngine).previewPolicy)
+	protected(mux, "GET /policy/templates", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		servePolicyTemplates(w, r)
+	})
+	protected(mux, "POST /policy/templates/enrich", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		servePolicyTemplateEnrich(w, r)
+	})
+	protected(mux, "POST /policy/templates/enrich/stream", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		servePolicyTemplateEnrich(w, r)
+	})
+	protected(mux, "POST /policy/templates/test", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		servePolicyTemplateTest(w, r)
+	})
+	protected(mux, "POST /policy/templates/suggest", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		servePolicyTemplateSuggest(w, r)
+	})
 	protected(mux, "POST /policy/test", (*PolicyEngine).previewPolicy)
+	protected(mux, "POST /policy/validate", func(_ *PolicyEngine, w http.ResponseWriter, r *http.Request) {
+		var names []string
+		if server != nil {
+			names = server.GuardrailNames()
+		}
+		validatePolicyConfiguration(w, r, names)
+	})
 	protected(mux, "GET /policy/list", (*PolicyEngine).listPolicies)
 	protected(mux, "GET /policy/info/{policy_name}", (*PolicyEngine).listPolicies)
 	for _, pattern := range []string{

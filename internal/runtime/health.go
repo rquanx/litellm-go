@@ -66,12 +66,12 @@ func (s *Server) serveHealth(w http.ResponseWriter, r *http.Request) bool {
 	case "/health/shared-status":
 		s.sharedHealthStatus(w, r)
 	default:
-		s.readiness(w, r, path == "/health/readiness/details" || s.config.PublicReadinessDetails)
+		s.ServeReadiness(w, r, path == "/health/readiness/details" || s.config.PublicReadinessDetails)
 	}
 	return true
 }
 
-func (s *Server) readiness(w http.ResponseWriter, r *http.Request, details bool) {
+func (s *Server) ServeReadiness(w http.ResponseWriter, r *http.Request, details bool) {
 	status, db := http.StatusOK, "Not connected"
 	if s.config.DatabasePing != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)

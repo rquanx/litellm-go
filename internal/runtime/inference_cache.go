@@ -32,6 +32,20 @@ type InferenceCacheStore interface {
 	Set(context.Context, string, []byte, time.Duration) error
 }
 
+type inferenceCacheState struct {
+	InferenceCacheConfig
+	store InferenceCacheStore
+}
+
+// ReplaceInferenceCache publishes a complete cache configuration for new requests.
+func (s *Server) ReplaceInferenceCache(config InferenceCacheConfig, store InferenceCacheStore) {
+	config.Endpoints = maps.Clone(config.Endpoints)
+	if config.Enabled && store == nil {
+		store = newMemoryInferenceCache()
+	}
+	s.inferenceCache.Store(&inferenceCacheState{InferenceCacheConfig: config, store: store})
+}
+
 type memoryInferenceCache struct {
 	mu      sync.Mutex
 	entries map[string]*list.Element
@@ -88,6 +102,7 @@ func (store *memoryInferenceCache) remove(element *list.Element) {
 }
 
 type inferenceCacheRequest struct {
+	store       InferenceCacheStore
 	keyParts    []byte
 	ttl         time.Duration
 	maxAge      *time.Duration
@@ -98,7 +113,7 @@ type inferenceCacheRequest struct {
 }
 
 func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, stream bool, payload *requestPayload) inferenceCacheRequest {
-	config := s.config.InferenceCache
+	config := s.inferenceCache.Load()
 	if !config.Enabled || !config.Endpoints[endpoint] {
 		return inferenceCacheRequest{}
 	}
@@ -134,7 +149,7 @@ func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, 
 			return inferenceCacheRequest{}
 		}
 	}
-	policy := inferenceCacheRequest{ttl: config.TTL, stream: stream, responses: endpoint == "responses", stateless: payload.fields["store"] == false, read: directives["no-cache"] != true, write: directives["no-store"] != true}
+	policy := inferenceCacheRequest{store: config.store, ttl: config.TTL, stream: stream, responses: endpoint == "responses", stateless: payload.fields["store"] == false, read: directives["no-cache"] != true, write: directives["no-store"] != true}
 	if ttl, ok := cacheSeconds(directives["ttl"]); ok {
 		policy.ttl = ttl
 	}
@@ -150,7 +165,7 @@ func (s *Server) prepareInferenceCache(r *http.Request, endpoint, alias string, 
 	for _, part := range payload.form {
 		form = append(form, []any{part.header, sha256.Sum256(part.body)})
 	}
-	policy.keyParts, _ = json.Marshal([]any{config.Namespace, namespace, owner, endpoint, alias, stream, r.Header.Values("Anthropic-Beta"),
+	policy.keyParts, _ = json.Marshal([]any{config.Namespace, namespace, owner, endpoint, alias, stream, s.config.DropParams, s.config.RequestDefaults, r.Header.Values("Anthropic-Beta"),
 		r.Header.Values("Anthropic-Version"), payload.fields, form})
 	return policy
 }
@@ -183,7 +198,7 @@ func (policy inferenceCacheRequest) key(candidate Candidate) string {
 	if key == "" && candidate.CredentialRef != "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	deployment, err := json.Marshal([]any{candidate, key, candidate.AzureADToken, candidate.AzureIdentityKey})
+	deployment, err := json.Marshal([]any{candidate, key, candidate.SupportedOpenAIParams, candidate.RequestDefaults, candidate.ReasoningCapabilities, candidate.AzureADToken, candidate.AzureIdentityKey})
 	if err != nil {
 		return ""
 	}
@@ -207,7 +222,7 @@ func (s *Server) serveCachedInference(w http.ResponseWriter, r *http.Request, po
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 250*time.Millisecond)
 	defer cancel()
-	data, err := s.config.InferenceCacheStore.Get(ctx, key)
+	data, err := policy.store.Get(ctx, key)
 	var entry cachedInference
 	if err != nil || len(data) > (maxCacheResponse*4/3)+1024 || json.Unmarshal(data, &entry) != nil || entry.Status < 200 ||
 		entry.Status >= 300 || entry.Created.IsZero() || (policy.stream && len(entry.Frames) == 0) || (!policy.stream && len(entry.Body)+len(entry.Frames) == 0) ||
@@ -268,5 +283,5 @@ func (s *Server) storeInference(r *http.Request, policy inferenceCacheRequest, k
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 250*time.Millisecond)
 	defer cancel()
-	_ = s.config.InferenceCacheStore.Set(ctx, key, data, policy.ttl)
+	_ = policy.store.Set(ctx, key, data, policy.ttl)
 }

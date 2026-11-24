@@ -41,6 +41,26 @@ type responsePolling struct {
 	entries map[string]*pollingEntry
 }
 
+func (s *Server) listPollingResponses(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.EqualFold(r.Header.Get("Upgrade"), "") || (r.URL.Path != "/v1/responses" && r.URL.Path != "/responses") {
+		return false
+	}
+	if s.polling == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{}, "has_more": false})
+		return true
+	}
+	owner := sha256.Sum256([]byte(ProxyCredential(r)))
+	s.polling.mu.Lock()
+	items := make([]any, 0, len(s.polling.entries))
+	for _, entry := range s.polling.entries {
+		if !s.authorized(r) && entry.owner != owner { continue }
+		items = append(items, clone(entry.body))
+	}
+	s.polling.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": items, "has_more": false})
+	return true
+}
+
 type pollingEntry struct {
 	owner   [32]byte
 	model   string

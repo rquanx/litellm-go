@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
@@ -82,7 +84,10 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	if noModels := send("GET", "/v1/models", disjoint, "", 200); strings.Contains(noModels, "first") || strings.Contains(noModels, "second") {
 		t.Fatalf("disjoint model scopes exposed models: %s", noModels)
 	}
-	send("GET", "/team/info?team_id=fixture", key, "", 401)
+	ownInfo := send("GET", "/team/info?team_id=fixture", key, "", 200)
+	if !strings.Contains(ownInfo, `"keys":[]`) {
+		t.Fatalf("team-scoped key could see other credentials: %s", ownInfo)
+	}
 	info := send("GET", "/team/info?team_id=fixture", master, "", 200)
 	if strings.Contains(info, key) || strings.Contains(info, keyDigest(key)) {
 		t.Fatal("team info exposed credential material")
@@ -166,6 +171,60 @@ func TestTeamRestrictionsOnExistingKeys(t *testing.T) {
 	send("DELETE", "/organization/member_delete", master, `{"organization_id":"new-org","user_id":"user"}`, 200)
 	send("POST", "/organization/member_add", master, `{"organization_id":"new-org","member":{"user_id":"user","role":"internal_user"}}`, 200)
 	send("GET", "/v1/models", user.Key, "", 401)
+}
+
+func TestTeamCallbackConfigurationPersists(t *testing.T) {
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{Token: "fixture-master"})
+	handler := registry.Handler(server)
+	request := func(method, path, body string, status int) string {
+		t.Helper()
+		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer fixture-master")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("%s %s: got %d, want %d: %s", method, path, w.Code, status, w.Body.String())
+		}
+		return w.Body.String()
+	}
+	request("POST", "/team/new", `{"team_id":"callback-team"}`, 200)
+	request("POST", "/team/callback-team/callback", `{"callback_name":"generic_api","callback_type":"success","callback_vars":{"url":"https://example.invalid"}}`, 200)
+	body := request("GET", "/team/callback-team/callback", "", 200)
+	if !strings.Contains(body, `"success_callbacks":["generic_api"]`) {
+		t.Fatalf("callback configuration was not returned: %s", body)
+	}
+	request("POST", "/team/callback-team/disable_logging", "", 200)
+	body = request("GET", "/team/callback-team/callback", "", 200)
+	if !strings.Contains(body, `"success_callbacks":[]`) {
+		t.Fatalf("team logging callbacks were not disabled: %s", body)
+	}
+}
+
+func TestTeamCallbackDispatchesInferenceEvent(t *testing.T) {
+	received := make(chan struct{}, 1)
+	callbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received <- struct{}{}
+	w.WriteHeader(http.StatusOK)
+	}))
+	defer callbackServer.Close()
+	registry, err := LoadKeys("fixture-master", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.state.Teams["callback-team"] = team{ID: "callback-team", Metadata: map[string]any{"logging": []any{
+		map[string]any{"callback_name": "generic_api", "callback_type": "success", "callback_vars": map[string]any{"endpoint": callbackServer.URL}},
+	}}}
+	dispatch := registry.TeamCallback(context.Background())
+	dispatch(runtime.InferenceEvent{Status: "success", SpendAttribution: &runtime.SpendAttribution{TeamID: "callback-team"}})
+	select {
+	case <-received:
+	case <-time.After(3 * time.Second):
+		t.Fatal("team callback did not receive the inference event")
+	}
 }
 
 func TestTeamAdminManagesOnlyOwnMemberships(t *testing.T) {

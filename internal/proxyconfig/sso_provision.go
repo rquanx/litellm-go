@@ -1,7 +1,10 @@
 package proxyconfig
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
+	"time"
 	"maps"
 	"net/http"
 	"slices"
@@ -11,14 +14,17 @@ import (
 )
 
 type SSOUserDefaults struct {
-	Role   string           `yaml:"user_role"`
-	Models []string         `yaml:"models"`
-	Teams  []ssoDefaultTeam `yaml:"teams"`
+	MaxBudget *float64 `json:"max_budget" yaml:"max_budget"`
+	BudgetDuration string `json:"budget_duration" yaml:"budget_duration"`
+	Role   string           `json:"user_role" yaml:"user_role"`
+	Models []string         `json:"models" yaml:"models"`
+	Teams  []ssoDefaultTeam `json:"teams" yaml:"teams"`
+	AvailableTeams []string `json:"available_teams" yaml:"available_teams"`
 }
 
 type ssoDefaultTeam struct {
-	ID   string `yaml:"team_id"`
-	Role string `yaml:"user_role"`
+	ID   string `json:"team_id" yaml:"team_id"`
+	Role string `json:"user_role" yaml:"user_role"`
 }
 
 func (team *ssoDefaultTeam) UnmarshalYAML(node *yaml.Node) error {
@@ -27,6 +33,21 @@ func (team *ssoDefaultTeam) UnmarshalYAML(node *yaml.Node) error {
 	}
 	type fields ssoDefaultTeam
 	return node.Decode((*fields)(team))
+}
+
+func (team *ssoDefaultTeam) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		return json.Unmarshal(data, &team.ID)
+	}
+	type fields ssoDefaultTeam
+	return decodeModelJSON(strings.NewReader(string(data)), (*fields)(team))
+}
+
+func (registry *KeyRegistry) ssoUserDefaultsLocked() *SSOUserDefaults {
+	if registry.state.SSOUserDefaults != nil {
+		return registry.state.SSOUserDefaults
+	}
+	return registry.ssoDefaults
 }
 
 func (defaults *SSOUserDefaults) enabled() bool {
@@ -39,6 +60,17 @@ func (defaults *SSOUserDefaults) validate() error {
 	}
 	if !slices.Contains([]string{"", "internal_user", "internal_user_viewer"}, defaults.Role) || !validOwnerModels(defaults.Models) {
 		return errors.New("invalid default_internal_user_params role or models")
+	}
+	if defaults.MaxBudget != nil && (*defaults.MaxBudget < 0 || math.IsInf(*defaults.MaxBudget, 0) || math.IsNaN(*defaults.MaxBudget)) {
+		return errors.New("invalid default internal user budget")
+	}
+	if defaults.BudgetDuration != "" {
+		if _, err := nextBudgetReset(time.Now(), defaults.BudgetDuration); err != nil {
+			return errors.New("invalid default internal user budget duration")
+		}
+	}
+	if slices.ContainsFunc(defaults.AvailableTeams, func(id string) bool { return strings.TrimSpace(id) == "" }) {
+		return errors.New("invalid available team in default_internal_user_params")
 	}
 	seen := make(map[string]bool)
 	for _, team := range defaults.Teams {
@@ -82,8 +114,8 @@ func (s *uiSSOServer) bindSSOUser(w http.ResponseWriter, user internalUser, boun
 		next.Users[user.ID] = user
 	}
 	var grants []ssoDefaultTeam
-	if !existing && s.keys.ssoDefaults.enabled() {
-		grants = s.keys.ssoDefaults.Teams
+	if defaults := s.keys.ssoUserDefaultsLocked(); !existing && defaults.enabled() {
+		grants = defaults.Teams
 	}
 	if len(grants) == 0 && len(identity.TeamIDs) == 0 {
 		return next, true

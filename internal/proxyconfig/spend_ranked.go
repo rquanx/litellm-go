@@ -11,10 +11,16 @@ import (
 )
 
 func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
-	if !log.keys.requireMaster(w, r) {
+	byKey := r.URL.Path == "/global/spend/keys"
+	caller, valid := log.keys.identifyReadCaller(r)
+	if !valid || (byKey && !caller.admin) {
+		modelError(w, http.StatusUnauthorized, "Proxy token required")
 		return
 	}
-	byKey := r.URL.Path == "/global/spend/keys"
+	if !caller.admin && caller.user == "" {
+		modelError(w, http.StatusForbidden, "A user-bound key is required")
+		return
+	}
 	limit := 10
 	if byKey {
 		limit = 1000
@@ -31,13 +37,19 @@ func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
 	from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -30)
 	stmt := `SELECT model, sum(spend) AS total_spend FROM minato_proxy_spend
 		WHERE started_at >= $1 AND model <> '' GROUP BY model ORDER BY total_spend DESC NULLS LAST, model LIMIT $2`
+	args := []any{from, limit}
 	if byKey {
 		stmt = `SELECT api_key, max(NULLIF(key_alias,'')), sum(spend) AS total_spend FROM minato_proxy_spend
 			WHERE started_at >= $1 GROUP BY api_key ORDER BY total_spend DESC NULLS LAST, api_key LIMIT $2`
+	} else if !caller.admin {
+		stmt = `SELECT model, sum(spend) AS total_spend, COALESCE(sum(total_tokens), 0)
+			FROM minato_proxy_spend WHERE user_id=$1 AND model <> ''
+			GROUP BY model ORDER BY total_spend DESC NULLS LAST, model LIMIT $2`
+		args = []any{caller.user, limit}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	rows, err := log.db.QueryContext(ctx, stmt, from, limit)
+	rows, err := log.db.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		modelError(w, http.StatusInternalServerError, "Could not rank spend")
 		return
@@ -48,8 +60,11 @@ func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
 		var id string
 		var alias *string
 		var spend *float64
+		var tokens int64
 		if byKey {
 			err = rows.Scan(&id, &alias, &spend)
+		} else if !caller.admin {
+			err = rows.Scan(&id, &spend, &tokens)
 		} else {
 			err = rows.Scan(&id, &spend)
 		}
@@ -62,6 +77,9 @@ func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
 			entry["api_key"], entry["key_alias"], entry["key_name"] = id, alias, nil
 		} else {
 			entry["model"] = id
+			if !caller.admin {
+				entry["total_tokens"] = tokens
+			}
 		}
 		results = append(results, entry)
 	}
@@ -73,7 +91,7 @@ func (log *SpendLog) ranked(w http.ResponseWriter, r *http.Request) {
 }
 
 func (log *SpendLog) teamSpend(w http.ResponseWriter, r *http.Request) {
-	if !log.keys.requireMaster(w, r) {
+	if !log.keys.requireAdminRead(w, r) {
 		return
 	}
 	log.keys.mu.RLock()

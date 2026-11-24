@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,39 @@ import (
 	"testing"
 	"time"
 )
+
+func TestAzureRealtimeHTTPVersionAndCredentials(t *testing.T) {
+	t.Setenv("AZURE_API_VERSION", "fixture-version")
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openai/realtime/client_secrets":
+			if r.URL.Query().Get("api-version") != "fixture-version" || r.Header.Get("api-key") != "provider-key" {
+				t.Error("client secret creation did not use the gateway provider credential and configured API version")
+			}
+		case "/openai/realtime/calls":
+			if r.URL.Query().Get("api-version") != "2024-12-17" || r.Header.Get("api-key") != "ephemeral-key" ||
+				r.Header.Get("Authorization") != "" {
+				t.Error("Realtime call did not use the ephemeral credential and fallback API version")
+			}
+		default:
+			t.Errorf("unexpected operation %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	server := NewServer(Config{})
+	candidate := Candidate{APIBase: origin.URL + "/openai", Provider: "azure", AzureADToken: ""}
+	if status, _, _, err := server.postRealtime(context.Background(), candidate, "client_secrets", "provider-key", "application/json", nil); status != 200 || err != nil {
+		t.Fatalf("client secret request returned %d, %v", status, err)
+	}
+	t.Setenv("AZURE_API_VERSION", "")
+	candidate.AzureADToken = "ignored-for-calls"
+	if status, _, _, err := server.postRealtime(context.Background(), candidate, "calls", "ephemeral-key", "application/sdp", nil); status != 200 || err != nil {
+		t.Fatalf("call request returned %d, %v", status, err)
+	}
+}
 
 func TestRealtimeTicketKeepsTheProviderSecretAndDeploymentPrivate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

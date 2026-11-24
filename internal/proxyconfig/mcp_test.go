@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
@@ -399,5 +400,39 @@ mcp_servers:
 		if output.Code != 200 || strings.Contains(output.Body.String(), "mcp-fixture") {
 			t.Fatalf("unexpected probe response %d %s", output.Code, output.Body.String())
 		}
+	}
+}
+
+func TestTemporaryMCPOAuthSessionIsEphemeral(t *testing.T) {
+	const master = "fixture-master"
+	keys, err := LoadKeys(master, "")
+	if err != nil { t.Fatal(err) }
+	server := runtime.NewServer(runtime.Config{Token: master, AuthorizeInference: true})
+	registry, err := withModelManagement(server, Config{}, master, nil, keys)
+	if err != nil { t.Fatal(err) }
+	call := func(body string, want int) string {
+		req := httptest.NewRequest(http.MethodPost, "/v1/mcp/server/oauth/session", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+master)
+		w := httptest.NewRecorder()
+		registry.ServeHTTP(w, req)
+		if w.Code != want { t.Fatalf("got %d, want %d: %s", w.Code, want, w.Body.String()) }
+		return w.Body.String()
+	}
+	body := call(`{"server_name":"oauth-fixture","server_id":"oauth-id","url":"https://mcp.example.test/sse","transport":"sse","auth_type":"oauth2","oauth2_flow":"authorization_code","authorization_url":"https://issuer.example/authorize","token_url":"https://issuer.example/token","oauth_callback_url":"https://gateway.example/callback"}`, http.StatusOK)
+	if !strings.Contains(body, `"server_id":"oauth-id"`) || strings.Contains(body, "client_secret") {
+		t.Fatalf("unexpected redacted session response: %s", body)
+	}
+	if _, ok := registry.temporaryMCP["oauth-fixture"]; !ok {
+		t.Fatal("temporary MCP session was not registered")
+	}
+	registry.mu.Lock()
+	entry := registry.temporaryMCP["oauth-fixture"]
+	entry.Expires = time.Now().Add(-time.Second)
+	registry.temporaryMCP["oauth-fixture"] = entry
+	_, err = registry.compileMCP(nil)
+	registry.mu.Unlock()
+	if err != nil { t.Fatal(err) }
+	if _, ok := registry.temporaryMCP["oauth-fixture"]; ok {
+		t.Fatal("expired MCP session was not removed")
 	}
 }

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,67 @@ import (
 	"testing"
 	"time"
 )
+
+func TestKeyParallelLimitReleasesOnCompletion(t *testing.T) {
+	entered := make(chan struct{}, 3)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		entered <- struct{}{}
+		<-release
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer upstream.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	limit := 1
+	server := NewServer(Config{Token: "master", RequireInferenceAuth: true,
+		AuthorizeKey: func(key string) ([]string, bool) { return nil, key == "limited" },
+		CheckKeyBudget: func(context.Context, string) (KeyBudget, error) {
+			return KeyBudget{SpendIdentity: "limited", ParallelLimit: &limit}, nil
+		},
+		Routes: []Route{{Alias: "demo", Candidates: []Candidate{
+			{APIBase: upstream.URL, Endpoint: "chat-completions", ModelID: "fixture"},
+		}}},
+	})
+	call := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"demo","messages":[]}`))
+		request.Header.Set("Authorization", "Bearer limited")
+		result := httptest.NewRecorder()
+		server.ServeHTTP(result, request)
+		return result
+	}
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- call() }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the first request did not reach the provider")
+	}
+	second := make(chan *httptest.ResponseRecorder, 1)
+	go func() { second <- call() }()
+	select {
+	case result := <-second:
+		if result.Code != http.StatusTooManyRequests || !strings.Contains(result.Body.String(), "parallel request limit") {
+			t.Fatalf("unexpected response to concurrent request: %d %s", result.Code, result.Body)
+		}
+	case <-entered:
+		t.Fatal("the rejected request reached the provider")
+	case <-time.After(3 * time.Second):
+		t.Fatal("the concurrent request was not rejected")
+	}
+	close(release)
+	if result := <-first; result.Code != http.StatusOK {
+		t.Fatalf("first request failed: %d %s", result.Code, result.Body)
+	}
+	if result := call(); result.Code != http.StatusOK {
+		t.Fatalf("the completed request kept its concurrency slot: %d %s", result.Code, result.Body)
+	}
+}
 
 func TestCapacityRoutingFallsBackWithoutSendingAnOverLimitRequest(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

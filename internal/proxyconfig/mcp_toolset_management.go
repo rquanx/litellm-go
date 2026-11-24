@@ -123,8 +123,8 @@ func (registry *modelRegistry) writeMCPToolset(w http.ResponseWriter, r *http.Re
 		next[len(next)-1] = entry
 	}
 	if registry.store != nil {
-		state := modelState{Models: registry.models, Credentials: registry.credentials, Router: registry.router,
-			SearchTools: registry.searchTools, PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: next, PublicHub: registry.publicHub}
+		state := modelState{AllowedIPs: registry.allowedIPs, Models: registry.models, Credentials: registry.credentials, Router: registry.router,
+			SearchTools: registry.searchTools, PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: next, ToolPolicies: registry.toolPolicies, MCPSemanticFilter: registry.mcpSemanticFilter, PublicHub: registry.publicHub}
 		if err := registry.store.save(state); err != nil {
 			stateWriteError(w, err)
 			return

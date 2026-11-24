@@ -70,7 +70,7 @@ policy_attachments:
 		Token: "master", Routes: config.Routes, Guardrails: config.Guardrails,
 		ResolvePolicy: registry.Resolver(nil, "master"),
 	})
-	handler := registry.Handler(server, "master", nil)
+	handler := registry.Handler(server, "master", nil, server)
 	request := func(path, token, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
@@ -221,7 +221,7 @@ func TestPolicyAttachmentImpactCountsTeamAndTagMatchesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master", keys)
+	handler := registry.Handler(http.NotFoundHandler(), "master", keys, nil)
 	request := httptest.NewRequest(http.MethodPost, "/policies/attachments/estimate-impact",
 		strings.NewReader(`{"policy_name":"baseline","teams":["prod-*"],"tags":["health-*"]}`))
 	request.Header.Set("Authorization", "Bearer master")
@@ -263,7 +263,7 @@ func TestPostgresPolicyRefreshKeepsLastValidSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil, nil)
 	for path, expected := range map[string]string{
 		"/policies/list?version_status=production":    `"total_count":1`,
 		"/policies/name/production-rule/versions":     `"total_count":2`,
@@ -331,7 +331,7 @@ func TestPostgresPolicyVersionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil, nil)
 	call := func(method, path, body string, status int) string {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -409,7 +409,7 @@ func TestPostgresPolicyAttachmentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := registry.Handler(http.NotFoundHandler(), "master", nil)
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil, nil)
 	call := func(method, path, body string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer master")
@@ -436,5 +436,36 @@ func TestPostgresPolicyAttachmentLifecycle(t *testing.T) {
 	}
 	if guards := registry.current.Load().resolve(policyContext{}, true).Guardrails; len(guards) != 0 {
 		t.Fatalf("deleted attachment is still active: %v", guards)
+	}
+}
+
+func TestPolicyValidationChecksInheritanceAndGuardrails(t *testing.T) {
+	registry, err := OpenPolicyRegistry(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := runtime.NewServer(runtime.Config{})
+	server.ReplaceGuardrails([]runtime.GenericGuardrail{{Name: "known"}})
+	handler := registry.Handler(http.NotFoundHandler(), "master", nil, server)
+	request := httptest.NewRequest(http.MethodPost, "/policy/validate", strings.NewReader(`{
+		"policies":{
+			"base":{"guardrails":["known"]},
+			"bad":{"inherit":"missing","guardrails":{"add":["unknown"],"remove":["removed"]}},
+			"one":{"inherit":"two"},
+			"two":{"inherit":"one"}
+		}
+	}`))
+	request.Header.Set("Authorization", "Bearer master")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, request)
+	var result struct {
+		Valid bool
+		Errors []policyValidationIssue
+		Warnings []policyValidationIssue
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); w.Code != http.StatusOK || err != nil || result.Valid ||
+		len(result.Errors) != 4 || len(result.Warnings) != 1 || result.Errors[0].Type != "invalid_guardrail" ||
+		result.Errors[1].Type != "invalid_inheritance" || result.Errors[2].Type != "circular_inheritance" {
+		t.Fatalf("unexpected validation result %d: %s", w.Code, w.Body.String())
 	}
 }

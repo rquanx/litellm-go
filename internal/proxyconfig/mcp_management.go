@@ -6,11 +6,21 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 const mcpServerPath = "/v1/mcp/server"
+
+const temporaryMCPServerTTL = 5 * time.Minute
+
+type temporaryMCPServer struct {
+	Config mcpServerConfig
+	Expires time.Time
+	Timer *time.Timer
+}
 
 type mcpServerInput struct {
 	mcpServerConfig
@@ -32,6 +42,20 @@ func (registry *modelRegistry) compileMCP(managed map[string]mcpServerConfig) ([
 		}
 		combined[name] = server
 	}
+	now := time.Now()
+	for name, temporary := range registry.temporaryMCP {
+		if !now.Before(temporary.Expires) {
+			if temporary.Timer != nil {
+				temporary.Timer.Stop()
+			}
+			delete(registry.temporaryMCP, name)
+			continue
+		}
+		if _, exists := combined[name]; exists {
+			return nil, fmt.Errorf("duplicate temporary MCP server %q", name)
+		}
+		combined[name] = temporary.Config
+	}
 	return prepareMCPServers(combined)
 }
 
@@ -41,9 +65,20 @@ func (server mcpServerConfig) mcpApproved() bool {
 
 func (registry *modelRegistry) registerMCPRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/mcp_hub", registry.publicMCPHub)
+	mux.HandleFunc("GET /v1/mcp/registry.json", registry.publicMCPRegistry)
+	mux.HandleFunc("POST /v1/mcp/make_public", registry.updatePublicMCPServers)
+	mux.HandleFunc("GET /v1/mcp/discover", registry.discoverMCPServers)
+	mux.HandleFunc("GET /v1/mcp/openapi-registry", registry.openAPIMCPRegistry)
 	mux.HandleFunc("GET "+mcpServerPath, registry.readMCPServer)
-	mux.HandleFunc("GET "+mcpServerPath+"/{server_id}", registry.readMCPServer)
+	mux.HandleFunc("GET "+mcpServerPath+"/{server_id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == mcpServerPath+"/health" {
+			registry.server.ServeHTTP(w, r)
+			return
+		}
+		registry.readMCPServer(w, r)
+	})
 	mux.HandleFunc("POST "+mcpServerPath, registry.writeMCPServer)
+	mux.HandleFunc("POST "+mcpServerPath+"/oauth/session", registry.createTemporaryMCPServer)
 	mux.HandleFunc("PUT "+mcpServerPath, registry.writeMCPServer)
 	mux.HandleFunc("DELETE "+mcpServerPath+"/{server_id}", registry.writeMCPServer)
 	mux.HandleFunc("POST /mcp-rest/test/connection", registry.testMCPServer)
@@ -95,6 +130,68 @@ func (registry *modelRegistry) testMCPServer(w http.ResponseWriter, r *http.Requ
 	modelJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (registry *modelRegistry) createTemporaryMCPServer(w http.ResponseWriter, r *http.Request) {
+	if !registry.allowed(w, r) {
+		return
+	}
+	var input mcpServerInput
+	if decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input) != nil {
+		modelError(w, http.StatusBadRequest, "Invalid MCP server configuration")
+		return
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		input.Name = input.ServerID
+	}
+	if strings.TrimSpace(input.Name) == "" {
+		modelError(w, http.StatusBadRequest, "server_name or server_id is required")
+		return
+	}
+	if input.ServerID == "" {
+		input.ServerID = newEntityID()
+	}
+	if input.Transport == "" {
+		input.Transport = "sse"
+	}
+	if input.Transport == "stdio" || input.Command != "" {
+		modelError(w, http.StatusBadRequest, "Temporary MCP OAuth sessions require a remote MCP server")
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.temporaryMCP == nil {
+		registry.temporaryMCP = make(map[string]temporaryMCPServer)
+	}
+	if previous, ok := registry.temporaryMCP[input.Name]; ok && previous.Timer != nil {
+		previous.Timer.Stop()
+	}
+	expires := time.Now().Add(temporaryMCPServerTTL)
+	temporary := temporaryMCPServer{
+		Config: input.mcpServerConfig,
+		Expires: expires,
+	}
+	temporary.Timer = time.AfterFunc(temporaryMCPServerTTL, func() {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		current, ok := registry.temporaryMCP[input.Name]
+		if !ok || !current.Expires.Equal(expires) {
+			return
+		}
+		delete(registry.temporaryMCP, input.Name)
+		if servers, err := registry.compileMCP(registry.mcpServers); err == nil {
+			registry.server.ReplaceMCPServers(servers)
+		}
+	})
+	registry.temporaryMCP[input.Name] = temporary
+	servers, err := registry.compileMCP(registry.mcpServers)
+	if err != nil {
+		delete(registry.temporaryMCP, input.Name)
+		modelError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	registry.server.ReplaceMCPServers(servers)
+	modelJSON(w, http.StatusOK, mcpServerEntry(input.Name, input.mcpServerConfig))
+}
+
 func mcpServerEntry(name string, server mcpServerConfig) mcpServerInput {
 	server.Headers, server.Env = nil, nil
 	server.ClientSecret = ""
@@ -121,7 +218,7 @@ func mcpServerEntry(name string, server mcpServerConfig) mcpServerInput {
 }
 
 func (registry *modelRegistry) readMCPServer(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
 	}
 	registry.mu.Lock()
@@ -219,9 +316,9 @@ func (registry *modelRegistry) replaceMCPServers(w http.ResponseWriter, next map
 		return err
 	}
 	if registry.store != nil {
-		if err := registry.store.save(modelState{Models: registry.models, Credentials: registry.credentials,
+		if err := registry.store.save(modelState{AllowedIPs: registry.allowedIPs, Models: registry.models, Credentials: registry.credentials,
 			Router: registry.router, SearchTools: registry.searchTools, PassThrough: registry.passThrough,
-			MCPServers: next, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub}); err != nil {
+			MCPServers: next, MCPToolsets: registry.mcpToolsets, ToolPolicies: registry.toolPolicies, MCPSemanticFilter: registry.mcpSemanticFilter, PublicHub: registry.publicHub}); err != nil {
 			stateWriteError(w, err)
 			return err
 		}

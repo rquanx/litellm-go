@@ -47,7 +47,7 @@ func (registry *modelRegistry) testModelConnection(w http.ResponseWriter, r *htt
 		modelError(w, http.StatusNotFound, "Unknown deployment")
 		return
 	}
-	configuredModel := entry.Params.Model
+	configuredModel, configuredProvider := entry.Params.Model, entry.Params.Provider
 	if entry.Alias == "" {
 		entry.Alias = "test_model"
 	}
@@ -55,17 +55,20 @@ func (registry *modelRegistry) testModelConnection(w http.ResponseWriter, r *htt
 		modelError(w, http.StatusBadRequest, "Invalid provider parameters")
 		return
 	}
-	if configuredModel != "" && (model == "" || model == entry.Alias) {
-		entry.Params.Model = configuredModel
-	} else if configuredModel != "" {
-		provider, _, _ := strings.Cut(configuredModel, "/")
-		override, _, found := strings.Cut(entry.Params.Model, "/")
-		if found && override != provider {
+	if configuredModel != "" {
+		provider, _, _ := deploymentIdentity(configuredModel, configuredProvider)
+		if requestedProvider, _ := params["custom_llm_provider"].(string); requestedProvider != "" && requestedProvider != provider {
 			modelError(w, http.StatusBadRequest, "The model provider must match the selected deployment")
 			return
 		}
-		if !found {
-			entry.Params.Model = provider + "/" + entry.Params.Model
+		entry.Params.Provider = provider
+		if model == "" || model == entry.Alias {
+			entry.Params.Model = configuredModel
+		} else if override, _, found := deploymentIdentity(entry.Params.Model, ""); found && override != provider {
+			if _, known := modelIdentities()[entry.Params.Model]; known || strings.Contains(entry.Params.Model, "/") && configuredProvider == "" {
+				modelError(w, http.StatusBadRequest, "The model provider must match the selected deployment")
+				return
+			}
 		}
 	}
 	if len(request.Info) != 0 && json.Unmarshal(request.Info, &entry.Info) != nil {

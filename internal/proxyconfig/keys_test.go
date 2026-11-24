@@ -158,7 +158,7 @@ func TestVirtualKeyScopeAndRevocationSurviveRestart(t *testing.T) {
 		t.Fatalf("unexpected key list: %s", keys)
 	}
 	const rotated = "sk-rotated-fixture-key"
-	send(handler, "POST", "/key/regenerate", master, `{"key":"`+digest+`","new_key":"`+rotated+`","grace_period":"1h"}`, 200)
+	send(handler, "POST", "/key/"+digest+"/regenerate", master, `{"new_key":"`+rotated+`","grace_period":"1h"}`, 200)
 	handler = buildHandler()
 	send(handler, "GET", "/v1/models", generated.Key, "", 200)
 	send(handler, "GET", "/v1/models", rotated, "", 200)

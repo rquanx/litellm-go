@@ -2,6 +2,7 @@ package proxyconfig
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -32,6 +33,7 @@ func (registry *modelRegistry) compilePassThrough(entries []passThroughConfig) (
 
 func (registry *modelRegistry) registerPassThroughRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+passThroughManagementPath, registry.listPassThrough)
+	mux.HandleFunc("GET "+passThroughManagementPath+"/team/{team_id}", registry.listPassThrough)
 	mux.HandleFunc("POST "+passThroughManagementPath, registry.changePassThrough)
 	mux.HandleFunc("POST "+passThroughManagementPath+"/{endpoint_id}", registry.changePassThrough)
 	mux.HandleFunc("DELETE "+passThroughManagementPath, registry.changePassThrough)
@@ -57,8 +59,27 @@ func publicPassThrough(entry passThroughConfig, fromConfig bool) map[string]any 
 }
 
 func (registry *modelRegistry) listPassThrough(w http.ResponseWriter, r *http.Request) {
-	if !registry.allowed(w, r) {
+	if !registry.keys.adminViewer(r) && !registry.allowed(w, r) {
 		return
+	}
+	var metadata map[string]any
+	teamID := r.PathValue("team_id")
+	if teamID == "" {
+		teamID = r.URL.Query().Get("team_id")
+	}
+	if teamID != "" {
+		if registry.keys == nil {
+			modelError(w, http.StatusNotFound, "Team not found")
+			return
+		}
+		registry.keys.mu.RLock()
+		entry, exists := registry.keys.state.Teams[teamID]
+		registry.keys.mu.RUnlock()
+		if !exists {
+			modelError(w, http.StatusNotFound, "Team not found")
+			return
+		}
+		metadata = entry.Metadata
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
@@ -66,11 +87,13 @@ func (registry *modelRegistry) listPassThrough(w http.ResponseWriter, r *http.Re
 	id := r.URL.Query().Get("endpoint_id")
 	if id == "" {
 		for _, entry := range registry.base.staticPassThrough {
-			results = append(results, publicPassThrough(entry, true))
+			if teamListsPassThrough(metadata, entry.Path) {
+				results = append(results, publicPassThrough(entry, true))
+			}
 		}
 	}
 	for _, entry := range registry.passThrough {
-		if id == "" || id == entry.ID {
+		if (id == "" || id == entry.ID) && teamListsPassThrough(metadata, entry.Path) {
 			results = append(results, publicPassThrough(entry, false))
 		}
 	}
@@ -137,9 +160,9 @@ func (registry *modelRegistry) savePassThrough(entries []passThroughConfig) erro
 	if registry.store == nil {
 		return nil
 	}
-	return registry.store.save(modelState{Models: registry.models, Credentials: registry.credentials,
+	return registry.store.save(modelState{AllowedIPs: registry.allowedIPs, Models: registry.models, Credentials: registry.credentials,
 		Router: registry.router, SearchTools: registry.searchTools, PassThrough: entries,
-		MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: registry.publicHub})
+		MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, ToolPolicies: registry.toolPolicies, MCPSemanticFilter: registry.mcpSemanticFilter, PublicHub: registry.publicHub})
 }
 
 func validatePassThroughIDs(entries []passThroughConfig) error {
@@ -151,4 +174,57 @@ func validatePassThroughIDs(entries []passThroughConfig) error {
 		ids[entry.ID] = true
 	}
 	return nil
+}
+
+const passThroughRoutesMetadata = "allowed_passthrough_routes"
+
+func withPassThroughRoutes(metadata map[string]any, routes []string) map[string]any {
+	next := make(map[string]any, len(metadata)+1)
+	maps.Copy(next, metadata)
+	next[passThroughRoutesMetadata] = slices.Clone(routes)
+	return next
+}
+
+func passThroughRoutes(metadata map[string]any) []string {
+	switch routes := metadata[passThroughRoutesMetadata].(type) {
+	case []string:
+		return routes
+	case []any:
+		result := make([]string, 0, len(routes))
+		for _, item := range routes {
+			if route, ok := item.(string); ok {
+				result = append(result, route)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func teamListsPassThrough(metadata map[string]any, path string) bool {
+	return metadata[passThroughRoutesMetadata] == nil || slices.Contains(passThroughRoutes(metadata), path)
+}
+
+func (keys *KeyRegistry) AuthorizePassThrough(token, path string) bool {
+	keys.mu.RLock()
+	defer keys.mu.RUnlock()
+	if _, _, ok := keys.authorizeLocked(token); !ok {
+		return false
+	}
+	key := keys.state.Keys[keyDigest(token)]
+	if key.RotationTarget != "" {
+		key = keys.state.Keys[key.RotationTarget]
+	}
+	teamID := key.TeamID
+	if teamID == "" && key.ProjectID != "" {
+		teamID = keys.state.Projects[key.ProjectID].TeamID
+	}
+	routes := passThroughRoutes(key.Metadata)
+	if len(routes) == 0 {
+		routes = passThroughRoutes(keys.state.Teams[teamID].Metadata)
+	}
+	return slices.ContainsFunc(routes, func(route string) bool {
+		return route != "" && (path == route || strings.HasPrefix(path, route+"/"))
+	})
 }

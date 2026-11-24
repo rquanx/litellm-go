@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -68,4 +69,15 @@ func TestResponsePollingReturnsPartialOutputAndChecksOwner(t *testing.T) {
 	await(`"total_tokens":3`)
 	send("DELETE", path, "a", "", 200)
 	send("GET", path, "a", "", 404)
+}
+
+func TestResponsePollingListScopesByOwner(t *testing.T) {
+	server := NewServer(Config{AuthorizeInference: true, Token: "master", ResponsePolling: ResponsePollingConfig{All: true}})
+	server.polling = &responsePolling{entries: map[string]*pollingEntry{
+		"one": {owner: sha256.Sum256([]byte("owner")), body: map[string]any{"id": "one"}},
+		"two": {owner: sha256.Sum256([]byte("other")), body: map[string]any{"id": "two"}},
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil); req.Header.Set("Authorization", "Bearer owner")
+	w := httptest.NewRecorder(); server.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"id":"one"`) || strings.Contains(w.Body.String(), `"id":"two"`) { t.Fatalf("unexpected scoped response list: %s", w.Body.String()) }
 }

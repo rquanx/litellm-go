@@ -42,6 +42,9 @@ func realtimeEndpointFingerprint(candidate Candidate) string {
 }
 
 func (s *Server) realtimeClientSecret(w http.ResponseWriter, request *http.Request, scope []string) {
+	if _, allowed := s.checkKeyBudget(w, request); !allowed {
+		return
+	}
 	if s.config.Token == "" {
 		writeError(w, http.StatusServiceUnavailable, "master_key_required", "WebRTC requires a proxy master key")
 		return
@@ -193,7 +196,14 @@ func (s *Server) postRealtime(ctx context.Context, candidate Candidate, operatio
 	base := strings.TrimRight(candidate.APIBase, "/")
 	target := strings.TrimSuffix(base, "/v1") + "/v1/realtime/" + operation
 	if candidate.Provider == "azure" && !strings.HasSuffix(base, "/openai/v1") {
-		target = strings.TrimSuffix(base, "/openai") + "/openai/realtime/" + operation + "?api-version=" + url.QueryEscape(candidate.APIVersion)
+		version := candidate.APIVersion
+		if version == "" {
+			version = os.Getenv("AZURE_API_VERSION")
+		}
+		if version == "" {
+			version = "2024-12-17"
+		}
+		target = strings.TrimSuffix(base, "/openai") + "/openai/realtime/" + operation + "?api-version=" + url.QueryEscape(version)
 	}
 	outgoing, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {

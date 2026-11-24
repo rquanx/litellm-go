@@ -34,6 +34,7 @@ type modelHubCatalog struct {
 }
 
 type publicModelHubState struct {
+	MCPServers []string `json:"mcp_servers"`
 	Groups []string       `json:"model_groups"`
 	Links  map[string]any `json:"useful_links"`
 }
@@ -125,15 +126,21 @@ func (registry *modelRegistry) updatePublicModelHub(w http.ResponseWriter, r *ht
 		next.Links = input.Links
 		result["message"], result["useful_links"] = "Successfully updated useful links", next.Links
 	}
+	if registry.savePublicHub(w, next) {
+		modelJSON(w, http.StatusOK, result)
+	}
+}
+
+func (registry *modelRegistry) savePublicHub(w http.ResponseWriter, next publicModelHubState) bool {
 	if registry.store != nil {
-		if err := registry.store.save(modelState{
+		if err := registry.store.save(modelState{AllowedIPs: registry.allowedIPs,
 			Models: registry.models, Credentials: registry.credentials, Router: registry.router, SearchTools: registry.searchTools,
-			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, PublicHub: next,
+			PassThrough: registry.passThrough, MCPServers: registry.mcpServers, MCPToolsets: registry.mcpToolsets, ToolPolicies: registry.toolPolicies, MCPSemanticFilter: registry.mcpSemanticFilter, PublicHub: next,
 		}); err != nil {
 			stateWriteError(w, err)
-			return
+			return false
 		}
 	}
 	registry.publicHub = next
-	modelJSON(w, http.StatusOK, result)
+	return true
 }

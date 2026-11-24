@@ -1,6 +1,7 @@
 package proxyconfig
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -8,7 +9,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/rquanx/litellm-go/internal/runtime"
 	"golang.org/x/crypto/nacl/secretbox"
 )
 
@@ -75,6 +78,20 @@ func TestLiteLLMDeploymentSecretsAndVirtualKeys(t *testing.T) {
 	if _, _, blocked, err := decodeLiteLLMKey([]byte(`{"team_id":"fixture-team","blocked":true}`)); err != nil || !blocked {
 		t.Fatal("blocked LiteLLM key should be skipped")
 	}
+	snapshot := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	periodic := `{"token":"` + token + `","max_budget":5,"spend":4,"budget_duration":"1d","budget_reset_at":"2026-11-25T00:00:00"}`
+	_, virtual, _, err = decodeLiteLLMKeyForState([]byte(periodic), nil, snapshot)
+	if err != nil || virtual.BudgetResetAt == nil {
+		t.Fatalf("periodic key was not preserved: %v", err)
+	}
+	registry := &KeyRegistry{}
+	if start, _, baseline := registry.keySpendWindow(virtual, snapshot); !start.Equal(snapshot) || baseline != 4 {
+		t.Fatalf("unexpected active imported window: %v, %g", start, baseline)
+	}
+	reset := *virtual.BudgetResetAt
+	if start, _, baseline := registry.keySpendWindow(virtual, reset); !start.Equal(reset) || baseline != 0 {
+		t.Fatalf("imported spend did not expire at the original reset: %v, %g", start, baseline)
+	}
 }
 
 func TestPostgresImportsLiteLLMState(t *testing.T) {
@@ -89,9 +106,13 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`CREATE TEMP TABLE minato_proxy_state (name TEXT PRIMARY KEY, revision BIGINT NOT NULL, value JSONB NOT NULL);
-		CREATE TEMP TABLE "LiteLLM_ProxyModelTable" (model_id TEXT, model_name TEXT, litellm_params JSONB, model_info JSONB, created_at TIMESTAMP DEFAULT NOW());
+		CREATE TEMP TABLE "LiteLLM_ProxyModelTable" (model_id TEXT, model_name TEXT, litellm_params JSONB, model_info JSONB,
+			created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW(), created_by TEXT NOT NULL DEFAULT 'fixture-owner');
 		CREATE TEMP TABLE "LiteLLM_CredentialsTable" (credential_name TEXT, credential_values JSONB, credential_info JSONB);
-		CREATE TEMP TABLE "LiteLLM_VerificationToken" (token TEXT, key_alias TEXT, models TEXT[], expires TIMESTAMP)`)
+		CREATE TEMP TABLE "LiteLLM_BudgetTable" (budget_id TEXT, max_budget DOUBLE PRECISION, rpm_limit INTEGER, tpm_limit INTEGER, max_parallel_requests INTEGER);
+		CREATE TEMP TABLE "LiteLLM_VerificationToken" (token TEXT, key_alias TEXT, models TEXT[], expires TIMESTAMP,
+			max_budget DOUBLE PRECISION, spend DOUBLE PRECISION, budget_id TEXT);
+		INSERT INTO "LiteLLM_BudgetTable" VALUES ('fixture-budget', 1, 5, 80, 2)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +132,7 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 		"upstream-deployment", "imported", string(params)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`INSERT INTO "LiteLLM_VerificationToken" VALUES ($1, 'fixture-key', ARRAY['imported'], '2030-01-01 00:00:00')`,
+	if _, err := db.Exec(`INSERT INTO "LiteLLM_VerificationToken" VALUES ($1, 'fixture-key', ARRAY['imported'], '2030-01-01 00:00:00', NULL, 0.75, 'fixture-budget')`,
 		keyDigest("fixture-token")); err != nil {
 		t.Fatal(err)
 	}
@@ -140,7 +161,9 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	if err := postgresModels(db, master).load(&models); err != nil || len(models.Models) != 1 ||
 		models.Credentials["fixture-provider"].Values["api_key"] != "provider-secret" ||
 		models.Credentials["fixture-unused"].Values["azure_password"] != "provider-secret" ||
-		models.Models[0].Params.CredentialName != "fixture-provider" || models.Models[0].Info.ID != "upstream-deployment" {
+		models.Models[0].Params.CredentialName != "fixture-provider" || models.Models[0].Info.ID != "upstream-deployment" ||
+		models.Models[0].Info.CreatedAt == nil || models.Models[0].Info.UpdatedAt == nil ||
+		models.Models[0].Info.CreatedBy != "fixture-owner" {
 		t.Fatalf("imported configuration could not be restored: %v", err)
 	}
 	registry, err := LoadPostgresKeys(master, db)
@@ -149,5 +172,29 @@ func TestPostgresImportsLiteLLMState(t *testing.T) {
 	}
 	if scope, allowed := registry.Authorize("fixture-token"); !allowed || len(scope) != 1 || scope[0] != "imported" {
 		t.Fatal("imported key did not retain the original scope")
+	}
+	spend, err := OpenSpendLog(context.Background(), db, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, restored, _, _, _, _ := registry.keyForBudget("fixture-token")
+	if restored.ImportedSpend == nil || restored.BudgetID != "fixture-budget" {
+		t.Fatal("imported key did not retain its spend snapshot")
+	}
+	snapshot := restored.ImportedSpend.AsOf
+	charge := 0.25
+	for _, at := range []time.Time{snapshot.Add(-time.Hour), snapshot.Add(time.Second)} {
+		check, err := spend.CheckKeyBudget(context.Background(), "fixture-token")
+		if err != nil || !check.Tracked || check.ErrorMessage != "" ||
+			check.RPMLimit == nil || *check.RPMLimit != 5 || check.TPMLimit == nil || *check.TPMLimit != 80 ||
+			check.ParallelLimit == nil || *check.ParallelLimit != 2 {
+			t.Fatalf("premature budget block before new spend: %+v, %v", check, err)
+		}
+		spend.Record(runtime.InferenceEvent{ID: newEntityID(), Model: "imported", KeyDigest: digest, Spend: &charge,
+			StartTime: float64(at.Unix()), EndTime: float64(at.Unix())})
+	}
+	check, err := spend.CheckKeyBudget(context.Background(), "fixture-token")
+	if err != nil || !strings.Contains(check.ErrorMessage, "Current cost: 1,") {
+		t.Fatalf("expected the snapshot plus new spend to reach the limit: %+v, %v", check, err)
 	}
 }

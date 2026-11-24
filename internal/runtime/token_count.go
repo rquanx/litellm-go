@@ -134,6 +134,15 @@ func tokenizerForModel(model string) (tokenizer.Codec, error) {
 	return tokenizer.Get(tokenizer.Cl100kBase)
 }
 
+// CountChatInputTokens counts message tokens locally using the model tokenizer.
+func CountChatInputTokens(model string, messages []map[string]any) (int, error) {
+	codec, err := tokenizerForModel(model)
+	if err != nil {
+		return 0, err
+	}
+	return countChatTokens(codec, messages)
+}
+
 func countChatTokens(codec tokenizer.Codec, messages []map[string]any) (int, error) {
 	total := 3
 	for _, message := range messages {

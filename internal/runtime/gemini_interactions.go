@@ -73,8 +73,14 @@ func (s *Server) serveInteraction(w http.ResponseWriter, r *http.Request, suffix
 	var deployment, alias, nativeID string
 	var fields map[string]any
 	var stream, agent bool
+	var budget KeyBudget
 	targetPath := interactionPath
 	if suffix == "" && r.Method == http.MethodPost {
+		var allowed bool
+		budget, allowed = s.checkKeyBudget(w, r)
+		if !allowed {
+			return
+		}
 		body, err := readBody(r, s.config.MaxBodyBytes)
 		if err != nil {
 			writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", "Interaction request body is too large")
@@ -150,20 +156,33 @@ func (s *Server) serveInteraction(w http.ResponseWriter, r *http.Request, suffix
 	if stream {
 		target += "?alt=sse"
 	}
-	if s.config.Callback != nil && fields != nil {
+	var admission keyAdmission
+	var recorder *callbackResponse
+	if fields != nil && (budget.ParallelLimit != nil || budget.hasTokenLimit() || len(budget.OwnerLimits) != 0) {
+		var allowed bool
+		admission, allowed = s.admitKeyLimits(w, r, budget, estimatedInputTokens(fields))
+		if !allowed {
+			return
+		}
+	}
+	defer func() { admission.finish(recorder) }()
+	if fields != nil && (s.config.Callback != nil || len(admission.settlements) != 0) {
 		event := newInferenceEvent("interactions", alias, stream)
+		budget.apply(&event)
 		if key := ProxyCredential(r); key != "" && !s.authorized(r) {
 			event.KeyDigest = fmt.Sprintf("%x", sha256.Sum256([]byte(key)))
 		}
 		if s.config.LogMessages {
 			event.Messages = boundedCallbackJSON(fields["input"])
 		}
-		recorder := &callbackResponse{ResponseWriter: w, event: event, capture: s.config.LogMessages}
+		recorder = &callbackResponse{ResponseWriter: w, event: event, capture: s.config.LogMessages}
 		writeRuntimeMeta(recorder, candidate, 1, nil)
 		defer func() {
 			if recorder.status != 0 {
 				recorder.finish()
-				s.config.Callback(recorder.event)
+				if s.config.Callback != nil {
+					s.config.Callback(recorder.event)
+				}
 			}
 		}()
 		w = recorder

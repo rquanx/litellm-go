@@ -150,6 +150,16 @@ func (s *Server) applyGenericGuardrails(w http.ResponseWriter, r *http.Request, 
 	return plan, true
 }
 
+func (s *Server) GuardrailNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := make([]string, 0, len(s.guardrails))
+	for _, guard := range s.guardrails {
+		names = append(names, guard.Name)
+	}
+	return names
+}
+
 func (s *Server) visibleGuardrails(r *http.Request) []GenericGuardrail {
 	s.mu.RLock()
 	guards := s.guardrails
@@ -245,8 +255,12 @@ func (s *Server) guardrailVerdict(r *http.Request, guard GenericGuardrail, model
 		return s.evaluateOpenAIModeration(r, guard, input)
 	}
 	texts, replace := guardrailText(input)
+	structured := input["messages"]
+	if contextMessages, ok := input["guardrail_context_messages"].([]map[string]any); ok {
+		structured = contextMessages
+	}
 	body, _ := json.Marshal(map[string]any{"model": model, "input_type": stage, "texts": texts,
-		"structured_messages": input["messages"], "tools": input["tools"], "request_data": map[string]any{},
+		"structured_messages": structured, "tools": input["tools"], "request_data": map[string]any{},
 		"litellm_version": "1.85.0", "additional_provider_specific_params": guard.Parameters})
 	var verdict struct {
 		Action string   `json:"action"`

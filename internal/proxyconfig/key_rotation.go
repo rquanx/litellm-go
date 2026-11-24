@@ -1,6 +1,9 @@
 package proxyconfig
 
 import (
+	"encoding/json"
+	"errors"
+	"io"
 	"maps"
 	"net/http"
 	"os"
@@ -18,7 +21,14 @@ func (registry *KeyRegistry) regenerateKey(w http.ResponseWriter, r *http.Reques
 		Duration    *string `json:"duration"`
 		GracePeriod *string `json:"grace_period"`
 	}
-	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil || input.Key == "" {
+	if err := decodeModelJSON(http.MaxBytesReader(w, r.Body, 1<<20), &input); err != nil && !errors.Is(err, io.EOF) {
+		modelError(w, http.StatusBadRequest, "Invalid or unsupported key rotation")
+		return
+	}
+	if input.Key == "" {
+		input.Key = r.PathValue("key")
+	}
+	if input.Key == "" {
 		modelError(w, http.StatusBadRequest, "Invalid or unsupported key rotation")
 		return
 	}
@@ -32,12 +42,14 @@ func (registry *KeyRegistry) regenerateKey(w http.ResponseWriter, r *http.Reques
 		modelError(w, http.StatusBadRequest, "Invalid key rotation grace period")
 		return
 	}
+	if !customKeyAllowed(w, r, input.NewKey) {
+		return
+	}
 	token := input.NewKey
 	if token == "" {
 		token = newKeyToken()
 	}
-	if !strings.HasPrefix(token, "sk-") || len(token) < 8 || len(token) > 512 ||
-		strings.ContainsAny(token, " \t\r\n") || token == registry.master {
+	if !validCustomAPIKey(token, registry.master) {
 		modelError(w, http.StatusBadRequest, "Invalid replacement key")
 		return
 	}
@@ -56,6 +68,9 @@ func (registry *KeyRegistry) regenerateKey(w http.ResponseWriter, r *http.Reques
 	}
 	next := registry.state
 	next.Keys = maps.Clone(next.Keys)
+	if key.SpendIdentity == "" {
+		key.SpendIdentity = oldID
+	}
 	old := key
 	if input.Duration != nil {
 		expires, err := keyExpiry(now, *input.Duration)
@@ -79,9 +94,18 @@ func (registry *KeyRegistry) regenerateKey(w http.ResponseWriter, r *http.Reques
 		next.Keys[oldID] = old
 	}
 	next.Keys[newID] = key
-	if registry.apply(w, next) {
+	event := registry.keyAudit(r, oldID, "updated", &old, &key)
+	if event != nil {
+		event.after, _ = json.Marshal(map[string]any{"token": newID, "team_id": key.TeamID, "expires": key.Expires})
+	}
+	if registry.apply(w, next, event) {
 		modelJSON(w, http.StatusOK, map[string]any{
 			"key": token, "token_id": newID, "expires": key.Expires, "key_alias": key.Alias,
 		})
 	}
+}
+
+func validCustomAPIKey(token, master string) bool {
+	return strings.HasPrefix(token, "sk-") && len(token) >= 8 && len(token) <= 512 &&
+		!strings.ContainsAny(token, " \t\r\n\x00") && token != master
 }
