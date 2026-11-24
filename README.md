@@ -2,7 +2,7 @@
 
 Low-memory Go gateway for deployments that use LiteLLM Proxy APIs and configuration. Management and provider APIs are enabled by default.
 
-The Go proxy tracks public LiteLLM `v1.85.0` behavior. Standalone mode enables the implemented proxy APIs, with PostgreSQL and Redis features available when configured. See the coverage table for verified behavior and open compatibility gaps. [LiteLLM compatibility](upstream/README.md)
+The Go proxy tracks public LiteLLM `v1.85.0` behavior. It exposes one generic Runtime with LiteLLM-compatible configuration. Use the API and provider switches, native path selection and YAML settings to shape a Minato deployment instead of selecting a separate mode. PostgreSQL and Redis features are available when configured. See the coverage table for verified behavior and open compatibility gaps. [LiteLLM compatibility](upstream/README.md)
 
 ## Standalone quick start
 
