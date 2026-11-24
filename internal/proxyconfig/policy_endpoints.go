@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func (registry *PolicyRegistry) Handler(next http.Handler, master string, keys *KeyRegistry) http.Handler {

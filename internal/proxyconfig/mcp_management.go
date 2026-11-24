@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"slices"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 const mcpServerPath = "/v1/mcp/server"

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 const guardrailMetricsTable = `"LiteLLM_DailyGuardrailMetrics"`

@@ -1,4 +1,4 @@
-module github.com/rquanx/minato-runtime
+module github.com/rquanx/litellm-go
 
 go 1.24.4
 

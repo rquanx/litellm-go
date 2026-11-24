@@ -26,6 +26,7 @@ import (
 type Config struct {
 	Routes             []Route
 	AuthorizeInference bool
+	DisableRoutePublication bool
 	Token              string
 	HTTPClient         *http.Client
 	MaxBodyBytes       int64
@@ -369,7 +370,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		s.models(writer, request, modelScope)
 	case s.config.AuthorizeInference && request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/v1/models/"):
 		s.modelInfo(writer, strings.TrimPrefix(request.URL.Path, "/v1/models/"), modelScope)
-	case strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
+	case !s.config.DisableRoutePublication && strings.HasPrefix(request.URL.Path, "/internal/v1/routes/"):
 		s.route(writer, request)
 	default:
 		if !s.config.AuthorizeInference || !s.serveProviderPassThrough(writer, request) {

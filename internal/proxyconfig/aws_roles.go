@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type staticAWSIdentityToken string

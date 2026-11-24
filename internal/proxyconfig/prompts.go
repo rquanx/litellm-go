@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 const promptTable = `"LiteLLM_PromptTable"`

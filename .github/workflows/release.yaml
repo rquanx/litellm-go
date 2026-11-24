@@ -1,0 +1,45 @@
+name: Release litellm-go
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for os in linux darwin windows; do
+            for arch in amd64 arm64; do
+              package="litellm-go-${GITHUB_REF_NAME}-${os}-${arch}"
+              mkdir "$package"
+              binary=litellm-go
+              if [[ "$os" == windows ]]; then binary=litellm-go.exe; fi
+              CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$package/$binary" ./cmd/minato-runtime
+              cp upstream/LICENSE.litellm "$package/LICENSE"
+              tar -czf "dist/$package.tar.gz" "$package"
+            done
+          done
+          (cd dist && sha256sum *.tar.gz > SHA256SUMS)
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --draft "${flags[@]}"

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )

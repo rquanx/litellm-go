@@ -1,9 +1,8 @@
 services:
-  minato-runtime:
+  litellm-go:
     build: .
     ports:
-      - "4300:4300"
+      - "127.0.0.1:4000:4000"
     environment:
-      MINATO_RUNTIME_PORT: "4300"
-      MINATO_RUNTIME_TOKEN: ${MINATO_RUNTIME_TOKEN:?set MINATO_RUNTIME_TOKEN}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY}
     restart: unless-stopped

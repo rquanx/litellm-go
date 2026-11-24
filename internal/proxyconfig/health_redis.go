@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 var acquireHealth = redis.NewScript(`

@@ -11,12 +11,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/proxyconfig"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/proxyconfig"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func main() {
-	configPath := flag.String("config", os.Getenv("MINATO_RUNTIME_PROXY_CONFIG"), "LiteLLM-compatible YAML configuration")
+	mode := flag.String("mode", getenv("LITELLM_GO_MODE", "standalone"), "Operating mode: standalone or minato")
+	configPath := flag.String("config", getenv("LITELLM_GO_CONFIG", os.Getenv("MINATO_RUNTIME_PROXY_CONFIG")), "LiteLLM-compatible YAML configuration")
 	statePath := flag.String("model-state", os.Getenv("MINATO_RUNTIME_MODEL_STATE"), "Optional path for persisted dynamic models")
 	keyStatePath := flag.String("key-state", os.Getenv("MINATO_RUNTIME_KEY_STATE"), "Optional path for persisted virtual keys")
 	importAgents := flag.Bool("import-litellm-agents", false, "Copy supported LiteLLM agents into Go PostgreSQL state")
@@ -28,11 +29,37 @@ func main() {
 	importMCP := flag.Bool("import-litellm-mcp-servers", false, "Import supported LiteLLM MCP servers into Go PostgreSQL state")
 	importSpend := flag.Bool("import-litellm-spend", false, "Import LiteLLM spend metadata into Go PostgreSQL state")
 	importHealth := flag.Bool("import-litellm-health", false, "Import LiteLLM health history into Go PostgreSQL state")
-	port := flag.Int("port", getint("MINATO_RUNTIME_PORT", 4300), "HTTP listener port")
+	port := flag.Int("port", 0, "HTTP listener port (4000 in standalone, 4300 in minato)")
 	host := flag.String("host", "0.0.0.0", "HTTP listener host")
 	flag.Parse()
+	standalone := *mode == "standalone"
+	if !standalone && *mode != "minato" {
+		log.Fatal("mode must be standalone or minato")
+	}
+	importCount := 0
+	for _, requested := range []bool{*importModels, *importAgents, *importCredentials, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend, *importHealth} {
+		if requested {
+			importCount++
+		}
+	}
+	if !standalone && (*configPath != "" || *statePath != "" || *keyStatePath != "" || importCount != 0) {
+		log.Fatal("proxy configuration, state paths and import commands require standalone mode")
+	}
+	if *port == 0 {
+		defaultPort := 4000
+		if !standalone {
+			defaultPort = 4300
+		}
+		*port = getint("LITELLM_GO_PORT", getint("MINATO_RUNTIME_PORT", defaultPort))
+	}
+	token := os.Getenv("MINATO_RUNTIME_TOKEN")
+	if standalone {
+		token = getenv("LITELLM_MASTER_KEY", token)
+	}
 	config := runtime.Config{
-		Token:         getenv("MINATO_RUNTIME_TOKEN", ""),
+		Token:         token,
+		AuthorizeInference: standalone,
+		DisableRoutePublication: standalone,
 		HTTPClient:    &http.Client{Timeout: 120 * time.Second},
 		MaxBodyBytes:  8 << 20,
 		MaxConcurrent: getint("MINATO_RUNTIME_MAX_CONCURRENT", 128),
@@ -64,8 +91,6 @@ func main() {
 		if proxy.MasterKey != "" {
 			config.Token = proxy.MasterKey
 		}
-		proxy.MasterKey = config.Token
-		config.AuthorizeInference = true
 		config.PublicReadinessDetails = proxy.PublicReadinessDetails
 		config.ResponsePolling = proxy.ResponsePolling
 		config.InferenceCache = proxy.InferenceCache
@@ -79,6 +104,17 @@ func main() {
 		if proxy.Timeout > 0 {
 			config.HTTPClient.Timeout = proxy.Timeout
 		}
+	}
+	if config.Token == "" {
+		if standalone {
+			log.Fatal("set LITELLM_MASTER_KEY or general_settings.master_key")
+		}
+		log.Fatal("set MINATO_RUNTIME_TOKEN")
+	}
+	proxy.MasterKey = config.Token
+	if !standalone {
+		serve(*host, *port, *mode, runtime.NewServer(config))
+		return
 	}
 	var stateDB *sql.DB
 	if proxy.DatabaseURL != "" {
@@ -94,12 +130,6 @@ func main() {
 		config.DatabasePing = stateDB.PingContext
 		config.LegacyFiles = proxyconfig.LegacyFileLookup(stateDB)
 		config.LegacyVectorStores = proxyconfig.LegacyVectorStoreLookup(stateDB)
-	}
-	importCount := 0
-	for _, requested := range []bool{*importModels, *importAgents, *importCredentials, *importKeys, *importAccess, *importSearch, *importMCP, *importSpend, *importHealth} {
-		if requested {
-			importCount++
-		}
 	}
 	if importCount != 0 {
 		if stateDB == nil {
@@ -180,26 +210,21 @@ func main() {
 		return
 	}
 	var keys *proxyconfig.KeyRegistry
-	if *configPath != "" && config.Token != "" {
-		var err error
-		if stateDB != nil {
-			keys, err = proxyconfig.LoadPostgresKeys(config.Token, stateDB)
-		} else {
-			keys, err = proxyconfig.LoadKeys(config.Token, *keyStatePath)
-		}
-		if err != nil {
-			log.Fatal(err)
-		}
-		config.AuthorizeKey = keys.Authorize
-		config.AuthorizeSearch = keys.AuthorizeSearch
-		config.AuthorizeAgent = keys.AuthorizeAgent
-		config.AuthorizeMCP = keys.AuthorizeMCP
-		config.AuthorizeMCPToolset = keys.AuthorizeMCPToolset
-		config.ResourceOwnerScopes = keys.ContainerOwnerScopes
+	var err error
+	if stateDB != nil {
+		keys, err = proxyconfig.LoadPostgresKeys(config.Token, stateDB)
+	} else {
+		keys, err = proxyconfig.LoadKeys(config.Token, *keyStatePath)
 	}
-	if *keyStatePath != "" && keys == nil {
-		log.Fatal("virtual key state requires standalone config and a master key")
+	if err != nil {
+		log.Fatal(err)
 	}
+	config.AuthorizeKey = keys.Authorize
+	config.AuthorizeSearch = keys.AuthorizeSearch
+	config.AuthorizeAgent = keys.AuthorizeAgent
+	config.AuthorizeMCP = keys.AuthorizeMCP
+	config.AuthorizeMCPToolset = keys.AuthorizeMCPToolset
+	config.ResourceOwnerScopes = keys.ContainerOwnerScopes
 	if stateDB != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		history, err := proxyconfig.OpenHealthHistory(ctx, stateDB)
@@ -306,29 +331,27 @@ func main() {
 	}
 	server := runtime.NewServer(config)
 	var handler http.Handler = server
-	if stateDB != nil && keys != nil {
-		handler,err=proxyconfig.WithBudgetManagement(handler,stateDB,keys)
-		if err!=nil {log.Fatal(err)}
+	if stateDB != nil {
+		handler, err = proxyconfig.WithPostgresModelManagement(context.Background(), server, proxy, config.Token, stateDB, keys)
+	} else {
+		handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
 	}
-	if *configPath != "" {
-		var err error
-		if stateDB != nil {
-			handler, err = proxyconfig.WithPostgresModelManagement(context.Background(), server, proxy, config.Token, stateDB, keys)
-		} else {
-			handler, err = proxyconfig.WithModelManagement(server, proxy, config.Token, *statePath)
-		}
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err = proxyconfig.WithAgentManagement(handler, server, proxy, stateDB, *statePath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handler, err = proxyconfig.WithSkillMarketplace(handler, stateDB, keys)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if stateDB != nil {
+		handler, err = proxyconfig.WithBudgetManagement(handler, stateDB, keys)
 		if err != nil {
 			log.Fatal(err)
 		}
-		handler, err = proxyconfig.WithAgentManagement(handler, server, proxy, stateDB, *statePath)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
-	if *configPath != "" {
-		var err error
-		handler, err = proxyconfig.WithSkillMarketplace(handler, stateDB, keys)
-		if err != nil { log.Fatal(err) }
 	}
 	if stateDB != nil && keys != nil {
 		var err error
@@ -361,14 +384,18 @@ func main() {
 	if spend != nil {
 		handler = spend.Handler(handler, server)
 	}
-	address := net.JoinHostPort(*host, strconv.Itoa(*port))
 	if stateDB != nil {
 		go policies.RunRefresh(context.Background())
 	}
 	if config.BackgroundHealthInterval > 0 {
 		go server.RunBackgroundHealthChecks(context.Background())
 	}
-	log.Printf("minato-runtime listening on %s", address)
+	serve(*host, *port, *mode, handler)
+}
+
+func serve(host string, port int, mode string, handler http.Handler) {
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	log.Printf("litellm-go listening on %s in %s mode", address, mode)
 	if err := http.ListenAndServe(address, handler); err != nil {
 		log.Fatal(err)
 	}

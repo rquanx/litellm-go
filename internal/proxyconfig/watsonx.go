@@ -3,7 +3,7 @@ package proxyconfig
 import (
 	"os"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func firstWatsonXEnv(names ...string) string {

@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type agentConfig struct {

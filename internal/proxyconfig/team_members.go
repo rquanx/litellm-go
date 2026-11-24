@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 type teamMembership struct {

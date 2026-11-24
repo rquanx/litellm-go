@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func legacyCallbackPayload(event runtime.InferenceEvent) map[string]any {

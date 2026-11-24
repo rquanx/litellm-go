@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func (registry *modelRegistry) testModelConnection(w http.ResponseWriter, r *http.Request) {

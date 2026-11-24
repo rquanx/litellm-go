@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 	"golang.org/x/oauth2"
 )
 

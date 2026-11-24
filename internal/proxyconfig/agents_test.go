@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func TestConfiguredA2AAgentRoutes(t *testing.T) {

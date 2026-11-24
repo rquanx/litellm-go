@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func TestConfiguredPassThroughWebSocket(t *testing.T) {

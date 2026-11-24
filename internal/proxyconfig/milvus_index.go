@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func MilvusIndexLookup(db *sql.DB, keys *KeyRegistry) runtime.MilvusIndexLookup {

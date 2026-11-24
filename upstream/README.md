@@ -55,6 +55,8 @@ The upstream MIT license notice is included with this port. LiteLLM's `enterpris
 
 Full proxy parity remains open. Cross-proxy HTTP checks cover model discovery and selected chat paths. Provider fixtures and Go regression tests cover the additional operations in the table. The route inventory also includes management, policy, and integration surfaces that still need implementations and behavior checks.
 
+The standalone release enables the implemented proxy APIs by default. An exact replacement claim for the pinned LiteLLM release requires passing the same request and persistence fixtures for its public API routes, provider adapters and Dashboard API calls. The Minato integration mode uses the same executable with its internal route publication API and inference features. Its smaller API surface does not determine standalone coverage.
+
 An isolated Minato smoke run verified registration, publication, the OpenAI SDK, fallback, SSE, rollback, key revocation, audit, usage and replay with the Go runtime. It used a synthetic upstream and a temporary PostgreSQL database. Provider fixture coverage and Python behavior comparisons are recorded below.
 
 With both proxies configured for the same synthetic OpenAI endpoint, LiteLLM `v1.85.0` and the Go proxy returned matching model IDs, object types, creation timestamps and providers for `/models`, `/v1/models` and the corresponding model-detail routes. Assistant content and total token counts also matched for versioned, unversioned and Azure-style chat completion paths.

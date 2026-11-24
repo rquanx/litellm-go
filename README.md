@@ -1,18 +1,25 @@
-# minato-runtime
+# litellm-go
 
-Low-memory Go data plane for Minato.
+Low-memory Go gateway for deployments that use LiteLLM Proxy APIs and configuration. The standalone proxy is the default. Minato selects the same binary's integration mode for model routing.
 
-The Go port tracks the public LiteLLM Python implementation by release. The compatibility baseline and upstream comparison workflow are documented in [LiteLLM Python port](upstream/README.md). The Minato repository defines the full migration strategy, including the boundary between Go and the optional LiteLLM compatibility layer.
+The Go proxy tracks public LiteLLM `v1.85.0` behavior. Standalone mode enables the implemented proxy APIs, with PostgreSQL and Redis features available when configured. See the coverage table for verified behavior and open compatibility gaps. [LiteLLM compatibility](upstream/README.md)
 
-The runtime receives versioned route snapshots from Minato and sends OpenAI-compatible requests to CPA, OpenCode, or another provider. It keeps no project database and exposes only runtime, health, and route-management endpoints.
-
-## Run locally
+## Standalone quick start
 
 ```bash
-MINATO_RUNTIME_TOKEN=local-token go run ./cmd/minato-runtime
+LITELLM_MASTER_KEY=local-dev-key docker compose up --build
+curl -H 'Authorization: Bearer local-dev-key' http://127.0.0.1:4000/v1/models
 ```
 
-Publish a route snapshot to `PUT /internal/v1/routes/{alias}` with the runtime token. The snapshot contains ordered upstream candidates and their credentials. The runtime chooses the next candidate only for retryable failures such as `429`, connection errors, timeouts, and upstream `5xx` responses. Client `400` and `422` errors return immediately.
+The proxy starts with an empty model list. Supply a LiteLLM-compatible YAML file with `--config` or add a model through `POST /model/new`. Set `--model-state` and `--key-state` or configure PostgreSQL if management changes should persist across restarts. Standalone mode uses port 4000 by default and requires a master key. Public releases are built for Linux, macOS and Windows on amd64 and arm64.
+
+## Minato integration
+
+```bash
+LITELLM_GO_MODE=minato MINATO_RUNTIME_TOKEN=local-token go run ./cmd/minato-runtime
+```
+
+Minato mode listens on port 4300 by default and loads versioned route snapshots through `PUT /internal/v1/routes/{alias}` with the runtime token. Proxy management, virtual key storage and standalone provider APIs are disabled in this mode. The snapshot contains ordered upstream candidates and their credentials. The runtime chooses the next candidate only for retryable failures such as `429`, connection errors, timeouts, and upstream `5xx` responses. Client `400` and `422` errors return immediately.
 
 Use `credentialRef` for deployed routes so Runtime resolves credentials from its own environment. A candidate can also use `apiKey` for local development.
 
@@ -77,10 +84,11 @@ router_settings:
 ## Run with Docker
 
 ```bash
-MINATO_RUNTIME_TOKEN=local-token docker compose up --build
+docker build -t litellm-go .
+docker run --rm -p 127.0.0.1:4000:4000 -e LITELLM_MASTER_KEY=local-dev-key litellm-go
 ```
 
-The image is built as a static Go binary and runs as a non-root user. The default listener is `0.0.0.0:4300`.
+The image is built as a static Go binary and runs as a non-root user.
 
 `MINATO_RUNTIME_MAX_CONCURRENT` controls the maximum number of in-flight upstream requests and defaults to `128`.
 

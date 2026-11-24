@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rquanx/minato-runtime/internal/runtime"
+	"github.com/rquanx/litellm-go/internal/runtime"
 )
 
 func TestGenericStoredPromptFetchesAndRendersThroughInference(t *testing.T) {
