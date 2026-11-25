@@ -17,15 +17,17 @@ func (s *Server) serveMilvusPassThrough(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	permission := ""
-	switch suffix {
-	case "v2/vectordb/entities/search", "v2/vectordb/entities/get", "v2/vectordb/entities/query":
-		permission = "read"
-	case "v2/vectordb/entities/upsert", "v2/vectordb/entities/insert":
-		permission = "write"
-	}
-	if permission == "" || r.Method != http.MethodPost {
-		writeError(w, http.StatusNotFound, "unsupported_endpoint", "Unsupported Milvus index operation")
-		return true
+	switch r.Method {
+	case http.MethodPost:
+		switch suffix {
+		case "v2/vectordb/entities/search", "v2/vectordb/entities/get", "v2/vectordb/entities/query":
+			permission = "read"
+		case "v2/vectordb/entities/upsert", "v2/vectordb/entities/insert":
+			permission = "write"
+		}
+	case http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch:
+	default:
+		return false
 	}
 	var scope []string
 	if !s.authorized(r) {
@@ -35,6 +37,10 @@ func (s *Server) serveMilvusPassThrough(w http.ResponseWriter, r *http.Request, 
 		}
 		if !valid {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+			return true
+		}
+		if permission == "" {
+			writeError(w, http.StatusForbidden, "index_not_allowed", "This Milvus operation requires the proxy master key")
 			return true
 		}
 	}
@@ -70,8 +76,8 @@ func (s *Server) serveMilvusPassThrough(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusNotFound, "resource_not_found", "Unknown Milvus deployment or collection")
 		return true
 	}
-	target, err := url.Parse(strings.TrimRight(candidate.APIBase, "/") + "/" + suffix)
-	if err != nil {
+	target, err := url.Parse(candidate.APIBase)
+	if err != nil || target.Hostname() == "" || target.User != nil || (target.Scheme != "http" && target.Scheme != "https") {
 		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Milvus URL")
 		return true
 	}
@@ -88,7 +94,8 @@ func (s *Server) serveMilvusPassThrough(w http.ResponseWriter, r *http.Request, 
 	if key == "" {
 		key = os.Getenv(candidate.CredentialRef)
 	}
-	s.forwardPassThrough(w, r, PassThroughRoute{Path: r.URL.Path, Target: *target, Headers: http.Header{
+	prefix, _, _ := strings.Cut(r.URL.Path[1:], "/")
+	s.forwardPassThrough(w, r, PassThroughRoute{Path: "/" + prefix, Target: *target, MergeQuery: true, Headers: http.Header{
 		"Authorization": {"Bearer " + key}, "Content-Type": {"application/json"},
 	}})
 	return true

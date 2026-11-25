@@ -31,6 +31,7 @@ var loadGuardrailCatalog = sync.OnceValues(func() (guardrailCatalog, error) {
 })
 
 func (registry *modelRegistry) registerGuardrailCatalogRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /guardrails/validate_blocked_words_file", registry.validateBlockedWordsFile)
 	mux.HandleFunc("GET /guardrails/ui/add_guardrail_settings", registry.serveGuardrailCatalog)
 	mux.HandleFunc("GET /guardrails/ui/provider_specific_params", registry.serveGuardrailCatalog)
 	mux.HandleFunc("GET /guardrails/ui/major_airlines", registry.serveGuardrailCatalog)

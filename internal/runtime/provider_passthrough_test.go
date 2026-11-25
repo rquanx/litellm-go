@@ -66,6 +66,71 @@ func TestBedrockPassThroughSignsTheResolvedProviderRequest(t *testing.T) {
 	}
 }
 
+func TestBedrockAgentPassThroughSignsMethodAndPreservesURL(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.RequestURI() != "/prefix/agents/fixture?version=1" ||
+			!strings.Contains(r.Header.Get("Authorization"), "Credential=fixture-aws/") {
+			t.Errorf("incorrect signed Bedrock agent request: %s %s", r.Method, r.URL.RequestURI())
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer origin.Close()
+	t.Setenv("AWS_ACCESS_KEY_ID", "fixture-aws")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "fixture-secret")
+	t.Setenv("AWS_REGION_NAME", "us-east-1")
+	t.Setenv("AWS_BEDROCK_AGENT_RUNTIME_ENDPOINT", origin.URL+"/prefix")
+	server := NewServer(Config{Token: "master", AuthorizeInference: true,
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"*"}, token == "virtual" },
+	})
+	for _, test := range []struct {
+		token string
+		status int
+	}{{"virtual", 403}, {"master", 202}} {
+		request := httptest.NewRequest(http.MethodPatch, "/bedrock/agents/fixture?version=1", strings.NewReader("{}"))
+		request.Header.Set("Authorization", "Bearer "+test.token)
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, request)
+		if output.Code != test.status {
+			t.Fatalf("Bedrock agent pass-through returned %d, want %d: %s", output.Code, test.status, output.Body.String())
+		}
+	}
+}
+
+func TestMilvusPassThroughKeepsIndexChecksForAdditionalMethods(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if r.Method != http.MethodDelete || r.URL.RequestURI() != "/prefix/v2/vectordb/entities/delete?fixture=1" ||
+			r.Header.Get("Authorization") != "Bearer provider-key" || json.NewDecoder(r.Body).Decode(&body) != nil ||
+			body["collectionName"] != "physical_collection" || body["dbName"] != "configured_db" {
+			t.Errorf("incorrect Milvus request: %s %s, body %v", r.Method, r.URL.RequestURI(), body)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer origin.Close()
+	server := NewServer(Config{Token: "master", AuthorizeInference: true,
+		AuthorizeKey: func(token string) ([]string, bool) { return []string{"*"}, token == "virtual" },
+		MilvusIndexLookup: func(_ *http.Request, index, _ string) (string, string, string, bool, bool, error) {
+			found := index == "registered"
+			return "alias", "physical_collection", "configured_db", found, found, nil
+		},
+		Routes: []Route{{Alias: "alias", Candidates: []Candidate{{DeploymentID: "id", Provider: "milvus",
+			APIBase: origin.URL+"/prefix", APIKey: "provider-key", ModelID: "fixture"}}}},
+	})
+	for _, test := range []struct {
+		token, index string
+		status int
+	}{{"virtual", "registered", 403}, {"master", "unknown", 404}, {"master", "registered", 202}} {
+		request := httptest.NewRequest(http.MethodDelete, "/milvus/v2/vectordb/entities/delete?fixture=1",
+			strings.NewReader(`{"collectionName":"`+test.index+`","dbName":"caller_db"}`))
+		request.Header.Set("Authorization", "Bearer "+test.token)
+		output := httptest.NewRecorder()
+		server.ServeHTTP(output, request)
+		if output.Code != test.status {
+			t.Fatalf("Milvus pass-through returned %d, want %d: %s", output.Code, test.status, output.Body.String())
+		}
+	}
+}
+
 func TestVertexPassThroughUsesAuthorizedDeploymentProjectAndRegion(t *testing.T) {
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-fixture:streamGenerateContent" ||

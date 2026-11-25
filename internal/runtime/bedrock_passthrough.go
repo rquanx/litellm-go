@@ -12,8 +12,19 @@ import (
 )
 
 func (s *Server) serveBedrockPassThrough(w http.ResponseWriter, r *http.Request, suffix string) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
+	default:
+		return false
+	}
 	resource, ok := strings.CutPrefix(suffix, "model/")
-	if !ok || r.Method != http.MethodPost {
+	if !ok {
+		for _, prefix := range []string{"agents/", "knowledgebases/", "flows/", "retrieveAndGenerate/", "rerank/", "generateQuery/", "optimize-prompt/"} {
+			if strings.HasPrefix(suffix, prefix) {
+				s.serveBedrockAgentPassThrough(w, r)
+				return true
+			}
+		}
 		return false
 	}
 	split := strings.LastIndexByte(resource, '/')
@@ -32,6 +43,10 @@ func (s *Server) serveBedrockPassThrough(w http.ResponseWriter, r *http.Request,
 		}
 		if !valid {
 			writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+			return true
+		}
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusForbidden, "model_not_allowed", "This Bedrock operation requires the proxy master key")
 			return true
 		}
 	}
@@ -95,4 +110,44 @@ func (s *Server) serveBedrockPassThrough(w http.ResponseWriter, r *http.Request,
 			return authorizeBedrock(upstream.Context(), upstream, candidate, body, key)
 		}})
 	return true
+}
+
+func (s *Server) serveBedrockAgentPassThrough(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		if s.config.AuthorizeKey != nil {
+			if _, valid := s.config.AuthorizeKey(ProxyCredential(r)); valid {
+				writeError(w, http.StatusForbidden, "model_not_allowed", "Bedrock agent pass-through requires the proxy master key")
+				return
+			}
+		}
+		writeError(w, http.StatusUnauthorized, "unauthorized", "Runtime token required")
+		return
+	}
+	cfg, err := awsconfig.LoadDefaultConfig(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Could not load AWS configuration")
+		return
+	}
+	region := os.Getenv("AWS_REGION_NAME")
+	if region == "" {
+		region = cfg.Region
+	}
+	if region == "" {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Bedrock region is missing")
+		return
+	}
+	base := os.Getenv("AWS_BEDROCK_AGENT_RUNTIME_ENDPOINT")
+	if base == "" {
+		base = "https://bedrock-agent-runtime." + region + ".amazonaws.com"
+	}
+	target, err := url.Parse(base)
+	if err != nil || target.Hostname() == "" || target.User != nil || (target.Scheme != "http" && target.Scheme != "https") {
+		writeError(w, http.StatusBadGateway, "upstream_error", "Invalid Bedrock agent runtime base")
+		return
+	}
+	signing := &BedrockConfig{Region: region, Credentials: cfg.Credentials}
+	s.forwardPassThrough(w, r, PassThroughRoute{Path: "/bedrock", Target: *target, MergeQuery: true,
+		authorize: func(upstream *http.Request, body []byte) error {
+			return signAWSRequest(upstream.Context(), upstream, signing, body, "bedrock")
+		}})
 }

@@ -57,6 +57,8 @@ Set `LITELLM_GO_COMPATIBILITY_UPSTREAM=http://litellm:4000` to expose an existin
 
 If you enable the route publication API alongside a compatibility upstream, include `/internal/v1/routes/*` in the native path list.
 
+Prefix an entry with `!` to give the compatibility upstream priority for that path. For example, `/guardrails/*,!/guardrails/test_custom_code` keeps native guardrail APIs in Go and sends custom Python code tests to LiteLLM. The upstream authenticates those requests with its own proxy credentials.
+
 To launch the pinned backend alongside the gateway, set `LITELLM_COMPAT_CONFIG` to its LiteLLM YAML file and provide `LITELLM_MASTER_KEY`. The compatibility Compose stack includes PostgreSQL for database-backed management features. Set `LITELLM_COMPAT_DATABASE_URL` to use an external PostgreSQL instance. The Python service is reachable through the gateway's existing local port 4000.
 
 ```bash

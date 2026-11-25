@@ -175,11 +175,11 @@ def operations():
         ("get", "/v1/skills"), ("post", "/v1/skills"),
         ("get", "/v1/skills/{skill_id}"), ("delete", "/v1/skills/{skill_id}"),
     }
-    for prefix in ("anthropic", "assemblyai", "azure", "azure_ai", "cohere", "cursor", "eu.assemblyai",
-                   "gemini", "langfuse", "mistral", "openai", "openai_passthrough", "vertex_ai",
+    for prefix in ("anthropic", "assemblyai", "azure", "azure_ai", "bedrock", "cohere", "cursor", "eu.assemblyai",
+                   "gemini", "langfuse", "milvus", "mistral", "openai", "openai_passthrough", "vertex_ai",
                    "vertex_ai/discovery", "vllm"):
         provider.update((method, "/" + prefix + "/{endpoint}") for method in ("get", "post", "put", "patch", "delete"))
-    provider.update({("post", "/bedrock/{endpoint}"), ("post", "/cursor/chat/completions"),
+    provider.update({("post", "/cursor/chat/completions"),
                      ("post", "/guardrails/apply_guardrail"), ("post", "/apply_guardrail")})
     provider.update((method, "/{mcp_server_name}/mcp") for method in ("get", "post", "put", "patch", "delete", "head", "options"))
     provider.update((method, "/toolset/{toolset_name}/mcp") for method in ("get", "post", "put", "patch", "delete", "head", "options"))

@@ -48,3 +48,35 @@ func TestCompatibilityUpstreamDispatch(t *testing.T) {
 		t.Fatalf("expected one upstream call, got %d", upstreamCalls)
 	}
 }
+
+func TestCompatibilityUpstreamPathException(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Header.Get("Authorization") != "Bearer admin" || string(body) != "fixture" {
+			t.Error("expected the original credential and body")
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer upstream.Close()
+	native := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler, err := withCompatibilityUpstream(native, upstream.URL,
+		"/guardrails/*,!/guardrails/test_custom_code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for route, status := range map[string]int{
+		"/guardrails/test_custom_code": http.StatusAccepted,
+		"/guardrails/validate_blocked_words_file": http.StatusNoContent,
+		"/guardrails/test_custom_code_extra": http.StatusNoContent,
+	} {
+		request := httptest.NewRequest(http.MethodPost, route, strings.NewReader("fixture"))
+		request.Header.Set("Authorization", "Bearer admin")
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, request)
+		if result.Code != status {
+			t.Errorf("%s returned %d, want %d", route, result.Code, status)
+		}
+	}
+}

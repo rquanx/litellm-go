@@ -25,17 +25,26 @@ func withCompatibilityUpstream(native http.Handler, address, nativePaths string)
 		return nil, errors.New("LITELLM_GO_COMPATIBILITY_UPSTREAM must be an HTTP or HTTPS origin")
 	}
 	var exact, prefixes []string
+	var upstreamExact, upstreamPrefixes []string
 	for _, pattern := range strings.Split(nativePaths, ",") {
 		pattern = strings.TrimSpace(pattern)
 		if pattern == "" {
 			continue
 		}
+		pattern, upstreamOnly := strings.CutPrefix(pattern, "!")
 		base, wildcard := strings.CutSuffix(pattern, "/*")
 		if base == "" || base != path.Clean(base) || !strings.HasPrefix(base, "/") || strings.ContainsAny(base, "*?#%\\") {
-			return nil, errors.New("LITELLM_GO_NATIVE_PATHS must contain absolute paths or paths ending in /*")
+			return nil, errors.New("LITELLM_GO_NATIVE_PATHS must contain absolute paths or paths ending in /*, optionally prefixed with !")
 		}
 		if wildcard {
-			prefixes = append(prefixes, base+"/")
+			prefix := base + "/"
+			if upstreamOnly {
+				upstreamPrefixes = append(upstreamPrefixes, prefix)
+			} else {
+				prefixes = append(prefixes, prefix)
+			}
+		} else if upstreamOnly {
+			upstreamExact = append(upstreamExact, base)
 		} else {
 			exact = append(exact, base)
 		}
@@ -52,18 +61,28 @@ func withCompatibilityUpstream(native http.Handler, address, nativePaths string)
 		FlushInterval: -1,
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		for _, name := range exact {
-			if r.URL.Path == name {
-				native.ServeHTTP(w, r)
-				return
-			}
+		if matchesCompatibilityPath(r.URL.Path, upstreamExact, upstreamPrefixes) {
+			proxy.ServeHTTP(w, r)
+			return
 		}
-		for _, prefix := range prefixes {
-			if strings.HasPrefix(r.URL.Path, prefix) {
-				native.ServeHTTP(w, r)
-				return
-			}
+		if matchesCompatibilityPath(r.URL.Path, exact, prefixes) {
+			native.ServeHTTP(w, r)
+			return
 		}
 		proxy.ServeHTTP(w, r)
 	}), nil
+}
+
+func matchesCompatibilityPath(path string, exact, prefixes []string) bool {
+	for _, name := range exact {
+		if path == name {
+			return true
+		}
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }

@@ -33,7 +33,7 @@ func TestBulkTeamKeyUpdateKeepsTeamScope(t *testing.T) {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != expected {
-			t.Fatalf("got `d, want `d: `s", response.Code, expected, response.Body)
+			t.Fatalf("got %d, want %d: %s", response.Code, expected, response.Body)
 		}
 		return response.Body.String()
 	}
@@ -54,17 +54,17 @@ func TestBulkTeamKeyUpdateKeepsTeamScope(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(result), &batch); err != nil || batch.Total != 2 ||
 		len(batch.Success) != 1 || len(batch.Failed) != 1 || batch.Failed[0].Info != nil {
-		t.Fatalf("unexpected cross-team result: `s (`v)", result, err)
+		t.Fatalf("unexpected cross-team result: %s (%v)", result, err)
 	}
 	call(bulk, all, 200)
 	for _, untouched := range []string{"outsider", "blocked", "expired"} {
 		if keys.state.Keys[keyDigest(untouched)].RPMLimit != nil {
-			t.Fatalf("unexpected write to `s", untouched)
+			t.Fatalf("unexpected write to %s", untouched)
 		}
 	}
 	target := keys.state.Keys[keyDigest("target")]
 	if target.RPMLimit == nil || *target.RPMLimit != 9 {
-		t.Fatalf("unexpected team key limit: `v", target.RPMLimit)
+		t.Fatalf("unexpected team key limit: %v", target.RPMLimit)
 	}
 	call("/key/block", `{"key":"target"}`, 404)
 	permissions = append(permissions, "/key/block", "/key/unblock")
